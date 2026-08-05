@@ -1,0 +1,4 @@
+interface:
+  display_name: "WeeTodd H3 MLX"
+  short_description: "Build and validate MLX-native H3 nodes"
+  default_prompt: "Use $wee-todd-h3-mlx to implement or validate a MiniMax H3 MLX ComfyUI node."

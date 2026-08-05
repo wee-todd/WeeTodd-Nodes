@@ -1,0 +1,37 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "comfyui-weetodd-nodes"
+version = "0.1.0"
+description = "Experimental MLX-native MiniMax H3 nodes for ComfyUI on Apple Silicon"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {file = "LICENSE"}
+authors = [{name = "wee-todd"}]
+dependencies = ["mlx>=0.30", "numpy>=1.26", "pillow>=10", "safetensors>=0.4", "transformers>=4.57"]
+
+[project.urls]
+Repository = "https://github.com/wee-todd/WeeTodd-Nodes"
+Issues = "https://github.com/wee-todd/WeeTodd-Nodes/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/wee_todd_nodes", "src/minimax_h3_mlx"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+exclude = [
+  "docs/reference",
+  "tests/test_chain_stitch.py",
+  "tests/test_packing_parity.py",
+  "tests/test_quant_roundtrip.py",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
