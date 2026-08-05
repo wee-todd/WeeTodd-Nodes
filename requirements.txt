@@ -1,0 +1,5 @@
+mlx>=0.30
+numpy>=1.26
+pillow>=10
+safetensors>=0.4
+transformers>=4.57
