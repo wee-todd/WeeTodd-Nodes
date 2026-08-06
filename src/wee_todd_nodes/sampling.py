@@ -5,12 +5,13 @@ from __future__ import annotations
 import gc
 import json
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from threading import RLock
 from typing import Any
 
 from .conditioning import H3Conditioning, H3TextEncoderSpec
+from .lora import H3LoRAStack
 from .preflight import H3ComponentSetSpec
 from .runtime import H3GenerationConfig
 
@@ -87,6 +88,7 @@ class H3Latents:
     blockcache_hits: int = 0
     blockcache_resolved_threshold: float | None = None
     blockcache_cache_bytes: int = 0
+    lora_report: tuple[dict[str, Any], ...] = ()
 
 
 SamplerFactory = Callable[[H3TransformerSpec], Any]
@@ -110,6 +112,8 @@ class H3TransformerCache:
         self._factory = factory or _default_sampler_factory
         self._spec: H3TransformerSpec | None = None
         self._schedule_key: tuple[int, bool] | None = None
+        self._lora_key = None
+        self._lora_report: tuple[dict[str, Any], ...] = ()
         self._sampler: Any = None
 
     @property
@@ -127,6 +131,7 @@ class H3TransformerCache:
         step_callback=None,
         easycache=None,
         blockcache=None,
+        loras: H3LoRAStack | None = None,
     ) -> H3Latents:
         spec.validate()
         config.validate()
@@ -144,12 +149,40 @@ class H3TransformerCache:
                 "Conditioning was produced by a different Qwen3-VL component specification."
             )
         schedule_key = (config.steps, config.drop_adaln)
+        loras = loras or H3LoRAStack()
+        loras.validate_for_steps(config.steps)
+        if loras.has_turbo and (easycache is not None or blockcache is not None):
+            raise ValueError(
+                "Turbo LoRA sampling does not yet support EasyCache or BlockCache. "
+                "Disconnect the cache node before sampling."
+            )
+        lora_key = loras.cache_key
         with self._lock:
-            if self._sampler is None or self._spec != spec or self._schedule_key != schedule_key:
+            if (
+                self._sampler is None
+                or self._spec != spec
+                or self._schedule_key != schedule_key
+                or self._lora_key != lora_key
+            ):
                 self._release_locked()
-                self._sampler = self._factory(spec)
-                self._spec = spec
-                self._schedule_key = schedule_key
+                try:
+                    self._sampler = self._factory(spec)
+                    self._spec = spec
+                    self._schedule_key = schedule_key
+                    self._lora_key = lora_key
+                    if loras.adapters:
+                        from minimax_h3_mlx.lora import apply_lora_stack
+
+                        reports = apply_lora_stack(self._sampler.dit, loras.engine_requests())
+                        sanitized = []
+                        for report in reports:
+                            item = asdict(report)
+                            item["path"] = Path(item["path"]).name
+                            sanitized.append(item)
+                        self._lora_report = tuple(sanitized)
+                except BaseException:
+                    self._release_locked()
+                    raise
             try:
                 result = self._sampler.sample_latents(
                     conditioning.embeddings,
@@ -182,6 +215,7 @@ class H3TransformerCache:
                         result, "blockcache_resolved_threshold", None
                     ),
                     blockcache_cache_bytes=getattr(result, "blockcache_cache_bytes", 0),
+                    lora_report=self._lora_report,
                     seconds_per_evaluation=result.seconds_per_evaluation,
                     total_seconds=result.total_seconds,
                     transformer_spec=spec,
@@ -202,6 +236,8 @@ class H3TransformerCache:
         self._sampler = None
         self._spec = None
         self._schedule_key = None
+        self._lora_key = None
+        self._lora_report = ()
         gc.collect()
         try:
             import mlx.core as mx

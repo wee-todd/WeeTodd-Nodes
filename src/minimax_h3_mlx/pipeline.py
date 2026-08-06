@@ -231,6 +231,9 @@ class MiniMaxH3Pipeline:
         if self._cache is not None and self._cache_timesteps == key:
             return
         started = time.perf_counter()
+        from .lora import prepare_lora_timesteps
+
+        prepare_lora_timesteps(self.dit, timesteps)
         self._cache = ModulationCache.build(self.dit, timesteps, dtype=mx.bfloat16)
         self._cache_timesteps = key
         if verbose:

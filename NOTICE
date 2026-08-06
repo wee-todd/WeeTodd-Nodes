@@ -1,8 +1,12 @@
 WeeTodd Nodes
 
-The src/minimax_h3_mlx engine is derived from mrbizarro/minimax-h3-mlx,
-licensed under the Apache License 2.0. See docs/ATTRIBUTION.md for the
-audited source revision and research boundaries.
+Portions of src/minimax_h3_mlx are derived from mrbizarro/minimax-h3-mlx
+at revision 2f5467dd41c5b632f39eca387cbd52919597e945 and are licensed under
+the Apache License 2.0:
+https://github.com/mrbizarro/minimax-h3-mlx
+
+WeeTodd's ComfyUI adapter, model lifecycle, caching, LoRA integration, and
+subsequent MLX changes are maintained independently in this repository.
 
 MiniMax H3 model weights are not included. They are distributed separately
 under the MiniMax H3 Community License Agreement.

@@ -5,8 +5,8 @@ This is a standalone ComfyUI custom-node project for MiniMax H3 on Apple Silicon
 ## Scope boundary
 
 - Use MiniMax H3, MLX, ComfyUI, and directly relevant media utilities.
-- Do not import unrelated Phosphene UI, Pinokio, LTX, image-generation, launch, or account material.
-- Treat the separately checked-out Phosphene `minimax-h3-mlx` repository as an upstream technical source only.
+- Do not import unrelated UI, launch, account, or image-generation functionality.
+- Treat third-party implementations as research references only; independently implement and test project behavior.
 - Never commit model weights, outputs, caches, tokens, credentials, or machine-specific paths.
 
 ## Development rules
@@ -20,11 +20,8 @@ This is a standalone ComfyUI custom-node project for MiniMax H3 on Apple Silicon
   selected. Do not load the next weighted stage before the prior stage is releasable.
 - Validate dimensions, duration, checkpoint paths, and task support before expensive work.
 - Add a focused test for every node contract or engine behavior changed.
-- Record third-party design research in `docs/ATTRIBUTION.md`; do not copy GPL code into Apache files.
-- Keep durable agent-facing knowledge in the OKF v0.2 bundle under `knowledge/`; validate it after changes.
-- Follow the selective controlled-English profile in `docs/DOCUMENTATION.md`: apply it strictly to
-  procedures and user-facing text, and flexibly to research and architecture prose.
-- Run the documentation linter for Markdown changes.
+- Keep local research, attribution, and knowledge-store material outside the tracked repository.
+- Do not copy incompatible or unlicensed third-party code into Apache-2.0 files.
 - Use `.agents/skills/wee-todd-h3-mlx/SKILL.md` for H3 implementation work.
 - Before any pip, Python, venv, MLX, or dependency change, use
   `.agents/skills/python-environment-preflight/SKILL.md`. Run its preflight before mutation.
@@ -37,8 +34,6 @@ python .agents/skills/python-environment-preflight/scripts/preflight.py \
 python -m compileall -q src __init__.py
 python -m pytest -q tests/test_nodes.py tests/test_runtime.py
 ruff check src/wee_todd_nodes tests
-python scripts/validate_okf.py knowledge
-python scripts/lint_docs.py
 ```
 
 Full parity and checkpoint tests are optional and expensive. State clearly when they were not run.

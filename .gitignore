@@ -7,6 +7,8 @@ __pycache__/
 dist/
 build/
 backups/
+docs/
+knowledge/
 output/
 outputs/
 models/

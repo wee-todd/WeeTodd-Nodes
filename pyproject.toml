@@ -37,7 +37,6 @@ testpaths = ["tests"]
 target-version = "py311"
 line-length = 100
 exclude = [
-  "docs/reference",
   "tests/test_chain_stitch.py",
   "tests/test_packing_parity.py",
   "tests/test_quant_roundtrip.py",

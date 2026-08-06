@@ -42,6 +42,8 @@ def param_dtype(layer: nn.Module) -> mx.Dtype:
     truncates them to integers, silently and identically at every bit width. The scales carry the
     real compute dtype.
     """
+    while hasattr(layer, "base"):
+        layer = layer.base
     scales = getattr(layer, "scales", None)
     return scales.dtype if scales is not None else layer.weight.dtype
 

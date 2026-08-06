@@ -165,7 +165,7 @@ def test_comfy_entrypoint_imports_without_mlx():
         "submodule_search_locations=[str(root)]); "
         "module=importlib.util.module_from_spec(spec); "
         "sys.modules[spec.name]=module; spec.loader.exec_module(module); "
-        "assert len(module.NODE_CLASS_MAPPINGS) == 17; "
+        "assert len(module.NODE_CLASS_MAPPINGS) == 18; "
         "assert 'mlx' not in sys.modules and 'mlx.core' not in sys.modules"
     )
 

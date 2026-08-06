@@ -2,7 +2,7 @@
 
 Experimental ComfyUI nodes for running MiniMax H3 natively through MLX on Apple Silicon.
 
-This project begins with the Apache-2.0 MiniMax H3 MLX engine developed alongside Phosphene, then exposes it through small, composable ComfyUI nodes. The goal is a Kijai-style H3 suite for Mac users: explicit loaders, reusable model state, generation controls, conditioning tools, memory controls, previews, quantization, and workflow examples.
+WeeTodd Nodes is an independent MLX-native MiniMax H3 engine and composable ComfyUI node suite. It provides explicit loaders, reusable model state, generation controls, conditioning tools, memory controls, previews, quantization, and workflow examples for Apple Silicon.
 
 ## Current nodes
 
@@ -10,6 +10,8 @@ This project begins with the Apache-2.0 MiniMax H3 MLX engine developed alongsid
   processor, tokenizer, video VAE, and audio VAE.
 - **WeeTodd H3 Component Preflight** validates the manifest, component files, task, configuration,
   and quantization recipe. It estimates staged memory without loading tensor payloads.
+- **WeeTodd H3 LoRA Loader (MLX)** builds an ordered, lazy LoRA stack. It validates safetensors
+  headers immediately and loads adapter tensors only with the transformer.
 - **WeeTodd H3 Text Encode (Qwen3-VL)** produces text-only conditioning from the required
   unnormalized layer-50 state. It omits the vision tower and can unload Qwen3-VL after encoding.
 - **WeeTodd H3 Unload Qwen3-VL** explicitly releases a warm process-local conditioner.
@@ -37,6 +39,23 @@ This project begins with the Apache-2.0 MiniMax H3 MLX engine developed alongsid
 
 The first release supports text-to-video-plus-audio. First/last-frame and multi-reference nodes are next; the engine already contains much of the keyframe machinery.
 
+## Generic LoRA and Turbo LoRA support
+
+Put MiniMax H3 LoRA files under `ComfyUI/models/loras/`, then connect **WeeTodd H3 LoRA Loader
+(MLX)** to the sampler. Chain loader nodes to apply multiple LoRAs in graph order. The loader
+supports standard `lora_A`/`lora_B` and `lora_down`/`lora_up` safetensors naming. Adapters run in
+activation space, so small updates are not rounded away by a BF16 or future quantized base model.
+
+The experimental [MiniMax H3 Turbo LoRA](https://huggingface.co/larryvrh/MiniMax-H3-Turbo-Lora)
+also targets the original full-width AdaLN timestep path. When the selected H3 transformer is a
+pruned curve checkpoint, place `h3_silu_temb_grid.safetensors` from the Apache-2.0
+[Turbo node repository](https://github.com/Larryvrh/ComfyUI-MiniMax-H3-Turbo) beside the LoRA, or
+select the grid explicitly in the loader. WeeTodd does not bundle or download either file.
+
+For four transformer evaluations, select five requested schedule points. Start with LoRA strength
+1.0 and no EasyCache or BlockCache. The current Turbo checkpoint is experimental and can produce
+over-sharp grain, plastic skin, softness, or audio defects.
+
 ## Install for development
 
 Clone into `ComfyUI/custom_nodes/WeeTodd-Nodes`, then use the same Python environment as ComfyUI:
@@ -47,8 +66,8 @@ python .agents/skills/python-environment-preflight/scripts/preflight.py \
 python -m pip install -e .
 ```
 
-Read the [Python environment policy](docs/PYTHON_ENVIRONMENT.md) before replacing a venv or changing
-ComfyUI dependencies.
+Run the project-local Python environment preflight before replacing a virtual environment or
+changing ComfyUI dependencies.
 
 Restart ComfyUI and look under `WeeTodd/H3`.
 
@@ -88,9 +107,7 @@ makes resolution substantially more expensive than pixel count alone suggests.
 
 These are single-seed performance measurements. Endpoint inspection found the requested robot and
 final-wave state in all native-resolution outputs, but the benchmark does not prove motion, detail,
-or audio equivalence. Read the [native 768P report](docs/reference/H3_EASYCACHE_POLICY_STEP_SCALING_768P.md),
-the [smoke-resolution report](docs/reference/H3_EASYCACHE_POLICY_STEP_SCALING.md), or the
-[local artifact bundle](benchmarks/artifacts/README.md).
+or audio equivalence. See the [local artifact bundle](benchmarks/artifacts/README.md).
 
 ## BlockCache benchmark results
 
@@ -106,13 +123,11 @@ no-cache baseline. The request-local video and audio cache used approximately 95
 ![H3 BlockCache scaling at 640 by 384](benchmarks/artifacts/charts/h3_blockcache_policy_step_scaling_384p.svg)
 
 All 12 BlockCache outputs contained synchronized video and audio streams. These single-prompt,
-single-seed measurements do not prove perceptual equivalence. Read the
-[BlockCache report](docs/reference/H3_BLOCKCACHE.md) or inspect the local, gitignored media under
+single-seed measurements do not prove perceptual equivalence. Generated media remains local under
 `benchmarks/artifacts/media/blockcache-384p/`.
 
-Models are never bundled. See [Architecture](docs/ARCHITECTURE.md), [Roadmap](docs/ROADMAP.md),
-[Smoke-test plan](docs/SMOKE_TEST_PLAN.md),
-[Attribution](docs/ATTRIBUTION.md), and the agent-facing [OKF knowledge bundle](knowledge/index.md).
+Models are never bundled. Detailed project documentation and the OKF knowledge bundle are kept
+local and are intentionally excluded from Git.
 
 ## Status
 
