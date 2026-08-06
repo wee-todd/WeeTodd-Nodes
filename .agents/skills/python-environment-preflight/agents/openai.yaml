@@ -1,0 +1,4 @@
+interface:
+  display_name: "Python Environment Preflight"
+  short_description: "Validate Python and venv compatibility before dependency changes"
+  default_prompt: "Preflight this project Python environment before installing or changing dependencies."

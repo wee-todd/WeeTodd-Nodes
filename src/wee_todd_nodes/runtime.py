@@ -1,6 +1,7 @@
 """Lazy, process-local MiniMax H3 MLX runtime management."""
 from __future__ import annotations
 
+import gc
 from dataclasses import dataclass
 from pathlib import Path
 from threading import RLock
@@ -28,12 +29,17 @@ class H3GenerationConfig:
     width: int = 640
     height: int = 384
     drop_adaln: bool = True
+    resolution_mode: str = "custom"
+    resolution_tier: str = "custom"
+    aspect_ratio: str = "custom"
 
     def validate(self) -> None:
         if not 5.0 <= self.duration_seconds <= 15.0:
             raise ValueError("MiniMax H3 duration must be between 5 and 15 seconds")
         if self.steps < 2:
             raise ValueError("steps must be at least 2")
+        if self.width < 32 or self.height < 32:
+            raise ValueError("width and height must be at least 32 pixels")
         if self.width % 32 or self.height % 32:
             raise ValueError("width and height must be divisible by 32")
 
@@ -50,6 +56,9 @@ class H3RuntimeCache:
             if self._pipeline is None or self._spec != spec:
                 from minimax_h3_mlx.pipeline import MiniMaxH3Pipeline
 
+                # A full H3 pipeline is far too large to coexist with its replacement in unified
+                # memory. Release the old object before constructing the new one.
+                self._release_locked()
                 self._pipeline = MiniMaxH3Pipeline.from_pretrained(
                     str(Path(spec.checkpoint).expanduser()),
                     transformer_dir=(
@@ -62,13 +71,18 @@ class H3RuntimeCache:
 
     def unload(self) -> None:
         with self._lock:
-            self._pipeline = None
-            self._spec = None
-            try:
-                import mlx.core as mx
-                mx.clear_cache()
-            except (ImportError, AttributeError):
-                pass
+            self._release_locked()
+
+    def _release_locked(self) -> None:
+        self._pipeline = None
+        self._spec = None
+        gc.collect()
+        try:
+            import mlx.core as mx
+
+            mx.clear_cache()
+        except (ImportError, AttributeError):
+            pass
 
 
 RUNTIME = H3RuntimeCache()

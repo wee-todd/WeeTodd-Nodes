@@ -10,7 +10,17 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = {file = "LICENSE"}
 authors = [{name = "wee-todd"}]
-dependencies = ["mlx>=0.30", "numpy>=1.26", "pillow>=10", "safetensors>=0.4", "transformers>=4.57"]
+dependencies = [
+  "mlx>=0.32.0",
+  "mlx-vlm>=0.4.4",
+  "numpy>=1.26",
+  "pillow>=11",
+  "safetensors>=0.4",
+  "transformers>=4.57",
+]
+
+[project.optional-dependencies]
+docs = ["PyYAML>=6.0"]
 
 [project.urls]
 Repository = "https://github.com/wee-todd/WeeTodd-Nodes"

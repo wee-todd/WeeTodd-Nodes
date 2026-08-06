@@ -1,0 +1,190 @@
+import json
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from wee_todd_nodes.conditioning import H3Conditioning, H3TextEncoderSpec
+from wee_todd_nodes.runtime import H3GenerationConfig
+from wee_todd_nodes.sampling import H3TransformerCache, H3TransformerSpec
+
+
+class FakeSampler:
+    def __init__(self, spec, fail=False):
+        self.spec = spec
+        self.fail = fail
+        self.calls = []
+
+    def sample_latents(self, embeddings, token_tags, **kwargs):
+        self.calls.append((embeddings, token_tags, kwargs))
+        if self.fail:
+            raise RuntimeError("synthetic sampling failure")
+        callback = kwargs.get("step_callback")
+        if callback is not None:
+            callback(0, 2)
+            callback(1, 2)
+            callback(2, 2)
+        return SimpleNamespace(
+            video_latents="live-video-latents",
+            audio_latents="live-audio-latents",
+            num_frames=124,
+            width=kwargs["width"],
+            height=kwargs["height"],
+            fps=24,
+            sample_rate=32000,
+            transformer_evaluations=2,
+            seconds_per_evaluation=1.25,
+            total_seconds=2.5,
+        )
+
+
+def _spec(tmp_path: Path, task="t2va") -> H3TransformerSpec:
+    root = tmp_path / task
+    transformer = root / "transformer"
+    transformer.mkdir(parents=True)
+    (root / "model_index.json").write_text(
+        json.dumps({"_minimax_h3": {"partition": "fl2va", "tasks": [task]}}) + "\n"
+    )
+    return H3TransformerSpec(
+        checkpoint=str(root),
+        transformer=str(transformer),
+        text_encoder=str(root / "text_encoder"),
+        processor=str(root / "processor"),
+        tokenizer=str(root / "tokenizer"),
+        video_vae=str(root / "video_vae"),
+        audio_vae=str(root / "audio_vae"),
+        task=task,
+    )
+
+
+def _conditioning(spec: H3TransformerSpec, load_vision=False) -> H3Conditioning:
+    root = Path(spec.checkpoint)
+    for name in ("text_encoder", "processor", "tokenizer"):
+        (root / name).mkdir(exist_ok=True)
+    (root / "text_encoder" / "config.json").write_text("{}\n")
+    return H3Conditioning(
+        embeddings="live-conditioning",
+        token_tags="text-tags",
+        token_count=3,
+        prompt="A test prompt",
+        load_vision=load_vision,
+        encoder_spec=H3TextEncoderSpec(
+            text_encoder=str(root / "text_encoder"),
+            processor=str(root / "processor"),
+            tokenizer=str(root / "tokenizer"),
+        ),
+    )
+
+
+def test_transformer_cache_samples_and_unloads(tmp_path: Path):
+    created = []
+
+    def factory(spec):
+        sampler = FakeSampler(spec)
+        created.append(sampler)
+        return sampler
+
+    progress = []
+    cache = H3TransformerCache(factory)
+    spec = _spec(tmp_path)
+    latents = cache.sample(
+        spec,
+        _conditioning(spec),
+        H3GenerationConfig(steps=3),
+        unload_after=True,
+        step_callback=lambda completed, total: progress.append((completed, total)),
+    )
+
+    assert latents.video == "live-video-latents"
+    assert latents.audio == "live-audio-latents"
+    assert latents.transformer_evaluations == 2
+    assert progress == [(0, 2), (1, 2), (2, 2)]
+    assert cache.loaded is False
+    assert len(created) == 1
+
+
+def test_transformer_cache_reuses_only_equal_schedule(tmp_path: Path):
+    created = []
+
+    def factory(spec):
+        sampler = FakeSampler(spec)
+        created.append(sampler)
+        return sampler
+
+    cache = H3TransformerCache(factory)
+    spec = _spec(tmp_path)
+    conditioning = _conditioning(spec)
+    cache.sample(spec, conditioning, H3GenerationConfig(steps=3), unload_after=False)
+    cache.sample(spec, conditioning, H3GenerationConfig(steps=3), unload_after=False)
+    cache.sample(spec, conditioning, H3GenerationConfig(steps=4), unload_after=False)
+
+    assert len(created) == 2
+    assert cache.loaded is True
+
+
+def test_transformer_failure_releases_sampler(tmp_path: Path):
+    cache = H3TransformerCache(lambda spec: FakeSampler(spec, fail=True))
+
+    spec = _spec(tmp_path)
+    with pytest.raises(RuntimeError, match="synthetic sampling failure"):
+        cache.sample(
+            spec,
+            _conditioning(spec),
+            H3GenerationConfig(steps=3),
+            unload_after=False,
+        )
+
+    assert cache.loaded is False
+
+
+def test_transformer_sampler_rejects_non_text_conditioning(tmp_path: Path):
+    called = False
+
+    def factory(spec):
+        nonlocal called
+        called = True
+        return FakeSampler(spec)
+
+    cache = H3TransformerCache(factory)
+    spec = _spec(tmp_path)
+    with pytest.raises(ValueError, match="text-only conditioning"):
+        cache.sample(
+            spec,
+            _conditioning(spec, load_vision=True),
+            H3GenerationConfig(steps=3),
+        )
+
+    assert called is False
+
+
+def test_transformer_sampler_rejects_non_t2va_task(tmp_path: Path):
+    cache = H3TransformerCache(lambda spec: FakeSampler(spec))
+
+    spec = _spec(tmp_path, task="fl2va")
+    with pytest.raises(ValueError, match="supports the t2va task only"):
+        cache.sample(
+            spec,
+            _conditioning(spec),
+            H3GenerationConfig(steps=3),
+        )
+
+
+def test_transformer_sampler_rejects_conditioning_from_other_components(tmp_path: Path):
+    spec = _spec(tmp_path, task="t2va")
+    other_root = tmp_path / "other"
+    other_root.mkdir()
+    other_spec = H3TransformerSpec(
+        checkpoint=str(other_root),
+        transformer=str(other_root),
+        text_encoder=str(other_root / "text_encoder"),
+        processor=str(other_root / "processor"),
+        tokenizer=str(other_root / "tokenizer"),
+        video_vae=str(other_root / "video_vae"),
+        audio_vae=str(other_root / "audio_vae"),
+        task="t2va",
+    )
+    conditioning = _conditioning(other_spec)
+    cache = H3TransformerCache(lambda value: FakeSampler(value))
+
+    with pytest.raises(ValueError, match="different Qwen3-VL component specification"):
+        cache.sample(spec, conditioning, H3GenerationConfig(steps=3))

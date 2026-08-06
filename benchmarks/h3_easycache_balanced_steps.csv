@@ -1,0 +1,5 @@
+requested_steps,scheduled_evaluations,transformer_evaluations,cached_evaluations,skip_fraction,resolved_threshold,sampling_seconds,seconds_per_evaluation,workflow_seconds,adaln_cache_mb
+8,7,5,2,0.2857,0.800000,116.580,23.305,161.14,126
+12,11,8,3,0.2727,0.800000,196.225,24.521,225.50,203
+16,15,10,5,0.3333,0.556329,259.091,25.902,288.91,271
+20,19,13,6,0.3158,0.436969,311.589,23.963,339.61,358

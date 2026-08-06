@@ -1,9 +1,18 @@
 # Attribution and research boundary
 
 - [MiniMax H3](https://huggingface.co/MiniMaxAI/MiniMax-H3) provides the architecture and weights under its published terms.
-- [Phosphene](https://github.com/mrbizarro/phosphene) incubated the Apache-2.0 `minimax-h3-mlx` engine carried here. Only H3/MLX-specific code and research were imported.
-- [ComfyUI](https://github.com/Comfy-Org/ComfyUI) defines the custom-node host and includes native PyTorch MiniMax H3 conditioning nodes. Its interfaces are a compatibility reference.
+- [mrbizarro/minimax-h3-mlx](https://github.com/mrbizarro/minimax-h3-mlx) is the Apache-2.0 engine source carried here, audited against local commit `2f5467dd41c5b632f39eca387cbd52919597e945`. It was incubated alongside Phosphene; no surrounding Phosphene application code is included.
+- [ComfyUI](https://github.com/Comfy-Org/ComfyUI) defines the custom-node host and includes native PyTorch MiniMax H3 conditioning nodes. Its interfaces are a compatibility reference. The `AUDIO` mapping and current video-publication behavior were checked against `comfy_extras/nodes_audio.py` and `comfy_extras/nodes_video.py` at commit `15989f87ca89bfe2e7c47763252c559e96d97551`.
+- ComfyUI's experimental native `EasyCache` node at commit `15989f87ca89bfe2e7c47763252c559e96d97551` was studied as an algorithm reference. WeeTodd independently implements joint MLX video/audio residual reuse inside the H3 engine; no ComfyUI implementation code is copied.
+- [Official ComfyUI MiniMax H3 workflows](https://docs.comfy.org/tutorials/video/minimax/minimax-h3) document the native component split, model locations, and text, image, and reference workflows.
+- [Official MiniMax H3 prompt-writing guides](https://huggingface.co/MiniMaxAI/MiniMax-H3/tree/main/docs) define the audiovisual prompt fields, shot timeline, keyframe alignment, dialogue syntax, camera direction, and soundscape structure summarized by the project-local prompting skill.
 - [ComfyUI-Spectrum-MiniMax-H3](https://github.com/xmarre/ComfyUI-Spectrum-MiniMax-H3) is GPL-3.0 and was reviewed for concepts only. Its implementation is not copied here.
-- [ComfyUI-KJNodes](https://github.com/kijai/ComfyUI-KJNodes) informs the goal of composable, operator-friendly video nodes. No KJNodes source is copied.
+- [ComfyUI-KJNodes](https://github.com/kijai/ComfyUI-KJNodes) informs composable workflows, previews, model patching, and operator feedback. It is GPL-3.0; no KJNodes source is copied.
+- [Kijai/MiniMax-H3-experimental](https://huggingface.co/Kijai/MiniMax-H3-experimental) was reviewed for its work-in-progress W4A8 transformer and Int8 convolution-rotation video VAE artifacts. These are component references, not a complete pipeline, and are not redistributed here.
+- [Kijai/MiniMax-H3-TAE](https://huggingface.co/Kijai/MiniMax-H3-TAE) was reviewed as a preview-only tiny video autoencoder reference. It is not used for final decode.
+- [Draw Things: Metal Quantized Attention](https://releases.drawthings.ai/p/metal-quantized-attention-pulling) was studied as a design reference for dynamic Int8 Q/K/V attention and fused activation-quantized matrix multiplication on Apple Silicon. Its implementation, model recipes, binaries, and weights are not included.
+- [MLX quantization documentation](https://ml-explore.github.io/mlx/build/html/python/_autosummary/mlx.nn.quantize.html) is the primary reference for MLX weight-only affine quantization and the separately supported `mxfp8`/`nvfp4` input-quantization modes.
+- [MLX OptiQ](https://mlx-optiq.com/docs/sensitivity) was studied for its calibration-driven per-layer mixed-precision allocation, metadata, and evaluation approach. OptiQ targets autoregressive `mlx-lm` models; no OptiQ implementation or LLM-specific recipe is included here.
+- [Google Open Knowledge Format v0.2](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) defines the portable Markdown and YAML-frontmatter structure used by the `knowledge/` bundle. The project validator is an independent implementation of its conformance rules and local documentation profile.
 
 WeeTodd Nodes is independent and experimental.

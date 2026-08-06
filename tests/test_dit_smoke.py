@@ -7,12 +7,15 @@ from dataclasses import replace
 from pathlib import Path
 
 import mlx.core as mx
+import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from minimax_h3_mlx.adaln import ModulationCache, drop_adaln_weights, schedule_timesteps
 from minimax_h3_mlx.config import TAG_AUDIO, TAG_TEXT, TAG_VIDEO, DiTConfig
 from minimax_h3_mlx.dit import MiniMaxH3DiT
+from minimax_h3_mlx.easycache import H3EasyCacheConfig
+from minimax_h3_mlx.pipeline import MiniMaxH3Pipeline
 
 
 def tiny_config() -> DiTConfig:
@@ -65,7 +68,7 @@ def build_packed_layout(n_text: int, n_video: int, n_audio: int):
     return text_indices, video_indices, audio_indices, tags, timestep_indices, position_ids
 
 
-def test_forward_shapes():
+def _forward_fixture():
     cfg = tiny_config()
     mx.random.seed(0)
     dit = MiniMaxH3DiT(cfg)
@@ -92,9 +95,13 @@ def test_forward_shapes():
     return dit, cfg, (video, audio, text, timestep, ts_i, tags, pos, video_i, audio_i, text_i)
 
 
+def test_forward_shapes():
+    _forward_fixture()
+
+
 def test_modulation_cache_matches_live_projection():
     """The precomputed AdaLN table must reproduce the live projection bit-for-bit in float32."""
-    dit, cfg, args = test_forward_shapes()
+    dit, _, args = _forward_fixture()
     timestep = args[3]
 
     live_v, live_a = dit(*args)
@@ -123,6 +130,121 @@ def test_schedule_timesteps():
     ts = schedule_timesteps(sigmas)
     assert ts.tolist() == [0.0, 0.25, 0.5, 0.75, 1.0], ts.tolist()
     print(f"schedule timesteps: {ts.tolist()}")
+
+
+def test_transformer_only_text_sampling_shapes():
+    cfg = tiny_config()
+    mx.random.seed(4)
+    dit = MiniMaxH3DiT(cfg)
+    pipeline = MiniMaxH3Pipeline(dit, None, None, None)
+    progress = []
+
+    result = pipeline.sample_latents(
+        mx.random.normal((1, 3, cfg.text_dim)),
+        np.full((3,), TAG_TEXT, dtype=np.int32),
+        duration_seconds=5.0,
+        num_inference_steps=3,
+        height=32,
+        width=32,
+        drop_adaln=False,
+        verbose=False,
+        step_callback=lambda completed, total: progress.append((completed, total)),
+    )
+
+    assert result.video_latents.shape == (1, cfg.latents_dim, 37, 2, 2)
+    assert result.audio_latents.shape == (2, cfg.audio_latents_dim, 207)
+    assert result.transformer_evaluations == 2
+    assert progress == [(0, 2), (1, 2), (2, 2)]
+
+
+def test_h3_easycache_skips_joint_video_audio_evaluation():
+    cfg = tiny_config()
+    mx.random.seed(4)
+    pipeline = MiniMaxH3Pipeline(MiniMaxH3DiT(cfg), None, None, None)
+
+    result = pipeline.sample_latents(
+        mx.random.normal((1, 3, cfg.text_dim)),
+        np.full((3,), TAG_TEXT, dtype=np.int32),
+        duration_seconds=5.0,
+        num_inference_steps=6,
+        height=32,
+        width=32,
+        drop_adaln=False,
+        verbose=False,
+        easycache_config=H3EasyCacheConfig(
+            reuse_threshold=100.0,
+            start_percent=0.0,
+            end_percent=1.0,
+        ),
+    )
+
+    assert result.easycache_skipped_steps > 0
+    assert result.transformer_evaluations + result.easycache_skipped_steps == 5
+    assert result.video_latents.shape == (1, cfg.latents_dim, 37, 2, 2)
+    assert result.audio_latents.shape == (2, cfg.audio_latents_dim, 207)
+
+
+def test_h3_easycache_conservative_auto_calibrates_and_caps_short_schedule():
+    cfg = tiny_config()
+    mx.random.seed(5)
+    result = MiniMaxH3Pipeline(MiniMaxH3DiT(cfg), None, None, None).sample_latents(
+        mx.random.normal((1, 3, cfg.text_dim)),
+        np.full((3,), TAG_TEXT, dtype=np.int32),
+        duration_seconds=5.0,
+        num_inference_steps=8,
+        height=32,
+        width=32,
+        drop_adaln=False,
+        verbose=False,
+        easycache_config=H3EasyCacheConfig(mode="automatic_conservative"),
+    )
+
+    assert result.easycache_skipped_steps == 1
+    assert result.transformer_evaluations == 6
+    assert result.easycache_resolved_threshold is not None
+    assert 0.05 <= result.easycache_resolved_threshold <= 0.5
+
+
+def test_h3_easycache_speed_auto_is_more_aggressive_but_bounded():
+    cfg = tiny_config()
+    mx.random.seed(5)
+    result = MiniMaxH3Pipeline(MiniMaxH3DiT(cfg), None, None, None).sample_latents(
+        mx.random.normal((1, 3, cfg.text_dim)),
+        np.full((3,), TAG_TEXT, dtype=np.int32),
+        duration_seconds=5.0,
+        num_inference_steps=8,
+        height=32,
+        width=32,
+        drop_adaln=False,
+        verbose=False,
+        easycache_config=H3EasyCacheConfig(mode="automatic_speed"),
+    )
+
+    assert 1 < result.easycache_skipped_steps <= 3
+    assert result.transformer_evaluations + result.easycache_skipped_steps == 7
+    assert result.easycache_resolved_threshold is not None
+    assert 0.25 <= result.easycache_resolved_threshold <= 1.25
+
+
+def test_h3_easycache_balanced_auto_fills_middle_policy():
+    cfg = tiny_config()
+    mx.random.seed(5)
+    result = MiniMaxH3Pipeline(MiniMaxH3DiT(cfg), None, None, None).sample_latents(
+        mx.random.normal((1, 3, cfg.text_dim)),
+        np.full((3,), TAG_TEXT, dtype=np.int32),
+        duration_seconds=5.0,
+        num_inference_steps=8,
+        height=32,
+        width=32,
+        drop_adaln=False,
+        verbose=False,
+        easycache_config=H3EasyCacheConfig(mode="automatic_balanced"),
+    )
+
+    assert result.easycache_skipped_steps == 2
+    assert result.transformer_evaluations == 5
+    assert result.easycache_resolved_threshold is not None
+    assert 0.1 <= result.easycache_resolved_threshold <= 0.8
 
 
 def test_pruned_adaln_curve_forward_and_cache():

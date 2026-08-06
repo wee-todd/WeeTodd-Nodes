@@ -8,7 +8,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: python -m pip install pytest ruff
+      - run: python .agents/skills/python-environment-preflight/scripts/preflight.py --project . --python python --require-architecture arm64
+      - run: python -m pip install pytest ruff PyYAML
       - run: python -m compileall -q src __init__.py
-      - run: python -m pytest -q tests/test_nodes.py tests/test_runtime.py
+      - run: python -m pytest -q tests/test_nodes.py tests/test_runtime.py tests/test_environment_preflight.py
       - run: ruff check src/wee_todd_nodes tests
+      - run: python scripts/validate_okf.py knowledge
+      - run: python scripts/lint_docs.py

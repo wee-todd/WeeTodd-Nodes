@@ -1,0 +1,4 @@
+interface:
+  display_name: "OKF Knowledge"
+  short_description: "Author and validate project OKF knowledge"
+  default_prompt: "Use $okf-knowledge to add or update a conformant project knowledge concept."

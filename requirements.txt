@@ -1,5 +1,6 @@
-mlx>=0.30
+mlx>=0.32.0
+mlx-vlm>=0.4.4
 numpy>=1.26
-pillow>=10
+pillow>=11
 safetensors>=0.4
 transformers>=4.57

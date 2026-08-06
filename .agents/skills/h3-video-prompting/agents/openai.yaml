@@ -1,0 +1,4 @@
+interface:
+  display_name: "H3 Video Prompting"
+  short_description: "Write optimized synchronized H3 video prompts"
+  default_prompt: "Use $h3-video-prompting to create and show an optimized MiniMax H3 prompt before generation."

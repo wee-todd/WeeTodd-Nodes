@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="720" viewBox="0 0 1100 720">
+  <rect width="1100" height="720" fill="#10151d"/>
+  <style>
+    text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #dce7f3; }
+    .title { font-size: 25px; font-weight: 700; }
+    .subtitle { font-size: 14px; fill: #9fb2c7; }
+    .panel { fill: #17212d; stroke: #34465a; stroke-width: 1; }
+    .panel-title { font-size: 16px; font-weight: 650; }
+    .axis { stroke: #71859a; stroke-width: 1; }
+    .grid { stroke: #2b3a4b; stroke-width: 1; }
+    .tick { font-size: 12px; fill: #9fb2c7; }
+    .legend { font-size: 13px; }
+  </style>
+  <text x="55" y="42" class="title">H3 automatic_balanced scaling at 640 × 384</text>
+  <text x="55" y="65" class="subtitle">Five seconds · seed 0 · identical prompt and components · staged unloading</text>
+
+  <rect x="55" y="82" width="490" height="280" rx="8" class="panel"/>
+  <text x="75" y="108" class="panel-title">Runtime</text>
+  <line x1="95" y1="325" x2="520" y2="325" class="axis"/>
+  <line x1="95" y1="115" x2="95" y2="325" class="axis"/>
+  <line x1="95" y1="266.7" x2="520" y2="266.7" class="grid"/>
+  <line x1="95" y1="208.3" x2="520" y2="208.3" class="grid"/>
+  <line x1="95" y1="150" x2="520" y2="150" class="grid"/>
+  <text x="63" y="329" class="tick">0</text><text x="55" y="271" class="tick">100</text>
+  <text x="55" y="213" class="tick">200</text><text x="55" y="154" class="tick">300 s</text>
+  <text x="103" y="345" class="tick">8</text><text x="231" y="345" class="tick">12</text>
+  <text x="361" y="345" class="tick">16</text><text x="491" y="345" class="tick">20</text>
+  <polyline points="110,231 240,194 370,156 500,127" fill="none" stroke="#ffb454" stroke-width="4"/>
+  <polyline points="110,257 240,211 370,174 500,143" fill="none" stroke="#56c7ff" stroke-width="4"/>
+  <g fill="#ffb454"><circle cx="110" cy="231" r="5"/><circle cx="240" cy="194" r="5"/><circle cx="370" cy="156" r="5"/><circle cx="500" cy="127" r="5"/></g>
+  <g fill="#56c7ff"><circle cx="110" cy="257" r="5"/><circle cx="240" cy="211" r="5"/><circle cx="370" cy="174" r="5"/><circle cx="500" cy="143" r="5"/></g>
+  <text x="315" y="126" class="legend" fill="#ffb454">Workflow</text>
+  <text x="315" y="146" class="legend" fill="#56c7ff">Sampling</text>
+
+  <rect x="565" y="82" width="480" height="280" rx="8" class="panel"/>
+  <text x="585" y="108" class="panel-title">Evaluation reuse</text>
+  <line x1="610" y1="325" x2="1020" y2="325" class="axis"/>
+  <line x1="610" y1="115" x2="610" y2="325" class="axis"/>
+  <line x1="610" y1="220" x2="1020" y2="220" class="grid"/>
+  <line x1="610" y1="115" x2="1020" y2="115" class="grid"/>
+  <text x="585" y="329" class="tick">0</text><text x="578" y="224" class="tick">10</text><text x="578" y="119" class="tick">20</text>
+  <text x="623" y="345" class="tick">8</text><text x="751" y="345" class="tick">12</text>
+  <text x="881" y="345" class="tick">16</text><text x="1004" y="345" class="tick">20</text>
+  <polyline points="630,251.5 760,209.5 890,167.5 1010,125.5" fill="none" stroke="#b995ff" stroke-width="4"/>
+  <polyline points="630,272.5 760,241 890,220 1010,188.5" fill="none" stroke="#70e1a1" stroke-width="4"/>
+  <polyline points="630,304 760,293.5 890,272.5 1010,262" fill="none" stroke="#ff7085" stroke-width="4"/>
+  <g fill="#b995ff"><circle cx="630" cy="251.5" r="5"/><circle cx="760" cy="209.5" r="5"/><circle cx="890" cy="167.5" r="5"/><circle cx="1010" cy="125.5" r="5"/></g>
+  <g fill="#70e1a1"><circle cx="630" cy="272.5" r="5"/><circle cx="760" cy="241" r="5"/><circle cx="890" cy="220" r="5"/><circle cx="1010" cy="188.5" r="5"/></g>
+  <g fill="#ff7085"><circle cx="630" cy="304" r="5"/><circle cx="760" cy="293.5" r="5"/><circle cx="890" cy="272.5" r="5"/><circle cx="1010" cy="262" r="5"/></g>
+  <text x="680" y="132" class="legend" fill="#b995ff">Scheduled</text>
+  <text x="680" y="152" class="legend" fill="#70e1a1">Evaluated</text>
+  <text x="680" y="172" class="legend" fill="#ff7085">Cached</text>
+
+  <rect x="55" y="390" width="990" height="270" rx="8" class="panel"/>
+  <text x="75" y="418" class="panel-title">AdaLN schedule cache</text>
+  <text x="75" y="440" class="subtitle">Approximately +19.1 MB per requested step (R² 0.998)</text>
+  <line x1="100" y1="620" x2="1015" y2="620" class="axis"/>
+  <line x1="100" y1="455" x2="100" y2="620" class="axis"/>
+  <line x1="100" y1="537.5" x2="1015" y2="537.5" class="grid"/>
+  <line x1="100" y1="455" x2="1015" y2="455" class="grid"/>
+  <text x="70" y="624" class="tick">0</text><text x="58" y="542" class="tick">200</text><text x="58" y="459" class="tick">400 MB</text>
+  <polyline points="150,568 420,536 690,508 960,472" fill="none" stroke="#ffd866" stroke-width="5"/>
+  <g fill="#ffd866"><circle cx="150" cy="568" r="6"/><circle cx="420" cy="536" r="6"/><circle cx="690" cy="508" r="6"/><circle cx="960" cy="472" r="6"/></g>
+  <text x="135" y="595" class="tick">8 steps</text><text x="397" y="563" class="tick">12 steps</text>
+  <text x="667" y="535" class="tick">16 steps</text><text x="937" y="499" class="tick">20 steps</text>
+  <text x="135" y="557" class="tick">126 MB</text><text x="405" y="525" class="tick">203 MB</text>
+  <text x="675" y="497" class="tick">271 MB</text><text x="945" y="461" class="tick">358 MB</text>
+  <text x="70" y="690" class="subtitle">Sampling fit: +16.20 seconds/requested step (R² 0.991) · Workflow fit: +14.97 seconds/requested step (R² 0.997)</text>
+</svg>
