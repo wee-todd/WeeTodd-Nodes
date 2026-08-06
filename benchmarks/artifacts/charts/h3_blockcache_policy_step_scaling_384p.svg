@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="620" viewBox="0 0 900 620">
+  <rect width="900" height="620" fill="#10141d"/>
+  <style>
+    text { fill: #e8edf5; font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
+    .grid { stroke: #354052; stroke-width: 1; }
+    .axis { stroke: #9ba8ba; stroke-width: 2; }
+    .line { fill: none; stroke-width: 4; }
+    .point { stroke: #10141d; stroke-width: 2; }
+  </style>
+  <text x="55" y="42" font-size="25" font-weight="700">H3 BlockCache policy scaling at 640 × 384</text>
+  <text x="55" y="70" font-size="15" fill="#aeb8c8">Five seconds · seed 0 · BF16 transformer · Q8 text encoder · staged unloading</text>
+  <line class="grid" x1="90" y1="500" x2="840" y2="500"/><text x="48" y="506" font-size="13">0</text>
+  <line class="grid" x1="90" y1="420" x2="840" y2="420"/><text x="38" y="426" font-size="13">100</text>
+  <line class="grid" x1="90" y1="340" x2="840" y2="340"/><text x="38" y="346" font-size="13">200</text>
+  <line class="grid" x1="90" y1="260" x2="840" y2="260"/><text x="38" y="266" font-size="13">300</text>
+  <line class="grid" x1="90" y1="180" x2="840" y2="180"/><text x="38" y="186" font-size="13">400</text>
+  <line class="grid" x1="90" y1="100" x2="840" y2="100"/><text x="38" y="106" font-size="13">500</text>
+  <line class="axis" x1="90" y1="100" x2="90" y2="500"/>
+  <line class="axis" x1="90" y1="500" x2="840" y2="500"/>
+  <text x="12" y="305" font-size="14" transform="rotate(-90 12 305)">Sampling seconds</text>
+  <text x="407" y="570" font-size="14">Requested steps</text>
+  <text x="142" y="525" font-size="14">8</text><text x="356" y="525" font-size="14">12</text>
+  <text x="569" y="525" font-size="14">16</text><text x="783" y="525" font-size="14">20</text>
+  <polyline class="line" stroke="#c5ccd8" points="150,367.6 363,288.8 576,204.0 790,135.0"/>
+  <polyline class="line" stroke="#57c7ff" points="150,388.4 363,329.4 576,271.9 790,214.6"/>
+  <polyline class="line" stroke="#73df9b" points="150,404.3 363,346.2 576,306.1 790,245.1"/>
+  <polyline class="line" stroke="#ff9d66" points="150,420.8 363,381.9 576,322.8 790,302.5"/>
+  <g fill="#c5ccd8"><circle class="point" cx="150" cy="367.6" r="6"/><circle class="point" cx="363" cy="288.8" r="6"/><circle class="point" cx="576" cy="204.0" r="6"/><circle class="point" cx="790" cy="135.0" r="6"/></g>
+  <g fill="#57c7ff"><circle class="point" cx="150" cy="388.4" r="6"/><circle class="point" cx="363" cy="329.4" r="6"/><circle class="point" cx="576" cy="271.9" r="6"/><circle class="point" cx="790" cy="214.6" r="6"/></g>
+  <g fill="#73df9b"><circle class="point" cx="150" cy="404.3" r="6"/><circle class="point" cx="363" cy="346.2" r="6"/><circle class="point" cx="576" cy="306.1" r="6"/><circle class="point" cx="790" cy="245.1" r="6"/></g>
+  <g fill="#ff9d66"><circle class="point" cx="150" cy="420.8" r="6"/><circle class="point" cx="363" cy="381.9" r="6"/><circle class="point" cx="576" cy="322.8" r="6"/><circle class="point" cx="790" cy="302.5" r="6"/></g>
+  <g font-size="14"><rect x="120" y="584" width="16" height="4" fill="#c5ccd8"/><text x="143" y="591">No cache</text><rect x="260" y="584" width="16" height="4" fill="#57c7ff"/><text x="283" y="591">Conservative</text><rect x="430" y="584" width="16" height="4" fill="#73df9b"/><text x="453" y="591">Balanced</text><rect x="565" y="584" width="16" height="4" fill="#ff9d66"/><text x="588" y="591">Speed</text></g>
+</svg>

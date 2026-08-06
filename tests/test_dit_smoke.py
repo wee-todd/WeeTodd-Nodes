@@ -12,6 +12,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from minimax_h3_mlx.adaln import ModulationCache, drop_adaln_weights, schedule_timesteps
+from minimax_h3_mlx.blockcache import H3BlockCacheConfig
 from minimax_h3_mlx.config import TAG_AUDIO, TAG_TEXT, TAG_VIDEO, DiTConfig
 from minimax_h3_mlx.dit import MiniMaxH3DiT
 from minimax_h3_mlx.easycache import H3EasyCacheConfig
@@ -82,9 +83,7 @@ def _forward_fixture():
     text = mx.random.normal((1, n_text, cfg.text_dim))
     timestep = mx.array([0.0, 0.7])
 
-    v_out, a_out = dit(
-        video, audio, text, timestep, ts_i, tags, pos, video_i, audio_i, text_i
-    )
+    v_out, a_out = dit(video, audio, text, timestep, ts_i, tags, pos, video_i, audio_i, text_i)
     mx.eval(v_out, a_out)
 
     assert v_out.shape == (1, n_video, cfg.video_patch_dim), v_out.shape
@@ -180,6 +179,36 @@ def test_h3_easycache_skips_joint_video_audio_evaluation():
 
     assert result.easycache_skipped_steps > 0
     assert result.transformer_evaluations + result.easycache_skipped_steps == 5
+    assert result.video_latents.shape == (1, cfg.latents_dim, 37, 2, 2)
+    assert result.audio_latents.shape == (2, cfg.audio_latents_dim, 207)
+
+
+def test_h3_blockcache_reuses_later_blocks_but_runs_each_sampling_step():
+    cfg = tiny_config()
+    mx.random.seed(4)
+    pipeline = MiniMaxH3Pipeline(MiniMaxH3DiT(cfg), None, None, None)
+
+    result = pipeline.sample_latents(
+        mx.random.normal((1, 3, cfg.text_dim)),
+        np.full((3,), TAG_TEXT, dtype=np.int32),
+        duration_seconds=5.0,
+        num_inference_steps=8,
+        height=32,
+        width=32,
+        drop_adaln=False,
+        verbose=False,
+        blockcache_config=H3BlockCacheConfig(
+            mode="manual",
+            reuse_threshold=100.0,
+            start_percent=0.0,
+            end_percent=1.0,
+            max_hit_fraction=0.6,
+        ),
+    )
+
+    assert result.blockcache_hits > 0
+    assert result.transformer_evaluations + result.blockcache_hits == 7
+    assert result.blockcache_cache_bytes > 0
     assert result.video_latents.shape == (1, cfg.latents_dim, 37, 2, 2)
     assert result.audio_latents.shape == (2, cfg.audio_latents_dim, 207)
 

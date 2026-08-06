@@ -124,6 +124,9 @@ class LatentResult:
     transformer_evaluations: int = 0
     easycache_skipped_steps: int = 0
     easycache_resolved_threshold: float | None = None
+    blockcache_hits: int = 0
+    blockcache_resolved_threshold: float | None = None
+    blockcache_cache_bytes: int = 0
     seconds_per_evaluation: float = 0.0
     total_seconds: float = 0.0
 
@@ -182,7 +185,10 @@ class MiniMaxH3Pipeline:
         if verbose:
             print(f"loading MiniMax-H3 from {root}")
         text_encoder = step(
-            "text encoder", lambda: MiniMaxH3TextEncoder(root / "text_encoder", dtype=dtype, load_vision=load_vision)
+            "text encoder",
+            lambda: MiniMaxH3TextEncoder(
+                root / "text_encoder", dtype=dtype, load_vision=load_vision
+            ),
         )
         dit = step(f"transformer ({dit_path.name})", lambda: load_dit(dit_path))
         video_vae = step("video vae", lambda: load_video_vae(root / "video_vae"))
@@ -228,8 +234,10 @@ class MiniMaxH3Pipeline:
         self._cache = ModulationCache.build(self.dit, timesteps, dtype=mx.bfloat16)
         self._cache_timesteps = key
         if verbose:
-            print(f"  adaln cache: {len(key)} timesteps, {self._cache.nbytes() / 1e6:.0f} MB "
-                  f"in {time.perf_counter() - started:.1f}s")
+            print(
+                f"  adaln cache: {len(key)} timesteps, {self._cache.nbytes() / 1e6:.0f} MB "
+                f"in {time.perf_counter() - started:.1f}s"
+            )
         if drop_adaln:
             freed = drop_adaln_weights(self.dit)
             mx.eval(self.dit.parameters())
@@ -257,6 +265,7 @@ class MiniMaxH3Pipeline:
         verbose: bool = True,
         step_callback: Callable[[int, int], None] | None = None,
         easycache_config=None,
+        blockcache_config=None,
     ) -> LatentResult:
         """Sample synchronized text-only video and audio latents without loading either VAE."""
         run_started = time.perf_counter()
@@ -266,8 +275,7 @@ class MiniMaxH3Pipeline:
             raise ValueError("`num_inference_steps` must be at least 2.")
         if height < 32 or width < 32 or height % 32 or width % 32:
             raise ValueError(
-                "`height` and `width` must be positive multiples of 32, "
-                f"got {height}x{width}."
+                f"`height` and `width` must be positive multiples of 32, got {height}x{width}."
             )
 
         tags = np.asarray(text_token_tags, dtype=np.int32)
@@ -325,11 +333,18 @@ class MiniMaxH3Pipeline:
         self._ensure_cache(timestep_table, drop_adaln, verbose)
         embeds = prompt_embeds.astype(mx.bfloat16)
 
+        if easycache_config is not None and blockcache_config is not None:
+            raise ValueError("EasyCache and BlockCache are mutually exclusive.")
         easycache = None
         if easycache_config is not None:
             from .easycache import H3EasyCacheState
 
             easycache = H3EasyCacheState(easycache_config)
+        blockcache = None
+        if blockcache_config is not None:
+            from .blockcache import H3BlockCacheState
+
+            blockcache = H3BlockCacheState(blockcache_config)
 
         step_times = []
         transformer_times = []
@@ -346,6 +361,7 @@ class MiniMaxH3Pipeline:
                 if easycache is not None
                 else None
             )
+            blockcache_hit = False
             if reused is None:
                 video_pred, audio_pred = self.dit(
                     video_input,
@@ -359,8 +375,14 @@ class MiniMaxH3Pipeline:
                     layout.audio_indices,
                     layout.text_indices,
                     modulation_cache=self._cache,
+                    blockcache=blockcache,
+                    step_index=index,
+                    total_steps=total_steps,
                 )
-                transformer_evaluations += 1
+                transformer_evaluations += (
+                    1 if blockcache is None or not blockcache.last_was_hit else 0
+                )
+                blockcache_hit = blockcache is not None and blockcache.last_was_hit
                 if easycache is not None:
                     easycache.update(video_input, audio_input, video_pred, audio_pred)
             else:
@@ -376,7 +398,7 @@ class MiniMaxH3Pipeline:
             mx.eval(video_rows, audio_rows)
             elapsed = time.perf_counter() - started
             step_times.append(elapsed)
-            if reused is None:
+            if reused is None and not blockcache_hit:
                 transformer_times.append(elapsed)
             if verbose:
                 completed = index + 1
@@ -384,7 +406,7 @@ class MiniMaxH3Pipeline:
                 eta = mean * (total_steps - completed)
                 print(
                     f"  step {completed}/{total_steps}  {step_times[-1]:.1f}s  "
-                    f"{'cached  ' if reused is not None else ''}"
+                    f"{'cached  ' if reused is not None or blockcache_hit else ''}"
                     f"eta {eta / 60:.1f} min",
                     flush=True,
                 )
@@ -412,9 +434,12 @@ class MiniMaxH3Pipeline:
             easycache_resolved_threshold=(
                 easycache.resolved_threshold if easycache is not None else None
             ),
-            seconds_per_evaluation=(
-                sum(transformer_times) / max(len(transformer_times), 1)
+            blockcache_hits=blockcache.hits if blockcache is not None else 0,
+            blockcache_resolved_threshold=(
+                blockcache.resolved_threshold if blockcache is not None else None
             ),
+            blockcache_cache_bytes=blockcache.cache_bytes if blockcache is not None else 0,
+            seconds_per_evaluation=(sum(transformer_times) / max(len(transformer_times), 1)),
             total_seconds=time.perf_counter() - run_started,
         )
 
@@ -474,10 +499,14 @@ class MiniMaxH3Pipeline:
             keyframe_anchors,
         )
         if verbose:
-            print(f"canvas {width}x{height}, {num_frames} frames ({num_latent_frames} latent), "
-                  f"{num_audio_latents} audio latents")
-            print(f"packed sequence: {layout.sequence_length:,} rows "
-                  f"({len(text_token_tags):,} text, {layout.num_condition_video_rows:,} condition)")
+            print(
+                f"canvas {width}x{height}, {num_frames} frames ({num_latent_frames} latent), "
+                f"{num_audio_latents} audio latents"
+            )
+            print(
+                f"packed sequence: {layout.sequence_length:,} rows "
+                f"({len(text_token_tags):,} text, {layout.num_condition_video_rows:,} condition)"
+            )
 
         # 3. Keyframe conditioning rows, encoded before any request noise is drawn.
         condition_rows = None
@@ -495,7 +524,13 @@ class MiniMaxH3Pipeline:
             )
 
         latents = mx.random.normal(
-            (1, self.video_vae.config.latent_channels, num_latent_frames, latent_height, latent_width)
+            (
+                1,
+                self.video_vae.config.latent_channels,
+                num_latent_frames,
+                latent_height,
+                latent_width,
+            )
         ).astype(mx.float32)
         video_rows = patchify_video_latents(latents, patch_size)
         audio_rows = mx.random.normal(
@@ -506,7 +541,9 @@ class MiniMaxH3Pipeline:
 
         # 5. Two schedules over one shared forward.
         video_sched, audio_sched = self._build_schedules(num_inference_steps)
-        timestep_table, plan = self._row_timestep_plan(layout, video_sched.timesteps, audio_sched.timesteps)
+        timestep_table, plan = self._row_timestep_plan(
+            layout, video_sched.timesteps, audio_sched.timesteps
+        )
         self._ensure_cache(timestep_table, drop_adaln, verbose)
 
         n_cond_v = layout.num_condition_video_rows
@@ -546,10 +583,14 @@ class MiniMaxH3Pipeline:
                 audio_rows[n_cond_a:],
             )
             video_rows = (
-                mx.concatenate([video_rows[:n_cond_v], stepped_video]) if n_cond_v else stepped_video
+                mx.concatenate([video_rows[:n_cond_v], stepped_video])
+                if n_cond_v
+                else stepped_video
             )
             audio_rows = (
-                mx.concatenate([audio_rows[:n_cond_a], stepped_audio]) if n_cond_a else stepped_audio
+                mx.concatenate([audio_rows[:n_cond_a], stepped_audio])
+                if n_cond_a
+                else stepped_audio
             )
             mx.eval(video_rows, audio_rows)
             step_times.append(time.perf_counter() - started)
@@ -557,13 +598,18 @@ class MiniMaxH3Pipeline:
                 done = i + 1
                 mean = sum(step_times) / len(step_times)
                 eta = mean * (len(video_sched.timesteps) - done)
-                print(f"  step {done}/{len(video_sched.timesteps)}  "
-                      f"{step_times[-1]:.1f}s  eta {eta / 60:.1f} min", flush=True)
+                print(
+                    f"  step {done}/{len(video_sched.timesteps)}  "
+                    f"{step_times[-1]:.1f}s  eta {eta / 60:.1f} min",
+                    flush=True,
+                )
         if step_callback is not None:
             step_callback(total_steps, total_steps)
 
         # 7. Decode both modalities.
-        video = self._decode_video(video_rows[n_cond_v:], num_latent_frames, latent_height, latent_width)
+        video = self._decode_video(
+            video_rows[n_cond_v:], num_latent_frames, latent_height, latent_width
+        )
         audio = self._decode_audio(audio_rows[n_cond_a:], num_audio_latents)
         total = time.perf_counter() - run_started
         return GenerationResult(
@@ -579,7 +625,12 @@ class MiniMaxH3Pipeline:
     def _decode_video(self, rows, num_latent_frames, latent_height, latent_width) -> np.ndarray:
         cfg = self.video_vae.config
         latents = unpatchify_video_tokens(
-            rows, num_latent_frames, latent_height, latent_width, cfg.latent_channels, self.dit.config.patch_size
+            rows,
+            num_latent_frames,
+            latent_height,
+            latent_width,
+            cfg.latent_channels,
+            self.dit.config.patch_size,
         )
         mean = mx.array(np.array(cfg.latents_mean, np.float32)).reshape(1, -1, 1, 1, 1)
         std = mx.array(np.array(cfg.latents_std, np.float32)).reshape(1, -1, 1, 1, 1)

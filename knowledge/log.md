@@ -2,6 +2,12 @@
 
 ## 2026-08-06
 
+- **Implementation**: Added independent MLX H3 BlockCache with block-zero probing, separate audio
+  and video scores, bounded automatic policies, current output heads, metadata, and request cleanup.
+- **Experiment**: Started the 640 by 384 BlockCache policy and sampling-step matrix with the
+  established prompt, seed, component identities, and staged unloading contract.
+- **Experiment**: Completed the 12-point BlockCache matrix. Speed auto reduced 20-step sampling
+  time by 45.9 percent and used a 95.3 MiB request-local cache.
 - **Experiment**: Completed and recorded the 16-point 1344 by 768 EasyCache matrix. All runs
   produced synchronized MP4 and JSON artifacts without a generation failure.
 - **Evidence**: Added native-resolution runtime data, scaling fits, memory measurements, endpoint

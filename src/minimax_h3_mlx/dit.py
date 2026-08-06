@@ -78,7 +78,9 @@ class TimestepEmbedder(nn.Module):
 
     def __init__(self, config: DiTConfig):
         super().__init__()
-        self.proj_in = nn.Linear(config.timestep_input_dim, config.time_embed_hidden_size, bias=True)
+        self.proj_in = nn.Linear(
+            config.timestep_input_dim, config.time_embed_hidden_size, bias=True
+        )
         self.proj_out = nn.Linear(config.time_embed_hidden_size, config.time_embed_dim, bias=True)
 
     def __call__(self, sinusoid: mx.array) -> mx.array:
@@ -337,15 +339,15 @@ class MiniMaxH3DiT(nn.Module):
     def embed_timesteps(self, timesteps: mx.array) -> mx.array:
         """Return original MLP embeddings or linearly interpolated pruned AdaLN coordinates."""
         if self.config.adaln_curve_grid is None:
-            return self.time_embedder(
-                timestep_embedding(timesteps, self.config.timestep_input_dim)
-            )
+            return self.time_embedder(timestep_embedding(timesteps, self.config.timestep_input_dim))
 
         grid = self.config.adaln_curve_grid
         position = mx.clip(timesteps.astype(mx.float32), 0.0, 1.0) * (grid - 1)
         lower = mx.minimum(mx.floor(position).astype(mx.int32), grid - 2)
         fraction = (position - lower.astype(mx.float32))[:, None]
-        return self.adaln_t_table[lower] * (1.0 - fraction) + self.adaln_t_table[lower + 1] * fraction
+        return (
+            self.adaln_t_table[lower] * (1.0 - fraction) + self.adaln_t_table[lower + 1] * fraction
+        )
 
     def pack_inputs(
         self,
@@ -379,8 +381,12 @@ class MiniMaxH3DiT(nn.Module):
 
         # 1. Project each modality and scatter the rows into the packed buffer. The text stream
         #    sets the dtype of the packed sequence.
-        video_embeds = self.video_patch_proj(video_latents.astype(param_dtype(self.video_patch_proj)))
-        audio_embeds = self.audio_patch_proj(audio_latents.astype(param_dtype(self.audio_patch_proj)))
+        video_embeds = self.video_patch_proj(
+            video_latents.astype(param_dtype(self.video_patch_proj))
+        )
+        audio_embeds = self.audio_patch_proj(
+            audio_latents.astype(param_dtype(self.audio_patch_proj))
+        )
         text = self.condition_proj(text_embeds.astype(param_dtype(self.condition_proj)))
         text = self.token_refiner(text)
 
@@ -424,6 +430,9 @@ class MiniMaxH3DiT(nn.Module):
         text_indices: mx.array,
         modulation_cache: "ModulationCache | None" = None,
         mask: mx.array | None = None,
+        blockcache=None,
+        step_index: int = 0,
+        total_steps: int = 1,
     ) -> tuple[mx.array, mx.array]:
         """Predict the video and audio velocity for one packed sequence.
 
@@ -456,11 +465,34 @@ class MiniMaxH3DiT(nn.Module):
             text_indices,
         )
 
+        before_block_zero = x
         for i, block in enumerate(self.blocks):
             modulation = (
                 modulation_cache.get(i) if modulation_cache is not None else block.adaln_proj(temb)
             )
             x = block(x, modulation, adaln_indices, rotary, mask)
+            if i == 0 and blockcache is not None:
+                after_block_zero = x
+                reused = blockcache.try_reuse(
+                    before_block_zero,
+                    after_block_zero,
+                    video_indices,
+                    audio_indices,
+                    step_index,
+                    total_steps,
+                )
+                if reused is not None:
+                    x = reused
+                    break
+
+        if blockcache is not None and not blockcache.last_was_hit:
+            blockcache.update(
+                before_block_zero,
+                after_block_zero,
+                x,
+                video_indices,
+                audio_indices,
+            )
 
         # 4. Both heads run over every row, then each modality's rows are selected.
         x = self.final_layer.norm_out(x, temb, timestep_indices)

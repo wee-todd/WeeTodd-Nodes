@@ -15,6 +15,10 @@ This project begins with the Apache-2.0 MiniMax H3 MLX engine developed alongsid
 - **WeeTodd H3 Unload Qwen3-VL** explicitly releases a warm process-local conditioner.
 - **WeeTodd H3 Sample Video + Audio Latents** runs the transformer over one synchronized packed
   sequence and returns undecoded MLX video and audio latents.
+- **WeeTodd H3 EasyCache (MLX)** reuses complete joint video and audio prediction residuals with a
+  bounded manual or automatic policy.
+- **WeeTodd H3 BlockCache (MLX)** always runs block zero and the current output heads, then reuses
+  the cached video and audio residual of later blocks when both modality checks permit reuse.
 - **WeeTodd H3 Unload Transformer** releases the transformer-only sampler and MLX cache.
 - **WeeTodd H3 Decode Video VAE** converts normalized video latents to ComfyUI `IMAGE` frames. It
   checks component provenance and can unload the final video VAE after decoding.
@@ -87,6 +91,24 @@ final-wave state in all native-resolution outputs, but the benchmark does not pr
 or audio equivalence. Read the [native 768P report](docs/reference/H3_EASYCACHE_POLICY_STEP_SCALING_768P.md),
 the [smoke-resolution report](docs/reference/H3_EASYCACHE_POLICY_STEP_SCALING.md), or the
 [local artifact bundle](benchmarks/artifacts/README.md).
+
+## BlockCache benchmark results
+
+The independent MLX BlockCache implementation was tested at 640 by 384 with the same prompt, seed,
+components, duration, requested steps, and staged unloading policy as the EasyCache matrix. Every
+BlockCache hit still evaluated block zero and the current output heads. A hit took approximately
+0.5 seconds, compared with approximately 23 through 24 seconds for a full transformer evaluation.
+
+At 20 requested steps, conservative reduced sampling time by 21.8 percent, balanced reduced
+sampling time by 30.2 percent, and speed reduced sampling time by 45.9 percent against the shared
+no-cache baseline. The request-local video and audio cache used approximately 95.3 MiB.
+
+![H3 BlockCache scaling at 640 by 384](benchmarks/artifacts/charts/h3_blockcache_policy_step_scaling_384p.svg)
+
+All 12 BlockCache outputs contained synchronized video and audio streams. These single-prompt,
+single-seed measurements do not prove perceptual equivalence. Read the
+[BlockCache report](docs/reference/H3_BLOCKCACHE.md) or inspect the local, gitignored media under
+`benchmarks/artifacts/media/blockcache-384p/`.
 
 Models are never bundled. See [Architecture](docs/ARCHITECTURE.md), [Roadmap](docs/ROADMAP.md),
 [Smoke-test plan](docs/SMOKE_TEST_PLAN.md),

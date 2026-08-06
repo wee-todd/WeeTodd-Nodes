@@ -1,4 +1,5 @@
 """Classic ComfyUI node contracts backed by the MLX MiniMax H3 pipeline."""
+
 import json
 import platform
 from dataclasses import asdict
@@ -21,6 +22,7 @@ from .sampling import TRANSFORMER_RUNTIME, H3TransformerSpec
 def _output_directory() -> Path:
     try:
         import folder_paths
+
         return Path(folder_paths.get_output_directory())
     except ImportError:
         return Path.cwd() / "output"
@@ -281,7 +283,10 @@ class WeeToddH3Sample:
                 "config": ("WEETODD_H3_CONFIG",),
                 "unload_after_sample": ("BOOLEAN", {"default": True}),
             },
-            "optional": {"easycache": ("WEETODD_H3_EASYCACHE",)},
+            "optional": {
+                "easycache": ("WEETODD_H3_EASYCACHE",),
+                "blockcache": ("WEETODD_H3_BLOCKCACHE",),
+            },
         }
 
     RETURN_TYPES = ("WEETODD_H3_LATENTS", "STRING")
@@ -293,7 +298,17 @@ class WeeToddH3Sample:
         "This node does not load or run either VAE."
     )
 
-    def sample(self, components, conditioning, config, unload_after_sample, easycache=None):
+    def sample(
+        self,
+        components,
+        conditioning,
+        config,
+        unload_after_sample,
+        easycache=None,
+        blockcache=None,
+    ):
+        if easycache is not None and blockcache is not None:
+            raise ValueError("Connect either EasyCache or BlockCache, not both.")
         progress = None
         check_interrupted = None
         try:
@@ -318,6 +333,7 @@ class WeeToddH3Sample:
             unload_after=unload_after_sample,
             step_callback=on_step,
             easycache=easycache,
+            blockcache=blockcache,
         )
         info = {
             "prompt": conditioning.prompt,
@@ -330,6 +346,12 @@ class WeeToddH3Sample:
             "easycache_skipped_steps": latents.easycache_skipped_steps,
             "easycache_resolved_threshold": latents.easycache_resolved_threshold,
             "easycache": asdict(easycache) if easycache is not None else None,
+            "blockcache_hits": getattr(latents, "blockcache_hits", 0),
+            "blockcache_resolved_threshold": getattr(
+                latents, "blockcache_resolved_threshold", None
+            ),
+            "blockcache_cache_bytes": getattr(latents, "blockcache_cache_bytes", 0),
+            "blockcache": asdict(blockcache) if blockcache is not None else None,
             "seconds_per_evaluation": latents.seconds_per_evaluation,
             "total_seconds": latents.total_seconds,
             "transformer_resident": TRANSFORMER_RUNTIME.loaded,
@@ -401,6 +423,76 @@ class WeeToddH3EasyCache:
             end_percent=end_percent,
             auto_multiplier=auto_multiplier,
             max_skip_fraction=max_skip_fraction,
+        )
+        config.validate()
+        return (config,)
+
+
+class WeeToddH3BlockCache:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "mode": (
+                    [
+                        "manual",
+                        "automatic_conservative",
+                        "automatic_balanced",
+                        "automatic_speed",
+                    ],
+                    {"default": "automatic_balanced"},
+                ),
+                "reuse_threshold": (
+                    "FLOAT",
+                    {"default": 0.12, "min": 0.0, "max": 1.0, "step": 0.005},
+                ),
+                "start_percent": (
+                    "FLOAT",
+                    {"default": 0.15, "min": 0.0, "max": 1.0, "step": 0.01},
+                ),
+                "end_percent": (
+                    "FLOAT",
+                    {"default": 0.95, "min": 0.0, "max": 1.0, "step": 0.01},
+                ),
+                "auto_multiplier": (
+                    "FLOAT",
+                    {"default": 1.4, "min": 1.0, "max": 3.0, "step": 0.05},
+                ),
+                "max_hit_fraction": (
+                    "FLOAT",
+                    {"default": 0.35, "min": 0.0, "max": 0.6, "step": 0.05},
+                ),
+            }
+        }
+
+    RETURN_TYPES = ("WEETODD_H3_BLOCKCACHE",)
+    RETURN_NAMES = ("blockcache",)
+    FUNCTION = "configure"
+    CATEGORY = "WeeTodd/H3/sampling"
+    DESCRIPTION = (
+        "Always run H3 block zero and the current output heads, then safely reuse the cached "
+        "joint audio/video residual of later transformer blocks when both modality indicators "
+        "agree."
+    )
+
+    def configure(
+        self,
+        mode,
+        reuse_threshold,
+        start_percent,
+        end_percent,
+        auto_multiplier,
+        max_hit_fraction,
+    ):
+        from minimax_h3_mlx.blockcache import H3BlockCacheConfig
+
+        config = H3BlockCacheConfig(
+            mode=mode,
+            reuse_threshold=reuse_threshold,
+            start_percent=start_percent,
+            end_percent=end_percent,
+            auto_multiplier=auto_multiplier,
+            max_hit_fraction=max_hit_fraction,
         )
         config.validate()
         return (config,)
@@ -728,11 +820,14 @@ class WeeToddH3PublishVideoAudio:
 class WeeToddH3ModelLoader:
     @classmethod
     def INPUT_TYPES(cls):
-        return {"required": {
-            "checkpoint": ("STRING", {"default": "models/MiniMax-H3/FL2VA"}),
-            "transformer": ("STRING", {"default": ""}),
-            "load_vision": ("BOOLEAN", {"default": False}),
-        }}
+        return {
+            "required": {
+                "checkpoint": ("STRING", {"default": "models/MiniMax-H3/FL2VA"}),
+                "transformer": ("STRING", {"default": ""}),
+                "load_vision": ("BOOLEAN", {"default": False}),
+            }
+        }
+
     RETURN_TYPES = ("WEETODD_H3_MODEL",)
     RETURN_NAMES = ("model",)
     FUNCTION = "load"
@@ -753,7 +848,7 @@ class WeeToddH3GenerationConfig:
                     {"default": 5.0, "min": 5.0, "max": 15.0, "step": 0.1},
                 ),
                 "steps": ("INT", {"default": 16, "min": 2, "max": 100}),
-                "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
+                "seed": ("INT", {"default": 0, "min": 0, "max": 0xFFFFFFFFFFFFFFFF}),
                 "resolution_mode": (["preset", "custom"], {"default": "preset"}),
                 "resolution_tier": (
                     list(_H3_RESOLUTION_SHORT_EDGES),
@@ -771,6 +866,7 @@ class WeeToddH3GenerationConfig:
                 "drop_adaln": ("BOOLEAN", {"default": True}),
             }
         }
+
     RETURN_TYPES = ("WEETODD_H3_CONFIG", "STRING")
     RETURN_NAMES = ("config", "resolved_resolution")
     FUNCTION = "configure"
@@ -818,12 +914,15 @@ class WeeToddH3GenerationConfig:
 class WeeToddH3Generate:
     @classmethod
     def INPUT_TYPES(cls):
-        return {"required": {
-            "model": ("WEETODD_H3_MODEL",),
-            "config": ("WEETODD_H3_CONFIG",),
-            "prompt": ("STRING", {"multiline": True, "dynamicPrompts": True}),
-            "filename_prefix": ("STRING", {"default": "WeeTodd/H3"}),
-        }}
+        return {
+            "required": {
+                "model": ("WEETODD_H3_MODEL",),
+                "config": ("WEETODD_H3_CONFIG",),
+                "prompt": ("STRING", {"multiline": True, "dynamicPrompts": True}),
+                "filename_prefix": ("STRING", {"default": "WeeTodd/H3"}),
+            }
+        }
+
     RETURN_TYPES = ("STRING", "STRING")
     RETURN_NAMES = ("video_path", "generation_info")
     OUTPUT_NODE = True
@@ -851,9 +950,13 @@ class WeeToddH3Generate:
                 progress.update_absolute(completed, total)
 
         result = RUNTIME.get(model)(
-            prompt, duration_seconds=config.duration_seconds,
-            num_inference_steps=config.steps, seed=config.seed,
-            height=config.height, width=config.width, drop_adaln=config.drop_adaln,
+            prompt,
+            duration_seconds=config.duration_seconds,
+            num_inference_steps=config.steps,
+            seed=config.seed,
+            height=config.height,
+            width=config.width,
+            drop_adaln=config.drop_adaln,
             step_callback=on_step,
         )
         from minimax_h3_mlx.media import save_mp4
@@ -861,8 +964,13 @@ class WeeToddH3Generate:
         target = _safe_output_target(_output_directory(), filename_prefix, config.seed)
         target.parent.mkdir(parents=True, exist_ok=True)
         save_mp4(target, result.video, result.fps, result.audio, result.sample_rate)
-        info = {"prompt": prompt, **asdict(config), "video_path": str(target),
-                "seconds_per_step": result.seconds_per_step, "total_seconds": result.total_seconds}
+        info = {
+            "prompt": prompt,
+            **asdict(config),
+            "video_path": str(target),
+            "seconds_per_step": result.seconds_per_step,
+            "total_seconds": result.total_seconds,
+        }
         target.with_suffix(".json").write_text(json.dumps(info, indent=2) + "\n")
         return (str(target), json.dumps(info, indent=2))
 
@@ -871,6 +979,7 @@ class WeeToddH3Unload:
     @classmethod
     def INPUT_TYPES(cls):
         return {"required": {"unload": ("BOOLEAN", {"default": True})}}
+
     RETURN_TYPES = ("STRING",)
     FUNCTION = "release"
     CATEGORY = "WeeTodd/H3"
@@ -889,6 +998,7 @@ NODE_CLASS_MAPPINGS = {
     "WeeToddH3UnloadTextEncoder": WeeToddH3UnloadTextEncoder,
     "WeeToddH3Sample": WeeToddH3Sample,
     "WeeToddH3EasyCache": WeeToddH3EasyCache,
+    "WeeToddH3BlockCache": WeeToddH3BlockCache,
     "WeeToddH3UnloadTransformer": WeeToddH3UnloadTransformer,
     "WeeToddH3VideoVAEDecode": WeeToddH3VideoVAEDecode,
     "WeeToddH3UnloadVideoVAE": WeeToddH3UnloadVideoVAE,
@@ -907,6 +1017,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "WeeToddH3UnloadTextEncoder": "WeeTodd H3 Unload Qwen3-VL",
     "WeeToddH3Sample": "WeeTodd H3 Sample Video + Audio Latents",
     "WeeToddH3EasyCache": "WeeTodd H3 EasyCache (MLX)",
+    "WeeToddH3BlockCache": "WeeTodd H3 BlockCache (MLX)",
     "WeeToddH3UnloadTransformer": "WeeTodd H3 Unload Transformer",
     "WeeToddH3VideoVAEDecode": "WeeTodd H3 Decode Video VAE",
     "WeeToddH3UnloadVideoVAE": "WeeTodd H3 Unload Video VAE",
