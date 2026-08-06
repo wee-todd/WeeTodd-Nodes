@@ -19,6 +19,31 @@ from .runtime import RUNTIME, H3GenerationConfig, H3ModelSpec
 from .sampling import TRANSFORMER_RUNTIME, H3TransformerSpec
 
 
+def _lora_choices():
+    try:
+        import folder_paths
+
+        choices = folder_paths.get_filename_list("loras")
+        return choices or [""]
+    except ImportError:
+        return [""]
+
+
+def _resolve_lora_path(name: str) -> Path:
+    path = Path(name).expanduser()
+    if path.is_absolute() or path.exists():
+        return path
+    try:
+        import folder_paths
+
+        resolved = folder_paths.get_full_path("loras", name)
+        if resolved:
+            return Path(resolved)
+        return Path(folder_paths.models_dir) / "loras" / name
+    except ImportError:
+        return path
+
+
 def _output_directory() -> Path:
     try:
         import folder_paths
@@ -286,6 +311,7 @@ class WeeToddH3Sample:
             "optional": {
                 "easycache": ("WEETODD_H3_EASYCACHE",),
                 "blockcache": ("WEETODD_H3_BLOCKCACHE",),
+                "loras": ("WEETODD_H3_LORAS",),
             },
         }
 
@@ -306,6 +332,7 @@ class WeeToddH3Sample:
         unload_after_sample,
         easycache=None,
         blockcache=None,
+        loras=None,
     ):
         if easycache is not None and blockcache is not None:
             raise ValueError("Connect either EasyCache or BlockCache, not both.")
@@ -334,6 +361,7 @@ class WeeToddH3Sample:
             step_callback=on_step,
             easycache=easycache,
             blockcache=blockcache,
+            loras=loras,
         )
         info = {
             "prompt": conditioning.prompt,
@@ -352,11 +380,74 @@ class WeeToddH3Sample:
             ),
             "blockcache_cache_bytes": getattr(latents, "blockcache_cache_bytes", 0),
             "blockcache": asdict(blockcache) if blockcache is not None else None,
+            "loras": loras.metadata() if loras is not None else [],
+            "lora_report": list(getattr(latents, "lora_report", ())),
             "seconds_per_evaluation": latents.seconds_per_evaluation,
             "total_seconds": latents.total_seconds,
             "transformer_resident": TRANSFORMER_RUNTIME.loaded,
         }
         return latents, json.dumps(info, indent=2, sort_keys=True)
+
+
+class WeeToddH3LoRALoader:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "lora_name": (_lora_choices(),),
+                "strength": (
+                    "FLOAT",
+                    {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.01},
+                ),
+                "profile": (["auto", "standard", "turbo"], {"default": "auto"}),
+                "adaln_input_grid": (
+                    "STRING",
+                    {
+                        "default": "",
+                        "tooltip": (
+                            "Required when a LoRA targets original AdaLN weights but the selected "
+                            "H3 transformer uses a pruned AdaLN curve."
+                        ),
+                    },
+                ),
+            },
+            "optional": {"previous_loras": ("WEETODD_H3_LORAS",)},
+        }
+
+    RETURN_TYPES = ("WEETODD_H3_LORAS", "STRING")
+    RETURN_NAMES = ("loras", "lora_info")
+    FUNCTION = "load"
+    CATEGORY = "WeeTodd/H3/loaders"
+    DESCRIPTION = (
+        "Build a lazy, ordered MiniMax H3 LoRA stack. Validate safetensors headers now and load "
+        "adapter tensors only when the H3 transformer executes."
+    )
+
+    def load(self, lora_name, strength, profile, adaln_input_grid="", previous_loras=None):
+        from .lora import H3LoRASpec, H3LoRAStack
+
+        path = _resolve_lora_path(lora_name)
+        grid = _resolve_lora_path(adaln_input_grid) if adaln_input_grid.strip() else None
+        if grid is None:
+            candidate = path.parent / "h3_silu_temb_grid.safetensors"
+            grid = candidate if candidate.is_file() else None
+        spec = H3LoRASpec(
+            path=str(path),
+            strength=strength,
+            profile=profile,
+            adaln_input_grid=str(grid) if grid is not None else None,
+        )
+        stack = (previous_loras or H3LoRAStack()).append(spec)
+        info = {
+            "file": path.name,
+            "strength": strength,
+            "profile": spec.resolved_profile,
+            "tensor_bytes": spec.tensor_bytes,
+            "adaln_input_grid": grid.name if grid is not None else None,
+            "stack_size": len(stack.adapters),
+            "loads_at_sampling": True,
+        }
+        return stack, json.dumps(info, indent=2, sort_keys=True)
 
 
 class WeeToddH3EasyCache:
@@ -997,6 +1088,7 @@ NODE_CLASS_MAPPINGS = {
     "WeeToddH3TextEncode": WeeToddH3TextEncode,
     "WeeToddH3UnloadTextEncoder": WeeToddH3UnloadTextEncoder,
     "WeeToddH3Sample": WeeToddH3Sample,
+    "WeeToddH3LoRALoader": WeeToddH3LoRALoader,
     "WeeToddH3EasyCache": WeeToddH3EasyCache,
     "WeeToddH3BlockCache": WeeToddH3BlockCache,
     "WeeToddH3UnloadTransformer": WeeToddH3UnloadTransformer,
@@ -1016,6 +1108,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "WeeToddH3TextEncode": "WeeTodd H3 Text Encode (Qwen3-VL)",
     "WeeToddH3UnloadTextEncoder": "WeeTodd H3 Unload Qwen3-VL",
     "WeeToddH3Sample": "WeeTodd H3 Sample Video + Audio Latents",
+    "WeeToddH3LoRALoader": "WeeTodd H3 LoRA Loader (MLX)",
     "WeeToddH3EasyCache": "WeeTodd H3 EasyCache (MLX)",
     "WeeToddH3BlockCache": "WeeTodd H3 BlockCache (MLX)",
     "WeeToddH3UnloadTransformer": "WeeTodd H3 Unload Transformer",

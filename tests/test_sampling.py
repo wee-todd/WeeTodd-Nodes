@@ -2,9 +2,11 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import mlx.core as mx
 import pytest
 
 from wee_todd_nodes.conditioning import H3Conditioning, H3TextEncoderSpec
+from wee_todd_nodes.lora import H3LoRASpec, H3LoRAStack
 from wee_todd_nodes.runtime import H3GenerationConfig
 from wee_todd_nodes.sampling import H3TransformerCache, H3TransformerSpec
 
@@ -14,6 +16,7 @@ class FakeSampler:
         self.spec = spec
         self.fail = fail
         self.calls = []
+        self.dit = object()
 
     def sample_latents(self, embeddings, token_tags, **kwargs):
         self.calls.append((embeddings, token_tags, kwargs))
@@ -120,6 +123,65 @@ def test_transformer_cache_reuses_only_equal_schedule(tmp_path: Path):
 
     assert len(created) == 2
     assert cache.loaded is True
+
+
+def _lora_stack(tmp_path: Path) -> H3LoRAStack:
+    path = tmp_path / "generic.safetensors"
+    mx.save_safetensors(
+        path,
+        {
+            "blocks.0.attn.out_proj.lora_A.weight": mx.zeros((2, 4)),
+            "blocks.0.attn.out_proj.lora_B.weight": mx.zeros((4, 2)),
+        },
+        metadata={"base_model": "MiniMax-H3"},
+    )
+    return H3LoRAStack().append(H3LoRASpec(str(path), profile="standard"))
+
+
+def test_transformer_cache_reloads_when_lora_stack_changes(tmp_path: Path, monkeypatch):
+    created = []
+    applied = []
+
+    def factory(spec):
+        sampler = FakeSampler(spec)
+        created.append(sampler)
+        return sampler
+
+    monkeypatch.setattr(
+        "minimax_h3_mlx.lora.apply_lora_stack",
+        lambda dit, requests: applied.append((dit, requests)) or (),
+    )
+    cache = H3TransformerCache(factory)
+    spec = _spec(tmp_path)
+    conditioning = _conditioning(spec)
+    config = H3GenerationConfig(steps=5)
+    cache.sample(spec, conditioning, config, unload_after=False)
+    stack = _lora_stack(tmp_path)
+    cache.sample(spec, conditioning, config, unload_after=False, loras=stack)
+    cache.sample(spec, conditioning, config, unload_after=False, loras=stack)
+
+    assert len(created) == 2
+    assert len(applied) == 1
+
+
+def test_lora_application_failure_releases_transformer(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(
+        "minimax_h3_mlx.lora.apply_lora_stack",
+        lambda dit, requests: (_ for _ in ()).throw(RuntimeError("synthetic LoRA failure")),
+    )
+    cache = H3TransformerCache(lambda spec: FakeSampler(spec))
+    spec = _spec(tmp_path)
+
+    with pytest.raises(RuntimeError, match="synthetic LoRA failure"):
+        cache.sample(
+            spec,
+            _conditioning(spec),
+            H3GenerationConfig(steps=5),
+            unload_after=False,
+            loras=_lora_stack(tmp_path),
+        )
+
+    assert not cache.loaded
 
 
 def test_transformer_failure_releases_sampler(tmp_path: Path):

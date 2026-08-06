@@ -10,12 +10,6 @@ The current local bundle contains the 384P-class 640 by 384 EasyCache and BlockC
 the native 768P 1344 by 768 EasyCache matrix. Each cache matrix covers conservative, balanced, and
 speed at 8, 12, 16, and 20 requested steps. The established no-cache runs provide the baseline.
 
-Canonical reports:
-
-- [640 by 384 policy scaling](../../docs/reference/H3_EASYCACHE_POLICY_STEP_SCALING.md)
-- [1344 by 768 policy scaling](../../docs/reference/H3_EASYCACHE_POLICY_STEP_SCALING_768P.md)
-- [640 by 384 BlockCache scaling](../../docs/reference/H3_BLOCKCACHE.md)
-
 Raw measurements:
 
 - [640 by 384 CSV](../h3_easycache_policy_step_scaling.csv)

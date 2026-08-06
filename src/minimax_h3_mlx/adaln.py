@@ -107,6 +107,15 @@ def drop_adaln_weights(dit) -> int:
     freed = 0
     for block in dit.blocks:
         linear = block.adaln_proj.linear
+        adapters = getattr(linear, "adapters", ())
+        for adapter in adapters:
+            for name in ("a", "b", "prepared_input"):
+                value = getattr(adapter, name, None)
+                if isinstance(value, mx.array):
+                    freed += value.nbytes
+                    delattr(adapter, name)
+        while hasattr(linear, "base"):
+            linear = linear.base
         for name in ("weight", "bias", "scales", "biases"):
             param = getattr(linear, name, None)
             if isinstance(param, mx.array):

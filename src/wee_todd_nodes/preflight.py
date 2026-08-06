@@ -54,9 +54,7 @@ class H3ComponentSetSpec:
     def resolved_paths(self) -> dict[str, Path]:
         root = Path(self.checkpoint).expanduser()
         return {
-            name: Path(getattr(self, name)).expanduser()
-            if getattr(self, name)
-            else root / name
+            name: Path(getattr(self, name)).expanduser() if getattr(self, name) else root / name
             for name in COMPONENT_NAMES
         }
 
@@ -161,6 +159,8 @@ def read_safetensors_header(path: str | Path) -> SafetensorsHeader:
         raise ValueError(f"Safetensors file has invalid header JSON: {path}") from exc
 
     metadata = header.pop("__metadata__", {})
+    if metadata is None:
+        metadata = {}
     if not isinstance(metadata, dict):
         raise ValueError(f"Safetensors metadata must be an object: {path}")
     payload_capacity = size - 8 - header_size
@@ -189,9 +189,7 @@ def read_safetensors_header(path: str | Path) -> SafetensorsHeader:
         if isinstance(dtype, str) and dtype in DTYPE_BYTES:
             expected_bytes = math.prod(shape) * DTYPE_BYTES[dtype]
             if expected_bytes != payload_bytes:
-                raise ValueError(
-                    f"Safetensors tensor byte count is invalid for {name!r}: {path}"
-                )
+                raise ValueError(f"Safetensors tensor byte count is invalid for {name!r}: {path}")
         tensor_bytes += payload_bytes
         intervals.append((start, end, name))
         if ".adaln_proj.linear." in name:
@@ -364,9 +362,7 @@ def _component_report(
             ),
         }
         files = tuple(
-            path / filename
-            for filename in asset_names[name]
-            if (path / filename).is_file()
+            path / filename for filename in asset_names[name] if (path / filename).is_file()
         )
         return ComponentReport(
             name=name,
