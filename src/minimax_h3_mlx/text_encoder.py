@@ -45,6 +45,8 @@ class MiniMaxH3TextEncoder:
         load_vision: bool = True,
         verbose: bool = False,
         config_path: str | Path | None = None,
+        processor_dir: str | Path | None = None,
+        tokenizer_dir: str | Path | None = None,
     ):
         from mlx_vlm.models.qwen3_vl.config import ModelConfig, TextConfig, VisionConfig
         from mlx_vlm.models.qwen3_vl.language import Qwen3VLModel
@@ -94,6 +96,8 @@ class MiniMaxH3TextEncoder:
         self._tokenizer = None
         self._processor = None
         self._model_dir = model_dir
+        self._processor_dir = Path(processor_dir) if processor_dir is not None else None
+        self._tokenizer_dir = Path(tokenizer_dir) if tokenizer_dir is not None else None
 
     # -- loading ---------------------------------------------------------------------------
 
@@ -216,7 +220,9 @@ class MiniMaxH3TextEncoder:
             from transformers import AutoTokenizer
 
             root = self._model_dir.parent
-            path = root / "tokenizer" if (root / "tokenizer").exists() else self._model_dir
+            path = self._tokenizer_dir
+            if path is None:
+                path = root / "tokenizer" if (root / "tokenizer").exists() else self._model_dir
             # Current transformers detects the legacy Mistral/Qwen pre-tokenizer regex embedded in
             # this tokenizer and otherwise warns that whitespace/punctuation can split incorrectly.
             self._tokenizer = AutoTokenizer.from_pretrained(str(path), fix_mistral_regex=True)
@@ -227,7 +233,7 @@ class MiniMaxH3TextEncoder:
         if self._processor is None:
             from transformers import AutoProcessor
 
-            directory = self._model_dir.parent / "processor"
+            directory = self._processor_dir or self._model_dir.parent / "processor"
             if directory.exists():
                 self._processor = AutoProcessor.from_pretrained(str(directory))
             else:

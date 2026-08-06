@@ -1,9 +1,21 @@
 """Classic ComfyUI node contracts backed by the MLX MiniMax H3 pipeline."""
 import json
+import platform
 from dataclasses import asdict
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
+from .conditioning import TEXT_ENCODER_RUNTIME, H3TextEncoderSpec
+from .decoding import (
+    AUDIO_VAE_RUNTIME,
+    VIDEO_VAE_RUNTIME,
+    H3AudioVAESpec,
+    H3VideoVAESpec,
+)
+from .preflight import H3ComponentSetSpec, H3PreflightRequest, preflight_components
+from .publishing import publish_synchronized_media
 from .runtime import RUNTIME, H3GenerationConfig, H3ModelSpec
+from .sampling import TRANSFORMER_RUNTIME, H3TransformerSpec
 
 
 def _output_directory() -> Path:
@@ -12,6 +24,705 @@ def _output_directory() -> Path:
         return Path(folder_paths.get_output_directory())
     except ImportError:
         return Path.cwd() / "output"
+
+
+def _safe_output_target(output_directory: Path, filename_prefix: str, seed: int) -> Path:
+    """Resolve a user prefix below ComfyUI's output directory."""
+    prefix = Path(filename_prefix.replace("\\", "/"))
+    if prefix.is_absolute() or ".." in prefix.parts:
+        raise ValueError(
+            "filename_prefix must be a relative path inside ComfyUI's output directory"
+        )
+    if not prefix.name or prefix.name in {".", ".."}:
+        raise ValueError("filename_prefix must include a filename")
+    root = output_directory.resolve()
+    target = (root / prefix.parent / f"{prefix.name}_{seed}.mp4").resolve()
+    if target != root and root not in target.parents:
+        raise ValueError("filename_prefix resolves outside ComfyUI's output directory")
+    return target
+
+
+def _resolve_component_root(checkpoint: str) -> str:
+    """Resolve a relative H3 root below ComfyUI's model directory when available."""
+    path = Path(checkpoint).expanduser()
+    if path.is_absolute() or path.exists():
+        return str(path)
+    try:
+        import folder_paths
+
+        return str(Path(folder_paths.models_dir) / path)
+    except ImportError:
+        return str(path)
+
+
+_H3_RESOLUTION_SHORT_EDGES = {
+    "384P (fast smoke)": 384,
+    "512P (balanced)": 512,
+    "768P (native quality)": 768,
+    "2K (experimental, very high memory)": 1152,
+}
+_H3_ASPECT_RATIOS = {
+    "21:9": (21, 9),
+    "16:9": (16, 9),
+    "5:3": (5, 3),
+    "3:2": (3, 2),
+    "4:3": (4, 3),
+    "1:1": (1, 1),
+    "3:4": (3, 4),
+    "2:3": (2, 3),
+    "3:5": (3, 5),
+    "9:16": (9, 16),
+    "9:21": (9, 21),
+}
+
+
+def _resolve_h3_resolution(
+    mode: str,
+    resolution_tier: str,
+    aspect_ratio: str,
+    custom_width: int,
+    custom_height: int,
+) -> tuple[int, int]:
+    """Resolve an intuitive tier and ratio selection to the H3 32-pixel grid."""
+    if mode == "custom":
+        return custom_width, custom_height
+    if mode != "preset":
+        raise ValueError("Resolution mode must be 'preset' or 'custom'.")
+    try:
+        short_edge = _H3_RESOLUTION_SHORT_EDGES[resolution_tier]
+    except KeyError as exc:
+        raise ValueError(f"Unknown H3 resolution tier: {resolution_tier!r}.") from exc
+    try:
+        ratio_width, ratio_height = _H3_ASPECT_RATIOS[aspect_ratio]
+    except KeyError as exc:
+        raise ValueError(f"Unknown H3 aspect ratio: {aspect_ratio!r}.") from exc
+    if aspect_ratio == "16:9":
+        if short_edge == 1152:
+            return 2048, 1152
+        return short_edge * 7 // 4, short_edge
+    if aspect_ratio == "9:16":
+        if short_edge == 1152:
+            return 1152, 2048
+        return short_edge, short_edge * 7 // 4
+    if ratio_width >= ratio_height:
+        height = short_edge
+        width = round(short_edge * ratio_width / ratio_height / 32) * 32
+    else:
+        width = short_edge
+        height = round(short_edge * ratio_height / ratio_width / 32) * 32
+    return width, height
+
+
+class WeeToddH3ComponentLoader:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "checkpoint": ("STRING", {"default": "MiniMax-H3/FL2VA"}),
+                "task": (["t2va", "fl2va", "ref2va"], {"default": "t2va"}),
+            },
+            "optional": {
+                "transformer": ("STRING", {"default": ""}),
+                "text_encoder": ("STRING", {"default": ""}),
+                "processor": ("STRING", {"default": ""}),
+                "tokenizer": ("STRING", {"default": ""}),
+                "video_vae": ("STRING", {"default": ""}),
+                "audio_vae": ("STRING", {"default": ""}),
+            },
+        }
+
+    RETURN_TYPES = ("WEETODD_H3_COMPONENTS",)
+    RETURN_NAMES = ("components",)
+    FUNCTION = "specify"
+    CATEGORY = "WeeTodd/H3/loaders"
+    DESCRIPTION = "Describe every MiniMax H3 component. This node does not load tensor weights."
+
+    def specify(
+        self,
+        checkpoint,
+        task,
+        transformer="",
+        text_encoder="",
+        processor="",
+        tokenizer="",
+        video_vae="",
+        audio_vae="",
+    ):
+        return (
+            H3ComponentSetSpec(
+                checkpoint=_resolve_component_root(checkpoint),
+                task=task,
+                transformer=transformer or None,
+                text_encoder=text_encoder or None,
+                processor=processor or None,
+                tokenizer=tokenizer or None,
+                video_vae=video_vae or None,
+                audio_vae=audio_vae or None,
+            ),
+        )
+
+
+class WeeToddH3Preflight:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "components": ("WEETODD_H3_COMPONENTS",),
+                "config": ("WEETODD_H3_CONFIG",),
+                "prompt_tokens": ("INT", {"default": 512, "min": 1, "max": 32768}),
+                "available_memory_gb": (
+                    "FLOAT",
+                    {"default": 0.0, "min": 0.0, "max": 1024.0, "step": 0.25},
+                ),
+            }
+        }
+
+    RETURN_TYPES = ("WEETODD_H3_COMPONENTS", "STRING")
+    RETURN_NAMES = ("components", "preflight_report")
+    FUNCTION = "inspect"
+    CATEGORY = "WeeTodd/H3/loaders"
+    DESCRIPTION = (
+        "Validate MiniMax H3 components and estimate staged memory from file headers. "
+        "Set available memory to zero when unknown."
+    )
+
+    def inspect(
+        self,
+        components,
+        config,
+        prompt_tokens,
+        available_memory_gb,
+    ):
+        config.validate()
+        report = preflight_components(
+            components,
+            H3PreflightRequest(
+                duration_seconds=config.duration_seconds,
+                steps=config.steps,
+                width=config.width,
+                height=config.height,
+                prompt_tokens=prompt_tokens,
+                available_memory_gb=available_memory_gb,
+            ),
+        )
+        return components, report.to_json()
+
+
+class WeeToddH3TextEncode:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "components": ("WEETODD_H3_COMPONENTS",),
+                "prompt": ("STRING", {"multiline": True, "dynamicPrompts": True}),
+                "unload_after_encode": ("BOOLEAN", {"default": True}),
+            }
+        }
+
+    RETURN_TYPES = ("WEETODD_H3_CONDITIONING", "STRING")
+    RETURN_NAMES = ("conditioning", "conditioning_info")
+    FUNCTION = "encode"
+    CATEGORY = "WeeTodd/H3/conditioning"
+    DESCRIPTION = (
+        "Encode a text-only H3 prompt with Qwen3-VL. The vision tower stays unloaded. "
+        "The encoder can unload after it produces conditioning."
+    )
+
+    def encode(self, components, prompt, unload_after_encode):
+        check_interrupted = None
+        try:
+            import comfy.model_management
+
+            check_interrupted = comfy.model_management.throw_exception_if_processing_interrupted
+        except ImportError:
+            pass
+        if check_interrupted is not None:
+            check_interrupted()
+        conditioning = TEXT_ENCODER_RUNTIME.encode(
+            H3TextEncoderSpec.from_components(components, load_vision=False),
+            prompt,
+            unload_after=unload_after_encode,
+        )
+        if check_interrupted is not None:
+            check_interrupted()
+        info = {
+            "token_count": conditioning.token_count,
+            "vision_loaded": conditioning.load_vision,
+            "encoder_resident": TEXT_ENCODER_RUNTIME.loaded,
+        }
+        return conditioning, json.dumps(info, indent=2, sort_keys=True)
+
+
+class WeeToddH3UnloadTextEncoder:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {"unload": ("BOOLEAN", {"default": True})}}
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("status",)
+    FUNCTION = "release"
+    CATEGORY = "WeeTodd/H3/conditioning"
+    DESCRIPTION = "Release the process-local Qwen3-VL conditioner and clear the MLX cache."
+
+    def release(self, unload):
+        if unload:
+            TEXT_ENCODER_RUNTIME.unload()
+            return ("MiniMax H3 Qwen3-VL conditioner unloaded",)
+        return ("MiniMax H3 Qwen3-VL conditioner kept warm",)
+
+
+class WeeToddH3Sample:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "components": ("WEETODD_H3_COMPONENTS",),
+                "conditioning": ("WEETODD_H3_CONDITIONING",),
+                "config": ("WEETODD_H3_CONFIG",),
+                "unload_after_sample": ("BOOLEAN", {"default": True}),
+            },
+            "optional": {"easycache": ("WEETODD_H3_EASYCACHE",)},
+        }
+
+    RETURN_TYPES = ("WEETODD_H3_LATENTS", "STRING")
+    RETURN_NAMES = ("latents", "sampling_info")
+    FUNCTION = "sample"
+    CATEGORY = "WeeTodd/H3/sampling"
+    DESCRIPTION = (
+        "Sample synchronized MiniMax H3 video and audio latents with MLX. "
+        "This node does not load or run either VAE."
+    )
+
+    def sample(self, components, conditioning, config, unload_after_sample, easycache=None):
+        progress = None
+        check_interrupted = None
+        try:
+            import comfy.model_management
+            import comfy.utils
+
+            progress = comfy.utils.ProgressBar(config.steps - 1)
+            check_interrupted = comfy.model_management.throw_exception_if_processing_interrupted
+        except ImportError:
+            pass
+
+        def on_step(completed, total):
+            if check_interrupted is not None:
+                check_interrupted()
+            if progress is not None:
+                progress.update_absolute(completed, total)
+
+        latents = TRANSFORMER_RUNTIME.sample(
+            H3TransformerSpec.from_components(components),
+            conditioning,
+            config,
+            unload_after=unload_after_sample,
+            step_callback=on_step,
+            easycache=easycache,
+        )
+        info = {
+            "prompt": conditioning.prompt,
+            "frames": latents.num_frames,
+            "width": latents.width,
+            "height": latents.height,
+            "fps": latents.fps,
+            "sample_rate": latents.sample_rate,
+            "transformer_evaluations": latents.transformer_evaluations,
+            "easycache_skipped_steps": latents.easycache_skipped_steps,
+            "easycache_resolved_threshold": latents.easycache_resolved_threshold,
+            "easycache": asdict(easycache) if easycache is not None else None,
+            "seconds_per_evaluation": latents.seconds_per_evaluation,
+            "total_seconds": latents.total_seconds,
+            "transformer_resident": TRANSFORMER_RUNTIME.loaded,
+        }
+        return latents, json.dumps(info, indent=2, sort_keys=True)
+
+
+class WeeToddH3EasyCache:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "mode": (
+                    [
+                        "manual",
+                        "automatic_conservative",
+                        "automatic_balanced",
+                        "automatic_speed",
+                    ],
+                    {"default": "manual"},
+                ),
+                "reuse_threshold": (
+                    "FLOAT",
+                    {"default": 0.2, "min": 0.0, "max": 3.0, "step": 0.01},
+                ),
+                "start_percent": (
+                    "FLOAT",
+                    {"default": 0.15, "min": 0.0, "max": 1.0, "step": 0.01},
+                ),
+                "end_percent": (
+                    "FLOAT",
+                    {"default": 0.95, "min": 0.0, "max": 1.0, "step": 0.01},
+                ),
+                "auto_multiplier": (
+                    "FLOAT",
+                    {"default": 1.15, "min": 1.0, "max": 2.0, "step": 0.05},
+                ),
+                "max_skip_fraction": (
+                    "FLOAT",
+                    {"default": 0.25, "min": 0.0, "max": 0.5, "step": 0.05},
+                ),
+            }
+        }
+
+    RETURN_TYPES = ("WEETODD_H3_EASYCACHE",)
+    RETURN_NAMES = ("easycache",)
+    FUNCTION = "configure"
+    CATEGORY = "WeeTodd/H3/sampling"
+    DESCRIPTION = (
+        "Configure joint MLX EasyCache residual reuse for H3 video and audio sampling. "
+        "Choose quality-first, balanced, or speed-first bounded automatic reuse."
+    )
+
+    def configure(
+        self,
+        mode,
+        reuse_threshold,
+        start_percent,
+        end_percent,
+        auto_multiplier,
+        max_skip_fraction,
+    ):
+        from minimax_h3_mlx.easycache import H3EasyCacheConfig
+
+        config = H3EasyCacheConfig(
+            mode=mode,
+            reuse_threshold=reuse_threshold,
+            start_percent=start_percent,
+            end_percent=end_percent,
+            auto_multiplier=auto_multiplier,
+            max_skip_fraction=max_skip_fraction,
+        )
+        config.validate()
+        return (config,)
+
+
+class WeeToddH3UnloadTransformer:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {"unload": ("BOOLEAN", {"default": True})}}
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("status",)
+    FUNCTION = "release"
+    CATEGORY = "WeeTodd/H3/sampling"
+    DESCRIPTION = "Release the process-local H3 transformer and clear the MLX cache."
+
+    def release(self, unload):
+        if unload:
+            TRANSFORMER_RUNTIME.unload()
+            return ("MiniMax H3 transformer unloaded",)
+        return ("MiniMax H3 transformer kept warm",)
+
+
+class WeeToddH3VideoVAEDecode:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "components": ("WEETODD_H3_COMPONENTS",),
+                "latents": ("WEETODD_H3_LATENTS",),
+                "unload_after_decode": ("BOOLEAN", {"default": True}),
+            }
+        }
+
+    RETURN_TYPES = ("IMAGE", "STRING")
+    RETURN_NAMES = ("frames", "decode_info")
+    FUNCTION = "decode"
+    CATEGORY = "WeeTodd/H3/decoding"
+    DESCRIPTION = (
+        "Decode the video stream from synchronized H3 latents with the final video VAE. "
+        "The audio latent stream remains available on the original latent output."
+    )
+
+    def decode(self, components, latents, unload_after_decode):
+        check_interrupted = None
+        try:
+            import comfy.model_management
+
+            check_interrupted = comfy.model_management.throw_exception_if_processing_interrupted
+        except ImportError:
+            pass
+        result = VIDEO_VAE_RUNTIME.decode(
+            H3VideoVAESpec.from_components(components),
+            latents,
+            unload_after=unload_after_decode,
+            check_interrupted=check_interrupted,
+        )
+        import torch
+
+        frames = torch.from_numpy(result.frames)
+        info = {
+            "frames": result.num_frames,
+            "width": result.width,
+            "height": result.height,
+            "fps": result.fps,
+            "decode_seconds": result.decode_seconds,
+            "video_vae_resident": VIDEO_VAE_RUNTIME.loaded,
+        }
+        return frames, json.dumps(info, indent=2, sort_keys=True)
+
+
+class WeeToddH3UnloadVideoVAE:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {"unload": ("BOOLEAN", {"default": True})}}
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("status",)
+    FUNCTION = "release"
+    CATEGORY = "WeeTodd/H3/decoding"
+    DESCRIPTION = "Release the process-local H3 video VAE and clear the MLX cache."
+
+    def release(self, unload):
+        if unload:
+            VIDEO_VAE_RUNTIME.unload()
+            return ("MiniMax H3 video VAE unloaded",)
+        return ("MiniMax H3 video VAE kept warm",)
+
+
+class WeeToddH3AudioVAEDecode:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "components": ("WEETODD_H3_COMPONENTS",),
+                "latents": ("WEETODD_H3_LATENTS",),
+                "unload_after_decode": ("BOOLEAN", {"default": True}),
+            }
+        }
+
+    RETURN_TYPES = ("AUDIO", "STRING")
+    RETURN_NAMES = ("audio", "decode_info")
+    FUNCTION = "decode"
+    CATEGORY = "WeeTodd/H3/decoding"
+    DESCRIPTION = (
+        "Decode the audio stream from synchronized H3 latents as 32 kHz stereo audio. "
+        "The video latent stream remains available on the original latent output."
+    )
+
+    def decode(self, components, latents, unload_after_decode):
+        check_interrupted = None
+        try:
+            import comfy.model_management
+
+            check_interrupted = comfy.model_management.throw_exception_if_processing_interrupted
+        except ImportError:
+            pass
+        result = AUDIO_VAE_RUNTIME.decode(
+            H3AudioVAESpec.from_components(components),
+            latents,
+            unload_after=unload_after_decode,
+            check_interrupted=check_interrupted,
+        )
+        import torch
+
+        audio = {
+            "waveform": torch.from_numpy(result.waveform).unsqueeze(0),
+            "sample_rate": result.sample_rate,
+        }
+        info = {
+            "channels": result.channels,
+            "num_samples": result.num_samples,
+            "sample_rate": result.sample_rate,
+            "duration_seconds": result.duration_seconds,
+            "video_frames": result.video_frames,
+            "fps": result.fps,
+            "decode_seconds": result.decode_seconds,
+            "audio_vae_resident": AUDIO_VAE_RUNTIME.loaded,
+        }
+        return audio, json.dumps(info, indent=2, sort_keys=True)
+
+
+class WeeToddH3UnloadAudioVAE:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {"unload": ("BOOLEAN", {"default": True})}}
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("status",)
+    FUNCTION = "release"
+    CATEGORY = "WeeTodd/H3/decoding"
+    DESCRIPTION = "Release the process-local H3 audio VAE and clear the MLX cache."
+
+    def release(self, unload):
+        if unload:
+            AUDIO_VAE_RUNTIME.unload()
+            return ("MiniMax H3 audio VAE unloaded",)
+        return ("MiniMax H3 audio VAE kept warm",)
+
+
+class WeeToddH3PublishVideoAudio:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "images": ("IMAGE",),
+                "audio": ("AUDIO",),
+                "components": ("WEETODD_H3_COMPONENTS",),
+                "config": ("WEETODD_H3_CONFIG",),
+                "filename_prefix": ("STRING", {"default": "WeeTodd/H3"}),
+                "crf": ("INT", {"default": 18, "min": 0, "max": 51}),
+                "max_av_drift_seconds": (
+                    "FLOAT",
+                    {"default": 0.025, "min": 0.0, "max": 0.25, "step": 0.001},
+                ),
+            },
+            "optional": {
+                "generation_metadata": (
+                    "STRING",
+                    {"default": "{}", "multiline": True},
+                ),
+                "sampling_info": ("STRING", {"default": ""}),
+            },
+        }
+
+    RETURN_TYPES = ("STRING", "STRING")
+    RETURN_NAMES = ("video_path", "generation_info")
+    OUTPUT_NODE = True
+    FUNCTION = "publish"
+    CATEGORY = "WeeTodd/H3/output"
+    DESCRIPTION = (
+        "Validate and publish synchronized H3 images and 32 kHz stereo audio as MP4. "
+        "The node writes an atomic JSON metadata sidecar."
+    )
+
+    def publish(
+        self,
+        images,
+        audio,
+        components,
+        config,
+        filename_prefix,
+        crf,
+        max_av_drift_seconds,
+        generation_metadata="{}",
+        sampling_info="",
+    ):
+        config.validate()
+        if not isinstance(audio, dict) or "waveform" not in audio or "sample_rate" not in audio:
+            raise ValueError("Audio must contain waveform and sample_rate fields.")
+        if images.ndim != 4 or images.shape[-1] != 3:
+            raise ValueError(
+                "ComfyUI IMAGE input must have shape (frames, height, width, 3); "
+                f"got {tuple(images.shape)}."
+            )
+        if images.shape[1] != config.height or images.shape[2] != config.width:
+            raise ValueError(
+                "Decoded image dimensions do not match the generation configuration: "
+                f"{images.shape[2]}x{images.shape[1]} != {config.width}x{config.height}."
+            )
+        from minimax_h3_mlx.packing import align_num_frames
+
+        expected_frames = align_num_frames(int(round(config.duration_seconds * 24)))
+        if images.shape[0] != expected_frames:
+            raise ValueError(
+                "Decoded frame count does not match the generation configuration: "
+                f"{images.shape[0]} != {expected_frames}."
+            )
+        waveform = audio["waveform"]
+        if waveform.ndim != 3 or waveform.shape[0] != 1:
+            raise ValueError(
+                "ComfyUI AUDIO waveform must have shape (1, channels, samples); "
+                f"got {tuple(waveform.shape)}."
+            )
+
+        check_interrupted = None
+        try:
+            import comfy.model_management
+
+            check_interrupted = comfy.model_management.throw_exception_if_processing_interrupted
+        except ImportError:
+            pass
+        if check_interrupted is not None:
+            check_interrupted()
+
+        import torch
+
+        if not torch.isfinite(images).all():
+            raise ValueError("Image input contains non-finite values. Decode the video again.")
+        video = (
+            images.detach()
+            .cpu()
+            .clamp(0.0, 1.0)
+            .mul(255.0)
+            .round()
+            .to(torch.uint8)
+            .contiguous()
+            .numpy()
+        )
+        host_audio = waveform.detach().cpu().float().contiguous().numpy()[0]
+        try:
+            supplied_metadata = json.loads(generation_metadata or "{}")
+        except json.JSONDecodeError as exc:
+            raise ValueError("Generation metadata must be a valid JSON object.") from exc
+        if not isinstance(supplied_metadata, dict):
+            raise ValueError("Generation metadata must be a JSON object.")
+        if sampling_info:
+            try:
+                supplied_metadata["sampling"] = json.loads(sampling_info)
+            except json.JSONDecodeError as exc:
+                raise ValueError("Sampling information must be valid JSON.") from exc
+        component_paths = components.resolved_paths()
+        try:
+            package_version = version("comfyui-weetodd-nodes")
+        except PackageNotFoundError:
+            package_version = "uninstalled"
+        try:
+            mlx_version = version("mlx")
+        except PackageNotFoundError:
+            mlx_version = "uninstalled"
+        metadata = {
+            **supplied_metadata,
+            "generation": asdict(config),
+            "precision_policy": (
+                "component-specific checkpoint precision; verify quantization in preflight"
+            ),
+            "components": {
+                "checkpoint": Path(components.checkpoint).name,
+                "task": components.task,
+                **{name: path.name for name, path in component_paths.items()},
+            },
+            "software": {
+                "python": platform.python_version(),
+                "mlx": mlx_version,
+                "weetodd_nodes": package_version,
+            },
+        }
+        target = _safe_output_target(_output_directory(), filename_prefix, config.seed)
+        result = publish_synchronized_media(
+            target,
+            video,
+            host_audio,
+            sample_rate=int(audio["sample_rate"]),
+            fps=24.0,
+            crf=crf,
+            max_av_drift_seconds=max_av_drift_seconds,
+            generation_metadata=json.dumps(metadata),
+            check_interrupted=check_interrupted,
+        )
+        info = json.dumps(result.metadata, indent=2, sort_keys=True)
+        output_root = _output_directory().resolve()
+        relative = result.video_path.resolve().relative_to(output_root)
+        preview = {
+            "filename": relative.name,
+            "subfolder": str(relative.parent) if str(relative.parent) != "." else "",
+            "type": "output",
+            "format": "video/mp4",
+        }
+        return {
+            "ui": {"gifs": [preview]},
+            "result": (str(result.video_path), info),
+        }
 
 
 class WeeToddH3ModelLoader:
@@ -35,23 +746,73 @@ class WeeToddH3ModelLoader:
 class WeeToddH3GenerationConfig:
     @classmethod
     def INPUT_TYPES(cls):
-        return {"required": {
-            "duration_seconds": ("FLOAT", {"default": 5.0, "min": 5.0, "max": 15.0, "step": 0.1}),
-            "steps": ("INT", {"default": 16, "min": 2, "max": 100}),
-            "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
-            "width": ("INT", {"default": 640, "min": 32, "max": 2048, "step": 32}),
-            "height": ("INT", {"default": 384, "min": 32, "max": 2048, "step": 32}),
-            "drop_adaln": ("BOOLEAN", {"default": True}),
-        }}
-    RETURN_TYPES = ("WEETODD_H3_CONFIG",)
-    RETURN_NAMES = ("config",)
+        return {
+            "required": {
+                "duration_seconds": (
+                    "FLOAT",
+                    {"default": 5.0, "min": 5.0, "max": 15.0, "step": 0.1},
+                ),
+                "steps": ("INT", {"default": 16, "min": 2, "max": 100}),
+                "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
+                "resolution_mode": (["preset", "custom"], {"default": "preset"}),
+                "resolution_tier": (
+                    list(_H3_RESOLUTION_SHORT_EDGES),
+                    {"default": "768P (native quality)"},
+                ),
+                "aspect_ratio": (list(_H3_ASPECT_RATIOS), {"default": "16:9"}),
+                "custom_width": (
+                    "INT",
+                    {"default": 1344, "min": 32, "max": 4096, "step": 32, "advanced": True},
+                ),
+                "custom_height": (
+                    "INT",
+                    {"default": 768, "min": 32, "max": 4096, "step": 32, "advanced": True},
+                ),
+                "drop_adaln": ("BOOLEAN", {"default": True}),
+            }
+        }
+    RETURN_TYPES = ("WEETODD_H3_CONFIG", "STRING")
+    RETURN_NAMES = ("config", "resolved_resolution")
     FUNCTION = "configure"
     CATEGORY = "WeeTodd/H3"
 
-    def configure(self, duration_seconds, steps, seed, width, height, drop_adaln):
-        config = H3GenerationConfig(duration_seconds, steps, seed, width, height, drop_adaln)
+    DESCRIPTION = (
+        "Choose an H3 quality tier and aspect ratio, or use exact custom dimensions. "
+        "The node resolves the canvas to the required 32-pixel grid."
+    )
+
+    def configure(
+        self,
+        duration_seconds,
+        steps,
+        seed,
+        resolution_mode,
+        resolution_tier,
+        aspect_ratio,
+        custom_width,
+        custom_height,
+        drop_adaln,
+    ):
+        width, height = _resolve_h3_resolution(
+            resolution_mode,
+            resolution_tier,
+            aspect_ratio,
+            custom_width,
+            custom_height,
+        )
+        config = H3GenerationConfig(
+            duration_seconds=duration_seconds,
+            steps=steps,
+            seed=seed,
+            width=width,
+            height=height,
+            drop_adaln=drop_adaln,
+            resolution_mode=resolution_mode,
+            resolution_tier=resolution_tier if resolution_mode == "preset" else "custom",
+            aspect_ratio=aspect_ratio if resolution_mode == "preset" else "custom",
+        )
         config.validate()
-        return (config,)
+        return config, f"{width} x {height} pixels"
 
 
 class WeeToddH3Generate:
@@ -72,17 +833,33 @@ class WeeToddH3Generate:
 
     def generate(self, model, config, prompt, filename_prefix):
         config.validate()
+        progress = None
+        check_interrupted = None
+        try:
+            import comfy.model_management
+            import comfy.utils
+
+            progress = comfy.utils.ProgressBar(config.steps - 1)
+            check_interrupted = comfy.model_management.throw_exception_if_processing_interrupted
+        except ImportError:
+            pass
+
+        def on_step(completed, total):
+            if check_interrupted is not None:
+                check_interrupted()
+            if progress is not None:
+                progress.update_absolute(completed, total)
+
         result = RUNTIME.get(model)(
             prompt, duration_seconds=config.duration_seconds,
             num_inference_steps=config.steps, seed=config.seed,
             height=config.height, width=config.width, drop_adaln=config.drop_adaln,
+            step_callback=on_step,
         )
         from minimax_h3_mlx.media import save_mp4
 
-        prefix = Path(filename_prefix)
-        output = _output_directory() / prefix.parent
-        output.mkdir(parents=True, exist_ok=True)
-        target = output / f"{prefix.name}_{config.seed}.mp4"
+        target = _safe_output_target(_output_directory(), filename_prefix, config.seed)
+        target.parent.mkdir(parents=True, exist_ok=True)
         save_mp4(target, result.video, result.fps, result.audio, result.sample_rate)
         info = {"prompt": prompt, **asdict(config), "video_path": str(target),
                 "seconds_per_step": result.seconds_per_step, "total_seconds": result.total_seconds}
@@ -106,12 +883,36 @@ class WeeToddH3Unload:
 
 
 NODE_CLASS_MAPPINGS = {
+    "WeeToddH3ComponentLoader": WeeToddH3ComponentLoader,
+    "WeeToddH3Preflight": WeeToddH3Preflight,
+    "WeeToddH3TextEncode": WeeToddH3TextEncode,
+    "WeeToddH3UnloadTextEncoder": WeeToddH3UnloadTextEncoder,
+    "WeeToddH3Sample": WeeToddH3Sample,
+    "WeeToddH3EasyCache": WeeToddH3EasyCache,
+    "WeeToddH3UnloadTransformer": WeeToddH3UnloadTransformer,
+    "WeeToddH3VideoVAEDecode": WeeToddH3VideoVAEDecode,
+    "WeeToddH3UnloadVideoVAE": WeeToddH3UnloadVideoVAE,
+    "WeeToddH3AudioVAEDecode": WeeToddH3AudioVAEDecode,
+    "WeeToddH3UnloadAudioVAE": WeeToddH3UnloadAudioVAE,
+    "WeeToddH3PublishVideoAudio": WeeToddH3PublishVideoAudio,
     "WeeToddH3ModelLoader": WeeToddH3ModelLoader,
     "WeeToddH3GenerationConfig": WeeToddH3GenerationConfig,
     "WeeToddH3Generate": WeeToddH3Generate,
     "WeeToddH3Unload": WeeToddH3Unload,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
+    "WeeToddH3ComponentLoader": "WeeTodd H3 Component Loader",
+    "WeeToddH3Preflight": "WeeTodd H3 Component Preflight",
+    "WeeToddH3TextEncode": "WeeTodd H3 Text Encode (Qwen3-VL)",
+    "WeeToddH3UnloadTextEncoder": "WeeTodd H3 Unload Qwen3-VL",
+    "WeeToddH3Sample": "WeeTodd H3 Sample Video + Audio Latents",
+    "WeeToddH3EasyCache": "WeeTodd H3 EasyCache (MLX)",
+    "WeeToddH3UnloadTransformer": "WeeTodd H3 Unload Transformer",
+    "WeeToddH3VideoVAEDecode": "WeeTodd H3 Decode Video VAE",
+    "WeeToddH3UnloadVideoVAE": "WeeTodd H3 Unload Video VAE",
+    "WeeToddH3AudioVAEDecode": "WeeTodd H3 Decode Audio VAE",
+    "WeeToddH3UnloadAudioVAE": "WeeTodd H3 Unload Audio VAE",
+    "WeeToddH3PublishVideoAudio": "WeeTodd H3 Publish Video + Audio",
     "WeeToddH3ModelLoader": "WeeTodd H3 Model Loader (MLX)",
     "WeeToddH3GenerationConfig": "WeeTodd H3 Generation Config",
     "WeeToddH3Generate": "WeeTodd H3 Generate Video + Audio",

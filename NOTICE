@@ -1,0 +1,8 @@
+WeeTodd Nodes
+
+The src/minimax_h3_mlx engine is derived from mrbizarro/minimax-h3-mlx,
+licensed under the Apache License 2.0. See docs/ATTRIBUTION.md for the
+audited source revision and research boundaries.
+
+MiniMax H3 model weights are not included. They are distributed separately
+under the MiniMax H3 Community License Agreement.

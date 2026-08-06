@@ -1,5 +1,7 @@
 """The MiniMax-H3 text/keyframe -> video+audio pipeline in MLX.
 
+Modified by WeeTodd Nodes to expose host-neutral progress and cancellation callbacks.
+
 One packed sequence carries text, keyframe conditioning, audio and video rows at once, and a single
 transformer forward per step predicts the velocity of every row — video and audio are denoised
 *jointly*, on two schedules with different sigma shifts (12.0 and 3.0). The checkpoint is
@@ -15,6 +17,7 @@ the 13B of `adaln_proj` is then dropped — see :mod:`minimax_h3_mlx.adaln`.
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -22,7 +25,7 @@ import mlx.core as mx
 import numpy as np
 
 from .adaln import ModulationCache, drop_adaln_weights
-from .config import PipelineConfig
+from .config import TAG_TEXT, PipelineConfig
 from .packing import (
     AUDIO_CHANNELS,
     FPS,
@@ -104,6 +107,24 @@ class GenerationResult:
     sample_rate: int
     fps: int = FPS
     seconds_per_step: float = 0.0
+    total_seconds: float = 0.0
+
+
+@dataclass
+class LatentResult:
+    """Synchronized normalized H3 latents produced before either VAE decode."""
+
+    video_latents: mx.array  # (1, 24, latent_frames, height/16, width/16)
+    audio_latents: mx.array  # (2, 32, audio_latent_frames)
+    num_frames: int
+    width: int
+    height: int
+    fps: int = FPS
+    sample_rate: int = 32000
+    transformer_evaluations: int = 0
+    easycache_skipped_steps: int = 0
+    easycache_resolved_threshold: float | None = None
+    seconds_per_evaluation: float = 0.0
     total_seconds: float = 0.0
 
 
@@ -222,6 +243,181 @@ class MiniMaxH3Pipeline:
             self.video_vae, images, height, width, self.dit.config.patch_size
         )
 
+    def sample_latents(
+        self,
+        prompt_embeds: mx.array,
+        text_token_tags: np.ndarray,
+        *,
+        duration_seconds: float = 5.0,
+        num_inference_steps: int = 16,
+        seed: int = 0,
+        height: int = 384,
+        width: int = 640,
+        drop_adaln: bool = True,
+        verbose: bool = True,
+        step_callback: Callable[[int, int], None] | None = None,
+        easycache_config=None,
+    ) -> LatentResult:
+        """Sample synchronized text-only video and audio latents without loading either VAE."""
+        run_started = time.perf_counter()
+        if not 5.0 <= duration_seconds <= 15.0:
+            raise ValueError("`duration_seconds` must be between 5 and 15 seconds.")
+        if num_inference_steps < 2:
+            raise ValueError("`num_inference_steps` must be at least 2.")
+        if height < 32 or width < 32 or height % 32 or width % 32:
+            raise ValueError(
+                "`height` and `width` must be positive multiples of 32, "
+                f"got {height}x{width}."
+            )
+
+        tags = np.asarray(text_token_tags, dtype=np.int32)
+        if tags.ndim != 1 or tags.size == 0:
+            raise ValueError(
+                "`text_token_tags` must contain one modality tag per conditioning row."
+            )
+        if np.any(tags != TAG_TEXT):
+            raise ValueError("Text-only sampling accepts text modality tags only.")
+        if prompt_embeds.ndim != 3 or prompt_embeds.shape[0] != 1:
+            raise ValueError("`prompt_embeds` must have shape (1, tokens, text_dim).")
+        if prompt_embeds.shape[1] != tags.size:
+            raise ValueError(
+                "Prompt embedding rows and text modality tags must have equal lengths."
+            )
+        if prompt_embeds.shape[2] != self.dit.config.text_dim:
+            raise ValueError(
+                f"Prompt embedding width must be {self.dit.config.text_dim}, "
+                f"got {prompt_embeds.shape[2]}."
+            )
+
+        num_frames = align_num_frames(int(round(duration_seconds * FPS)))
+        num_latent_frames = video_latent_num_frames(num_frames)
+        latent_height, latent_width = height // 16, width // 16
+        num_audio_latents = audio_latent_num_frames(num_frames)
+        patch_size = self.dit.config.patch_size
+        layout = build_packed_sequence(
+            tags,
+            num_latent_frames,
+            latent_height,
+            latent_width,
+            num_audio_latents,
+            patch_size,
+        )
+
+        mx.random.seed(seed)
+        video_latents = mx.random.normal(
+            (
+                1,
+                self.dit.config.latents_dim,
+                num_latent_frames,
+                latent_height,
+                latent_width,
+            )
+        ).astype(mx.float32)
+        video_rows = patchify_video_latents(video_latents, patch_size)
+        audio_rows = mx.random.normal(
+            (num_audio_latents * AUDIO_CHANNELS, self.dit.config.audio_latents_dim)
+        ).astype(mx.float32)
+
+        video_sched, audio_sched = self._build_schedules(num_inference_steps)
+        timestep_table, plan = self._row_timestep_plan(
+            layout, video_sched.timesteps, audio_sched.timesteps
+        )
+        self._ensure_cache(timestep_table, drop_adaln, verbose)
+        embeds = prompt_embeds.astype(mx.bfloat16)
+
+        easycache = None
+        if easycache_config is not None:
+            from .easycache import H3EasyCacheState
+
+            easycache = H3EasyCacheState(easycache_config)
+
+        step_times = []
+        transformer_times = []
+        transformer_evaluations = 0
+        total_steps = len(video_sched.timesteps)
+        for index, timestep in enumerate(video_sched.timesteps.tolist()):
+            if step_callback is not None:
+                step_callback(index, total_steps)
+            started = time.perf_counter()
+            video_input = video_rows[None].astype(mx.bfloat16)
+            audio_input = audio_rows[None].astype(mx.bfloat16)
+            reused = (
+                easycache.try_reuse(video_input, audio_input, index, total_steps)
+                if easycache is not None
+                else None
+            )
+            if reused is None:
+                video_pred, audio_pred = self.dit(
+                    video_input,
+                    audio_input,
+                    embeds,
+                    timestep_table,
+                    plan[index],
+                    layout.token_tags,
+                    layout.position_ids,
+                    layout.video_indices,
+                    layout.audio_indices,
+                    layout.text_indices,
+                    modulation_cache=self._cache,
+                )
+                transformer_evaluations += 1
+                if easycache is not None:
+                    easycache.update(video_input, audio_input, video_pred, audio_pred)
+            else:
+                video_pred, audio_pred = reused
+            video_rows = video_sched.step(
+                video_pred[0].astype(mx.float32), float(timestep), video_rows
+            )
+            audio_rows = audio_sched.step(
+                audio_pred[0].astype(mx.float32),
+                float(audio_sched.timesteps[index].item()),
+                audio_rows,
+            )
+            mx.eval(video_rows, audio_rows)
+            elapsed = time.perf_counter() - started
+            step_times.append(elapsed)
+            if reused is None:
+                transformer_times.append(elapsed)
+            if verbose:
+                completed = index + 1
+                mean = sum(step_times) / len(step_times)
+                eta = mean * (total_steps - completed)
+                print(
+                    f"  step {completed}/{total_steps}  {step_times[-1]:.1f}s  "
+                    f"{'cached  ' if reused is not None else ''}"
+                    f"eta {eta / 60:.1f} min",
+                    flush=True,
+                )
+        if step_callback is not None:
+            step_callback(total_steps, total_steps)
+
+        video_latents = unpatchify_video_tokens(
+            video_rows,
+            num_latent_frames,
+            latent_height,
+            latent_width,
+            self.dit.config.latents_dim,
+            patch_size,
+        )
+        audio_latents = unpack_audio_tokens(audio_rows, num_audio_latents)
+        mx.eval(video_latents, audio_latents)
+        return LatentResult(
+            video_latents=video_latents,
+            audio_latents=audio_latents,
+            num_frames=num_frames,
+            width=width,
+            height=height,
+            transformer_evaluations=transformer_evaluations,
+            easycache_skipped_steps=easycache.skipped_steps if easycache is not None else 0,
+            easycache_resolved_threshold=(
+                easycache.resolved_threshold if easycache is not None else None
+            ),
+            seconds_per_evaluation=(
+                sum(transformer_times) / max(len(transformer_times), 1)
+            ),
+            total_seconds=time.perf_counter() - run_started,
+        )
+
     # -- generation ---------------------------------------------------------------------------
 
     def __call__(
@@ -237,6 +433,7 @@ class MiniMaxH3Pipeline:
         width: int | None = None,
         drop_adaln: bool = True,
         verbose: bool = True,
+        step_callback: Callable[[int, int], None] | None = None,
     ) -> GenerationResult:
         """Generate a clip.
 
@@ -247,6 +444,8 @@ class MiniMaxH3Pipeline:
             height, width: override the canvas ``aspect`` would resolve to. Both must be multiples
                 of 32. H3 was released for a 768-pixel short edge only, so anything else is
                 off-distribution — useful for exercising the pipeline, not for quality.
+            step_callback: called between denoising steps with ``(completed, total)``. The host may
+                raise from this callback to cancel without coupling the MLX engine to ComfyUI.
         """
         run_started = time.perf_counter()
 
@@ -317,7 +516,10 @@ class MiniMaxH3Pipeline:
         # 6. Denoise. One forward per step; only generated rows are written back, so the
         #    conditioning anchors survive without any masking.
         step_times = []
+        total_steps = len(video_sched.timesteps)
         for i, t in enumerate(video_sched.timesteps.tolist()):
+            if step_callback is not None:
+                step_callback(i, total_steps)
             started = time.perf_counter()
             video_pred, audio_pred = self.dit(
                 video_rows[None].astype(mx.bfloat16),
@@ -357,6 +559,8 @@ class MiniMaxH3Pipeline:
                 eta = mean * (len(video_sched.timesteps) - done)
                 print(f"  step {done}/{len(video_sched.timesteps)}  "
                       f"{step_times[-1]:.1f}s  eta {eta / 60:.1f} min", flush=True)
+        if step_callback is not None:
+            step_callback(total_steps, total_steps)
 
         # 7. Decode both modalities.
         video = self._decode_video(video_rows[n_cond_v:], num_latent_frames, latent_height, latent_width)

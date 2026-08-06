@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "experiment": "h3_easycache_policy_step_scaling",
+  "shared_conditions": {
+    "duration_seconds": 5,
+    "seed": 0,
+    "fps": 24,
+    "audio_sample_rate": 32000,
+    "audio_channels": 2,
+    "transformer_precision": "BF16-class pruned checkpoint",
+    "text_encoder_precision": "Q8",
+    "staged_unloading": true
+  },
+  "prompt": "integrated_multimodal_description: [Shot 1] Live-action, cinematic, a medium-wide eye-level shot frames a small red wind-up robot standing on a worn wooden workbench in a warm, sunlit repair workshop. The robot begins walking from left to right with clear alternating steps as its silver key turns, its arms swing, and its head pivots toward the camera. The camera trucks right with small amplitude at slow speed to follow the robot. Near the edge of the workbench, the robot stops, plants both feet, raises its right hand, and gives one deliberate wave while holding a stable final pose.\n\noverall_soundscape: Quiet workshop room tone continues beneath the scene. Each metal footstep makes a light tap on the wood, the winding mechanism clicks steadily in sync with the turning key, and the robot’s raised arm ends with a soft mechanical stop.\n\nnon_diegetic_music: N/A",
+  "matrices": [
+    {
+      "name": "smoke_resolution",
+      "width": 640,
+      "height": 384,
+      "data": "../h3_easycache_policy_step_scaling.csv",
+      "report": "../../docs/reference/H3_EASYCACHE_POLICY_STEP_SCALING.md",
+      "local_media": "media/384p"
+    },
+    {
+      "name": "native_768p",
+      "width": 1344,
+      "height": 768,
+      "data": "../h3_easycache_policy_step_scaling_768p.csv",
+      "report": "../../docs/reference/H3_EASYCACHE_POLICY_STEP_SCALING_768P.md",
+      "local_media": "media/768p"
+    }
+  ],
+  "policies": ["none", "conservative", "balanced", "speed"],
+  "requested_steps": [8, 12, 16, 20],
+  "media_tracking": "Generated media is local and ignored by Git."
+}

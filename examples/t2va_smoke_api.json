@@ -1,0 +1,106 @@
+{
+  "1": {
+    "class_type": "WeeToddH3ComponentLoader",
+    "inputs": {
+      "audio_vae": "",
+      "checkpoint": "MiniMax-H3/FL2VA",
+      "processor": "",
+      "task": "t2va",
+      "text_encoder": "",
+      "tokenizer": "",
+      "transformer": "",
+      "video_vae": ""
+    },
+    "_meta": {"title": "H3 Component Loader"}
+  },
+  "2": {
+    "class_type": "WeeToddH3Preflight",
+    "inputs": {
+      "components": ["1", 0],
+      "config": ["3", 0],
+      "prompt_tokens": 512,
+      "available_memory_gb": 0.0
+    },
+    "_meta": {"title": "H3 Component Preflight"}
+  },
+  "3": {
+    "class_type": "WeeToddH3GenerationConfig",
+    "inputs": {
+      "drop_adaln": true,
+      "duration_seconds": 5.0,
+      "resolution_mode": "preset",
+      "resolution_tier": "384P (fast smoke)",
+      "aspect_ratio": "16:9",
+      "custom_width": 640,
+      "custom_height": 384,
+      "seed": 0,
+      "steps": 8
+    },
+    "_meta": {"title": "H3 Generation Config"}
+  },
+  "4": {
+    "class_type": "WeeToddH3TextEncode",
+    "inputs": {
+      "components": ["2", 0],
+      "prompt": "integrated_multimodal_description: [Shot 1] Live-action, cinematic, a medium-wide eye-level shot frames a small red wind-up robot standing on a worn wooden workbench in a warm, sunlit repair workshop. The robot begins walking from left to right with clear alternating steps as its silver key turns, its arms swing, and its head pivots toward the camera. The camera trucks right with small amplitude at slow speed to follow the robot. Near the edge of the workbench, the robot stops, plants both feet, raises its right hand, and gives one deliberate wave while holding a stable final pose.\n\noverall_soundscape: Quiet workshop room tone continues beneath the scene. Each metal footstep makes a light tap on the wood, the winding mechanism clicks steadily in sync with the turning key, and the robot’s raised arm ends with a soft mechanical stop.\n\nnon_diegetic_music: N/A",
+      "unload_after_encode": true
+    },
+    "_meta": {"title": "H3 Text Encode"}
+  },
+  "5": {
+    "class_type": "WeeToddH3Sample",
+    "inputs": {
+      "components": ["2", 0],
+      "conditioning": ["4", 0],
+      "config": ["3", 0],
+      "easycache": ["9", 0],
+      "unload_after_sample": true
+    },
+    "_meta": {"title": "H3 Sample"}
+  },
+  "6": {
+    "class_type": "WeeToddH3VideoVAEDecode",
+    "inputs": {
+      "components": ["2", 0],
+      "latents": ["5", 0],
+      "unload_after_decode": true
+    },
+    "_meta": {"title": "H3 Decode Video"}
+  },
+  "7": {
+    "class_type": "WeeToddH3AudioVAEDecode",
+    "inputs": {
+      "components": ["2", 0],
+      "latents": ["5", 0],
+      "unload_after_decode": true
+    },
+    "_meta": {"title": "H3 Decode Audio"}
+  },
+  "8": {
+    "class_type": "WeeToddH3PublishVideoAudio",
+    "inputs": {
+      "audio": ["7", 0],
+      "components": ["2", 0],
+      "config": ["3", 0],
+      "crf": 18,
+      "filename_prefix": "WeeTodd/H3_T2VA_Smoke",
+      "generation_metadata": "{\"workflow\": \"t2va_smoke\", \"quality_label\": \"off-distribution wiring test\"}",
+      "images": ["6", 0],
+      "max_av_drift_seconds": 0.025
+      ,"sampling_info": ["5", 1]
+    },
+    "_meta": {"title": "H3 Publish Video + Audio"}
+  },
+  "9": {
+    "class_type": "WeeToddH3EasyCache",
+    "inputs": {
+      "mode": "manual",
+      "reuse_threshold": 0.2,
+      "start_percent": 0.15,
+      "end_percent": 0.95,
+      "auto_multiplier": 1.15,
+      "max_skip_fraction": 0.25
+    },
+    "_meta": {"title": "H3 EasyCache"}
+  }
+}

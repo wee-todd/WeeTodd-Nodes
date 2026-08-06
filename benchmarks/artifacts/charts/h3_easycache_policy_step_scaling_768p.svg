@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760" viewBox="0 0 1200 760">
+  <rect width="1200" height="760" fill="#10151d"/>
+  <style>
+    text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #dce7f3; }
+    .title { font-size: 26px; font-weight: 700; }.subtitle { font-size: 14px; fill: #9fb2c7; }
+    .panel { fill: #17212d; stroke: #34465a; }.pt { font-size: 16px; font-weight: 650; }
+    .axis { stroke: #71859a; }.grid { stroke: #2b3a4b; }.tick { font-size: 12px; fill: #9fb2c7; }
+    .legend { font-size: 13px; }
+  </style>
+  <text x="55" y="40" class="title">H3 EasyCache policy scaling at 1344 × 768</text>
+  <text x="55" y="63" class="subtitle">Five seconds · seed 0 · identical prompt and components · staged unloading</text>
+
+  <rect x="45" y="80" width="550" height="300" rx="8" class="panel"/><text x="65" y="108" class="pt">Sampling time</text>
+  <line x1="95" y1="335" x2="565" y2="335" class="axis"/><line x1="95" y1="120" x2="95" y2="335" class="axis"/>
+  <line x1="95" y1="270" x2="565" y2="270" class="grid"/><line x1="95" y1="205" x2="565" y2="205" class="grid"/><line x1="95" y1="140" x2="565" y2="140" class="grid"/>
+  <text x="68" y="339" class="tick">0</text><text x="47" y="274" class="tick">1000</text><text x="47" y="209" class="tick">2000</text><text x="47" y="144" class="tick">3000 s</text>
+  <polyline points="120,248.8 260,216.5 400,173.4 540,130.4" fill="none" stroke="#d5deea" stroke-width="4"/>
+  <polyline points="120,269.7 260,237.8 400,206.0 540,172.5" fill="none" stroke="#70e1a1" stroke-width="4"/>
+  <polyline points="120,282.2 260,248.4 400,227.9 540,193.3" fill="none" stroke="#56c7ff" stroke-width="4"/>
+  <polyline points="120,291.6 260,270.9 400,249.2 540,226.3" fill="none" stroke="#ff7085" stroke-width="4"/>
+
+  <rect x="615" y="80" width="540" height="300" rx="8" class="panel"/><text x="635" y="108" class="pt">Complete workflow time</text>
+  <line x1="660" y1="335" x2="1125" y2="335" class="axis"/><line x1="660" y1="120" x2="660" y2="335" class="axis"/>
+  <line x1="660" y1="274" x2="1125" y2="274" class="grid"/><line x1="660" y1="212" x2="1125" y2="212" class="grid"/><line x1="660" y1="151" x2="1125" y2="151" class="grid"/>
+  <text x="633" y="339" class="tick">0</text><text x="612" y="278" class="tick">1000</text><text x="612" y="216" class="tick">2000</text><text x="612" y="155" class="tick">3000 s</text>
+  <polyline points="680,246.0 820,216.5 960,175.8 1100,135.0" fill="none" stroke="#d5deea" stroke-width="4"/>
+  <polyline points="680,266.7 820,236.8 960,206.7 1100,175.0" fill="none" stroke="#70e1a1" stroke-width="4"/>
+  <polyline points="680,278.6 820,246.8 960,227.3 1100,194.9" fill="none" stroke="#56c7ff" stroke-width="4"/>
+  <polyline points="680,287.3 820,267.8 960,246.9 1100,225.8" fill="none" stroke="#ff7085" stroke-width="4"/>
+  <text x="700" y="130" class="legend" fill="#d5deea">None</text><text x="760" y="130" class="legend" fill="#70e1a1">Conservative</text>
+  <text x="870" y="130" class="legend" fill="#56c7ff">Balanced</text><text x="945" y="130" class="legend" fill="#ff7085">Speed</text>
+
+  <rect x="45" y="405" width="550" height="300" rx="8" class="panel"/><text x="65" y="433" class="pt">Real transformer evaluations</text>
+  <line x1="95" y1="665" x2="565" y2="665" class="axis"/><line x1="95" y1="450" x2="95" y2="665" class="axis"/>
+  <line x1="95" y1="557.5" x2="565" y2="557.5" class="grid"/><line x1="95" y1="450" x2="565" y2="450" class="grid"/>
+  <text x="68" y="669" class="tick">0</text><text x="60" y="562" class="tick">10</text><text x="60" y="454" class="tick">20</text>
+  <polyline points="120,589.8 260,546.8 400,503.8 540,460.8" fill="none" stroke="#d5deea" stroke-width="4"/>
+  <polyline points="120,600.5 260,568.3 400,536.0 540,503.8" fill="none" stroke="#70e1a1" stroke-width="4"/>
+  <polyline points="120,611.3 260,579.0 400,557.5 540,525.3" fill="none" stroke="#56c7ff" stroke-width="4"/>
+  <polyline points="120,622.0 260,600.5 400,579.0 540,557.5" fill="none" stroke="#ff7085" stroke-width="4"/>
+
+  <rect x="615" y="405" width="540" height="300" rx="8" class="panel"/><text x="635" y="433" class="pt">Sampling time saved versus no cache</text>
+  <line x1="660" y1="665" x2="1125" y2="665" class="axis"/><line x1="660" y1="450" x2="660" y2="665" class="axis"/>
+  <line x1="660" y1="557.5" x2="1125" y2="557.5" class="grid"/><line x1="660" y1="450" x2="1125" y2="450" class="grid"/>
+  <text x="633" y="669" class="tick">0</text><text x="620" y="562" class="tick">25%</text><text x="620" y="454" class="tick">50%</text>
+  <polyline points="680,560.5 820,587.6 960,578.1 1100,576.4" fill="none" stroke="#70e1a1" stroke-width="4"/>
+  <polyline points="680,498.6 820,549.3 960,520.1 1100,533.0" fill="none" stroke="#56c7ff" stroke-width="4"/>
+  <polyline points="680,451.7 820,467.6 960,463.3 1100,463.3" fill="none" stroke="#ff7085" stroke-width="4"/>
+  <text x="95" y="690" class="tick">8</text><text x="251" y="690" class="tick">12</text><text x="391" y="690" class="tick">16</text><text x="531" y="690" class="tick">20 steps</text>
+  <text x="675" y="690" class="tick">8</text><text x="811" y="690" class="tick">12</text><text x="951" y="690" class="tick">16</text><text x="1091" y="690" class="tick">20 steps</text>
+  <text x="55" y="738" class="subtitle">Sampling slope: none 152.81 · conservative 124.16 · balanced 110.21 · speed 83.45 seconds per requested step</text>
+</svg>

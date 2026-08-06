@@ -6,6 +6,7 @@ __pycache__/
 .ruff_cache/
 dist/
 build/
+backups/
 output/
 outputs/
 models/
@@ -19,6 +20,7 @@ cache/
 *.mov
 *.wav
 *.m4a
+benchmarks/artifacts/media/
 .env
 .env.*
 !.env.example
