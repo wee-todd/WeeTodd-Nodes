@@ -28,6 +28,14 @@
       "data": "../h3_easycache_policy_step_scaling_768p.csv",
       "report": "../../docs/reference/H3_EASYCACHE_POLICY_STEP_SCALING_768P.md",
       "local_media": "media/768p"
+    },
+    {
+      "name": "blockcache_smoke_resolution",
+      "width": 640,
+      "height": 384,
+      "data": "../h3_blockcache_policy_step_scaling_384p.csv",
+      "report": "../../docs/reference/H3_BLOCKCACHE.md",
+      "local_media": "media/blockcache-384p"
     }
   ],
   "policies": ["none", "conservative", "balanced", "speed"],

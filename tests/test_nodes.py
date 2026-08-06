@@ -56,13 +56,14 @@ def test_sampling_metadata_preserves_exact_prompt(monkeypatch):
 
 
 def test_expected_nodes_are_registered():
-    assert len(NODE_CLASS_MAPPINGS) == 16
+    assert len(NODE_CLASS_MAPPINGS) == 17
     assert "WeeToddH3ComponentLoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3Preflight" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3TextEncode" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3UnloadTextEncoder" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3Sample" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3EasyCache" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3BlockCache" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3UnloadTransformer" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3VideoVAEDecode" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3UnloadVideoVAE" in NODE_CLASS_MAPPINGS
@@ -118,9 +119,7 @@ def test_generation_config_node_returns_validated_value():
     ],
 )
 def test_resolution_presets_follow_ratio_and_h3_grid(ratio, expected):
-    resolved = _resolve_h3_resolution(
-        "preset", "768P (native quality)", ratio, 640, 384
-    )
+    resolved = _resolve_h3_resolution("preset", "768P (native quality)", ratio, 640, 384)
     assert resolved == expected
     assert all(value % 32 == 0 for value in resolved)
 

@@ -84,6 +84,9 @@ class H3Latents:
     generation_config: H3GenerationConfig
     easycache_skipped_steps: int = 0
     easycache_resolved_threshold: float | None = None
+    blockcache_hits: int = 0
+    blockcache_resolved_threshold: float | None = None
+    blockcache_cache_bytes: int = 0
 
 
 SamplerFactory = Callable[[H3TransformerSpec], Any]
@@ -123,6 +126,7 @@ class H3TransformerCache:
         unload_after: bool = True,
         step_callback=None,
         easycache=None,
+        blockcache=None,
     ) -> H3Latents:
         spec.validate()
         config.validate()
@@ -141,11 +145,7 @@ class H3TransformerCache:
             )
         schedule_key = (config.steps, config.drop_adaln)
         with self._lock:
-            if (
-                self._sampler is None
-                or self._spec != spec
-                or self._schedule_key != schedule_key
-            ):
+            if self._sampler is None or self._spec != spec or self._schedule_key != schedule_key:
                 self._release_locked()
                 self._sampler = self._factory(spec)
                 self._spec = spec
@@ -162,6 +162,7 @@ class H3TransformerCache:
                     drop_adaln=config.drop_adaln,
                     step_callback=step_callback,
                     easycache_config=easycache,
+                    blockcache_config=blockcache,
                 )
                 latents = H3Latents(
                     video=result.video_latents,
@@ -176,6 +177,11 @@ class H3TransformerCache:
                     easycache_resolved_threshold=getattr(
                         result, "easycache_resolved_threshold", None
                     ),
+                    blockcache_hits=getattr(result, "blockcache_hits", 0),
+                    blockcache_resolved_threshold=getattr(
+                        result, "blockcache_resolved_threshold", None
+                    ),
+                    blockcache_cache_bytes=getattr(result, "blockcache_cache_bytes", 0),
                     seconds_per_evaluation=result.seconds_per_evaluation,
                     total_seconds=result.total_seconds,
                     transformer_spec=spec,

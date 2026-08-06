@@ -26,6 +26,7 @@ okf_version: "0.2"
 ## Research
 
 - [H3 EasyCache](h3-easycache.md) - Joint MLX audiovisual residual reuse and first calibration.
+- [H3 BlockCache](h3-blockcache.md) - Block-level joint audiovisual residual reuse and calibration.
 - [MiniMax H3 prompting contract](h3-prompting-contract.md) - Required audiovisual prompt structure and disclosure rule.
 - [Apple Silicon optimization research](optimization-research.md) - Quantization and attention findings.
 - [ComfyUI H3 ecosystem](comfyui-h3-ecosystem.md) - Native, Kijai, and Spectrum design references.
