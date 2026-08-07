@@ -17,12 +17,16 @@ def _json(path: Path, value: dict) -> None:
     path.write_text(json.dumps(value) + "\n")
 
 
-def _safetensors(path: Path, tensors: dict[str, tuple[str, list[int], int]]) -> None:
+def _safetensors(
+    path: Path,
+    tensors: dict[str, tuple[str, list[int], int]],
+    metadata: dict[str, str] | None = None,
+) -> None:
     """Write a header-valid file with opaque payload bytes."""
 
     path.parent.mkdir(parents=True, exist_ok=True)
     offset = 0
-    header = {}
+    header = {"__metadata__": metadata} if metadata is not None else {}
     for name, (dtype, shape, size) in tensors.items():
         header[name] = {"dtype": dtype, "shape": shape, "data_offsets": [offset, offset + size]}
         offset += size
@@ -146,8 +150,19 @@ def test_preflight_rejects_unsupported_quantization(tmp_path: Path):
     root = _component_tree(tmp_path)
     _json(root / "transformer" / "quant_config.json", {"bits": 3, "group_size": 64})
 
-    with pytest.raises(ValueError, match="quantization bits must be 4 or 8"):
+    with pytest.raises(ValueError, match="quantization bits must be 4, 5, 6, or 8"):
         preflight_components(H3ComponentSetSpec(str(root)), H3PreflightRequest())
+
+
+@pytest.mark.parametrize("bits", [5, 6])
+def test_preflight_accepts_experimental_native_quantization_widths(tmp_path: Path, bits: int):
+    root = _component_tree(tmp_path)
+    _json(root / "transformer" / "quant_config.json", {"bits": bits, "group_size": 64})
+
+    report = preflight_components(H3ComponentSetSpec(str(root)), H3PreflightRequest())
+
+    transformer = next(item for item in report.components if item.name == "transformer")
+    assert transformer.quantization == f"mlx-affine-{bits}bit-group-64"
 
 
 def test_preflight_rejects_incompatible_transformer_config(tmp_path: Path):
@@ -185,6 +200,27 @@ def test_preflight_rejects_native_single_file_transformer_as_not_mlx_ready(tmp_p
         )
 
 
+def test_preflight_rejects_unknown_native_video_vae_version(tmp_path: Path):
+    root = _component_tree(tmp_path)
+    native_video_vae = tmp_path / "native_video_vae.safetensors"
+    wrapper = {
+        "format": "minimax-h3-mlx-video-vae",
+        "format_version": 2,
+        "tensor_layout": "ODHWI",
+    }
+    _safetensors(
+        native_video_vae,
+        {"decoder.weight": ("F16", [4, 4], 32)},
+        metadata={"minimax_h3_video_vae": json.dumps(wrapper)},
+    )
+
+    with pytest.raises(ValueError, match="format version"):
+        preflight_components(
+            H3ComponentSetSpec(str(root), video_vae=str(native_video_vae)),
+            H3PreflightRequest(),
+        )
+
+
 def test_compact_text_encoder_report_excludes_colocated_vae_weights(tmp_path: Path):
     root = _component_tree(tmp_path)
     compact = tmp_path / "compact"
@@ -210,9 +246,7 @@ def test_compact_text_encoder_report_excludes_colocated_vae_weights(tmp_path: Pa
     text_encoder = next(
         component for component in report.components if component.name == "text_encoder"
     )
-    tokenizer = next(
-        component for component in report.components if component.name == "tokenizer"
-    )
+    tokenizer = next(component for component in report.components if component.name == "tokenizer")
     assert text_encoder.files == ("text_encoder.safetensors",)
     assert text_encoder.tensor_bytes == 32
     assert "text_encoder.safetensors" not in tokenizer.files

@@ -33,6 +33,27 @@ import mlx.nn as nn
 from .config import MODALITY_NUM, DiTConfig
 
 
+def _diagnostic_run(
+    diagnostics,
+    name: str,
+    fn,
+    *,
+    block: int | None = None,
+    metadata=None,
+    capture_as: str | None = None,
+):
+    """Run directly unless an opt-in research diagnostic session was supplied."""
+    if diagnostics is None:
+        return fn()
+    return diagnostics.measure(
+        name,
+        fn,
+        block=block,
+        metadata=metadata,
+        capture_as=capture_as,
+    )
+
+
 def param_dtype(layer: nn.Module) -> mx.Dtype:
     """The dtype a layer's *activations* should be aligned to.
 
@@ -146,28 +167,104 @@ class Attention(nn.Module):
         self.out_proj = nn.Linear(config.inner_dim, config.hidden_size, bias=False)
         self.query_chunk_size: int | None = None
 
+    def _normal(self, x, rotary, mask):
+        """Original inference path, kept free of diagnostic callables and synchronization."""
+        batch, sequence, _ = x.shape
+        qkv = self.qkv_proj(x).reshape(
+            batch, sequence, self.heads, 3, self.head_dim
+        )
+        q, k, v = qkv[:, :, :, 0], qkv[:, :, :, 1], qkv[:, :, :, 2]
+        q = self.q_norm(q).transpose(0, 2, 1, 3)
+        k = self.k_norm(k).transpose(0, 2, 1, 3)
+        v = v.transpose(0, 2, 1, 3)
+        if rotary is not None:
+            q = apply_rotary(q, *rotary)
+            k = apply_rotary(k, *rotary)
+        chunk = self.query_chunk_size
+        if chunk is None or q.shape[-2] <= chunk:
+            out = mx.fast.scaled_dot_product_attention(
+                q, k, v, scale=self.scale, mask=mask
+            )
+        else:
+            pieces = []
+            for start in range(0, q.shape[-2], chunk):
+                stop = min(start + chunk, q.shape[-2])
+                chunk_mask = mask
+                if mask is not None and mask.shape[-2] == q.shape[-2]:
+                    chunk_mask = mask[..., start:stop, :]
+                piece = mx.fast.scaled_dot_product_attention(
+                    q[..., start:stop, :], k, v, scale=self.scale, mask=chunk_mask
+                )
+                mx.eval(piece)
+                pieces.append(piece)
+            out = mx.concatenate(pieces, axis=-2)
+        out = out.transpose(0, 2, 1, 3).reshape(
+            batch, sequence, self.heads * self.head_dim
+        )
+        return self.out_proj(out.astype(x.dtype))
+
     def __call__(
         self,
         x: mx.array,
         rotary: tuple[mx.array, mx.array] | None = None,
         mask: mx.array | None = None,
+        diagnostics=None,
+        block_index: int | None = None,
+        module_prefix: str = "blocks",
     ) -> mx.array:
+        if diagnostics is None:
+            return self._normal(x, rotary, mask)
         B, S, _ = x.shape
+        prefix = f"{module_prefix}.{block_index}.attn"
         # Raw-checkpoint QKV rows are per-head interleaved: (..., heads, 3, head_dim).
-        qkv = self.qkv_proj(x).reshape(B, S, self.heads, 3, self.head_dim)
+        qkv = _diagnostic_run(
+            diagnostics,
+            f"{prefix}.qkv_proj",
+            lambda: self.qkv_proj(x).reshape(B, S, self.heads, 3, self.head_dim),
+            block=block_index,
+            metadata={
+                "input_shape": list(x.shape),
+                "weight_shape": list(self.qkv_proj.weight.shape),
+            },
+            capture_as="qkv_output",
+        )
         q, k, v = qkv[:, :, :, 0], qkv[:, :, :, 1], qkv[:, :, :, 2]
 
-        q = self.q_norm(q).transpose(0, 2, 1, 3)
-        k = self.k_norm(k).transpose(0, 2, 1, 3)
+        if diagnostics is not None:
+            diagnostics.capture("q_output", q, block=block_index)
+            diagnostics.capture("k_output", k, block=block_index)
+            diagnostics.capture("v_output", v, block=block_index)
+
+        q, k = _diagnostic_run(
+            diagnostics,
+            f"{prefix}.qk_norm",
+            lambda: (
+                self.q_norm(q).transpose(0, 2, 1, 3),
+                self.k_norm(k).transpose(0, 2, 1, 3),
+            ),
+            block=block_index,
+        )
         v = v.transpose(0, 2, 1, 3)
 
         if rotary is not None:
-            q = apply_rotary(q, *rotary)
-            k = apply_rotary(k, *rotary)
+            q, k = _diagnostic_run(
+                diagnostics,
+                f"{prefix}.rotary",
+                lambda: (apply_rotary(q, *rotary), apply_rotary(k, *rotary)),
+                block=block_index,
+            )
 
         chunk = self.query_chunk_size
         if chunk is None or q.shape[-2] <= chunk:
-            out = mx.fast.scaled_dot_product_attention(q, k, v, scale=self.scale, mask=mask)
+            out = _diagnostic_run(
+                diagnostics,
+                f"{prefix}.sdpa",
+                lambda: mx.fast.scaled_dot_product_attention(
+                    q, k, v, scale=self.scale, mask=mask
+                ),
+                block=block_index,
+                metadata={"query_rows": int(q.shape[-2]), "key_rows": int(k.shape[-2])},
+            )
         else:
             pieces = []
             for start in range(0, q.shape[-2], chunk):
@@ -182,7 +279,14 @@ class Attention(nn.Module):
                 pieces.append(piece)
             out = mx.concatenate(pieces, axis=-2)
         out = out.transpose(0, 2, 1, 3).reshape(B, S, self.heads * self.head_dim)
-        return self.out_proj(out.astype(x.dtype))
+        return _diagnostic_run(
+            diagnostics,
+            f"{prefix}.out_proj",
+            lambda: self.out_proj(out.astype(x.dtype)),
+            block=block_index,
+            metadata={"weight_shape": list(self.out_proj.weight.shape)},
+            capture_as="attention_output",
+        )
 
 
 class FeedForward(nn.Module):
@@ -194,10 +298,39 @@ class FeedForward(nn.Module):
         self.fc2 = nn.Linear(config.ffn_hidden_size, config.hidden_size, bias=False)
         self._ffn = config.ffn_hidden_size
 
-    def __call__(self, x: mx.array) -> mx.array:
-        fused = self.fc1(x)
-        gate, value = fused[..., : self._ffn], fused[..., self._ffn :]
-        return self.fc2(nn.silu(gate) * value)
+    def __call__(
+        self,
+        x: mx.array,
+        diagnostics=None,
+        block_index: int | None = None,
+        module_prefix: str = "blocks",
+    ) -> mx.array:
+        if diagnostics is None:
+            fused = self.fc1(x)
+            gate, value = fused[..., : self._ffn], fused[..., self._ffn :]
+            return self.fc2(nn.silu(gate) * value)
+        prefix = f"{module_prefix}.{block_index}.mlp"
+        fused = _diagnostic_run(
+            diagnostics,
+            f"{prefix}.fc1",
+            lambda: self.fc1(x),
+            block=block_index,
+            metadata={"input_shape": list(x.shape), "weight_shape": list(self.fc1.weight.shape)},
+        )
+        activated = _diagnostic_run(
+            diagnostics,
+            f"{prefix}.swiglu",
+            lambda: nn.silu(fused[..., : self._ffn]) * fused[..., self._ffn :],
+            block=block_index,
+        )
+        return _diagnostic_run(
+            diagnostics,
+            f"{prefix}.fc2",
+            lambda: self.fc2(activated),
+            block=block_index,
+            metadata={"weight_shape": list(self.fc2.weight.shape)},
+            capture_as="mlp_output",
+        )
 
 
 class AdaLayerNormModulation(nn.Module):
@@ -269,9 +402,23 @@ class TokenRefinerBlock(nn.Module):
         self.norm2 = nn.RMSNorm(config.hidden_size, eps=config.norm_eps)
         self.mlp = FeedForward(config)
 
-    def __call__(self, x: mx.array) -> mx.array:
-        x = x + self.attn(self.norm1(x))
-        return x + self.mlp(self.norm2(x))
+    def __call__(self, x: mx.array, diagnostics=None, block_index: int | None = None) -> mx.array:
+        if diagnostics is None:
+            x = x + self.attn(self.norm1(x))
+            return x + self.mlp(self.norm2(x))
+        h = self.norm1(x)
+        x = x + self.attn(
+            h,
+            diagnostics=diagnostics,
+            block_index=block_index,
+            module_prefix="token_refiner.blocks",
+        )
+        return x + self.mlp(
+            self.norm2(x),
+            diagnostics=diagnostics,
+            block_index=block_index,
+            module_prefix="token_refiner.blocks",
+        )
 
 
 class TokenRefiner(nn.Module):
@@ -280,9 +427,15 @@ class TokenRefiner(nn.Module):
         self.blocks = [TokenRefinerBlock(config) for _ in range(config.token_refiner_num_layers)]
         self.final_norm = nn.RMSNorm(config.hidden_size, eps=config.final_norm_eps)
 
-    def __call__(self, x: mx.array) -> mx.array:
-        for block in self.blocks:
-            x = block(x)
+    def __call__(self, x: mx.array, diagnostics=None) -> mx.array:
+        if diagnostics is None:
+            for block in self.blocks:
+                x = block(x)
+            return self.final_norm(x)
+        for index, block in enumerate(self.blocks):
+            if diagnostics is not None:
+                diagnostics.prepare_block(x, index)
+            x = block(x, diagnostics=diagnostics, block_index=index)
         return self.final_norm(x)
 
 
@@ -304,16 +457,75 @@ class TransformerBlock(nn.Module):
         adaln_indices: mx.array,
         rotary: tuple[mx.array, mx.array],
         mask: mx.array | None = None,
+        diagnostics=None,
+        block_index: int | None = None,
     ) -> mx.array:
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = modulation
 
-        h = self.norm1(x)
-        h = h * (1.0 + scale_msa[adaln_indices]) + shift_msa[adaln_indices]
-        x = x + gate_msa[adaln_indices] * self.attn(h, rotary, mask)
+        if diagnostics is None:
+            h = self.norm1(x)
+            h = h * (1.0 + scale_msa[adaln_indices]) + shift_msa[adaln_indices]
+            x = x + gate_msa[adaln_indices] * self.attn(h, rotary, mask)
+            h = self.norm2(x)
+            h = h * (1.0 + scale_mlp[adaln_indices]) + shift_mlp[adaln_indices]
+            return x + gate_mlp[adaln_indices] * self.mlp(h)
 
-        h = self.norm2(x)
-        h = h * (1.0 + scale_mlp[adaln_indices]) + shift_mlp[adaln_indices]
-        return x + gate_mlp[adaln_indices] * self.mlp(h)
+        block_input = x
+        hybrid_result = diagnostics.try_hybrid_block(
+            self,
+            block_index,
+            x,
+            modulation=modulation,
+            adaln_indices=adaln_indices,
+            rotary=rotary,
+            mask=mask,
+        )
+        if hybrid_result is not None:
+            diagnostics.capture("residual_output", hybrid_result, block=block_index)
+            return hybrid_result
+
+        diagnostics.capture("block_input", x, block=block_index)
+
+        h = _diagnostic_run(
+            diagnostics,
+            f"blocks.{block_index}.norm1_adaln",
+            lambda: self.norm1(x) * (1.0 + scale_msa[adaln_indices])
+            + shift_msa[adaln_indices],
+            block=block_index,
+            capture_as="normalized_block_input",
+        )
+        attention = self.attn(
+            h,
+            rotary,
+            mask,
+            diagnostics=diagnostics,
+            block_index=block_index,
+        )
+        x = _diagnostic_run(
+            diagnostics,
+            f"blocks.{block_index}.attention_residual",
+            lambda: x + gate_msa[adaln_indices] * attention,
+            block=block_index,
+        )
+
+        h = _diagnostic_run(
+            diagnostics,
+            f"blocks.{block_index}.norm2_adaln",
+            lambda: self.norm2(x) * (1.0 + scale_mlp[adaln_indices])
+            + shift_mlp[adaln_indices],
+            block=block_index,
+            capture_as="mlp_input",
+        )
+        mlp = self.mlp(h, diagnostics=diagnostics, block_index=block_index)
+        result = _diagnostic_run(
+            diagnostics,
+            f"blocks.{block_index}.mlp_residual",
+            lambda: x + gate_mlp[adaln_indices] * mlp,
+            block=block_index,
+            capture_as="residual_output",
+        )
+        diagnostics.observe_hybrid_block(block_index, block_input, result)
+        return result
 
 
 class MiniMaxH3DiT(nn.Module):
@@ -388,6 +600,7 @@ class MiniMaxH3DiT(nn.Module):
         video_indices: mx.array,
         audio_indices: mx.array,
         text_indices: mx.array,
+        diagnostics=None,
     ) -> tuple[mx.array, mx.array, mx.array, tuple[mx.array, mx.array]]:
         """Everything the block stack needs before its first block: ``(x, temb, adaln_rows, rope)``.
 
@@ -415,7 +628,7 @@ class MiniMaxH3DiT(nn.Module):
             audio_latents.astype(param_dtype(self.audio_patch_proj))
         )
         text = self.condition_proj(text_embeds.astype(param_dtype(self.condition_proj)))
-        text = self.token_refiner(text)
+        text = self.token_refiner(text, diagnostics=diagnostics)
 
         B = text.shape[0]
         x = mx.zeros((B, seq_len, text.shape[-1]), dtype=text.dtype)
@@ -462,6 +675,7 @@ class MiniMaxH3DiT(nn.Module):
         forecast_coordinate: float | None = None,
         step_index: int = 0,
         total_steps: int = 1,
+        diagnostics=None,
     ) -> tuple[mx.array, mx.array]:
         """Predict the video and audio velocity for one packed sequence.
 
@@ -506,14 +720,25 @@ class MiniMaxH3DiT(nn.Module):
             video_indices,
             audio_indices,
             text_indices,
+            diagnostics,
         )
 
         before_block_zero = x
         for i, block in enumerate(self.blocks):
+            if diagnostics is not None:
+                diagnostics.prepare_block(x, i)
             modulation = (
                 modulation_cache.get(i) if modulation_cache is not None else block.adaln_proj(temb)
             )
-            x = block(x, modulation, adaln_indices, rotary, mask)
+            x = block(
+                x,
+                modulation,
+                adaln_indices,
+                rotary,
+                mask,
+                diagnostics=diagnostics,
+                block_index=i,
+            )
             if i == 0 and blockcache is not None:
                 after_block_zero = x
                 reused = blockcache.try_reuse(
@@ -548,7 +773,12 @@ class MiniMaxH3DiT(nn.Module):
         x = self.final_layer.norm_out(x, temb, timestep_indices)
         video_out = self.final_layer.video_out(x.astype(param_dtype(self.final_layer.video_out)))
         audio_out = self.final_layer.audio_out(x.astype(param_dtype(self.final_layer.audio_out)))
-        return video_out[:, video_indices], audio_out[:, audio_indices]
+        video_result = video_out[:, video_indices]
+        audio_result = audio_out[:, audio_indices]
+        if diagnostics is not None:
+            diagnostics.capture("video_output", video_result)
+            diagnostics.capture("audio_output", audio_result)
+        return video_result, audio_result
 
     def _project_target_features(
         self,

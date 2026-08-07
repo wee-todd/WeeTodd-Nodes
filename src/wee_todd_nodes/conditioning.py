@@ -114,10 +114,13 @@ class H3TextEncoderCache:
         prompt: str,
         *,
         unload_after: bool = True,
+        prepare_stage: Callable[[], None] | None = None,
     ) -> H3Conditioning:
         if not isinstance(prompt, str) or not prompt.strip():
             raise ValueError("Prompt must contain text.")
         spec.validate()
+        if prepare_stage is not None:
+            prepare_stage()
         with self._lock:
             if self._encoder is None or self._spec != spec:
                 self._release_locked()

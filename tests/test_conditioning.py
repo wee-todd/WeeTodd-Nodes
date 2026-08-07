@@ -117,6 +117,21 @@ def test_conditioning_rejects_empty_prompt_before_loading(tmp_path: Path):
     assert called is False
 
 
+def test_conditioning_rejects_empty_prompt_before_staged_release(tmp_path: Path):
+    prepared = False
+
+    def prepare_stage():
+        nonlocal prepared
+        prepared = True
+
+    with pytest.raises(ValueError, match="Prompt must contain text"):
+        H3TextEncoderCache().encode(
+            _spec(tmp_path), "   ", prepare_stage=prepare_stage
+        )
+
+    assert prepared is False
+
+
 def test_compact_encoder_uses_checkpoint_architecture_config(tmp_path: Path):
     root = tmp_path / "FL2VA"
     compact = tmp_path / "compact"

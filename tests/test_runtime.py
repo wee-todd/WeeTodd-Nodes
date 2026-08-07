@@ -55,8 +55,10 @@ def test_unload_forgets_pipeline_and_spec(tmp_path: Path):
     cache = H3RuntimeCache()
     cache._pipeline = object()
     cache._spec = H3ModelSpec(str(tmp_path))
+    assert cache.loaded is True
 
     cache.unload()
 
+    assert cache.loaded is False
     assert cache._pipeline is None
     assert cache._spec is None

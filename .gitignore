@@ -23,6 +23,8 @@ cache/
 *.wav
 *.m4a
 benchmarks/artifacts/media/
+algorithm_search_captures/
+benchmarks/algorithm_search/
 .env
 .env.*
 !.env.example

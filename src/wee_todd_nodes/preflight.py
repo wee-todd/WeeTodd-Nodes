@@ -289,8 +289,8 @@ def _quantization(path: Path, headers: list[SafetensorsHeader], component: str) 
         recipe = _read_json(path / "quant_config.json", f"{component} quantization recipe")
         bits = recipe.get("bits")
         group_size = recipe.get("group_size")
-        if bits not in {4, 8}:
-            raise ValueError(f"{component} quantization bits must be 4 or 8, got {bits!r}.")
+        if bits not in {4, 5, 6, 8}:
+            raise ValueError(f"{component} quantization bits must be 4, 5, 6, or 8, got {bits!r}.")
         if not isinstance(group_size, int) or group_size < 1:
             raise ValueError(f"{component} quantization group size must be positive.")
         return f"mlx-affine-{bits}bit-group-{group_size}"
@@ -396,6 +396,14 @@ def _component_report(
                 f"Single-file {name} is not self-describing: metadata key "
                 f"{metadata_key!r} is missing."
             )
+        if name == "video_vae" and metadata_key is not None:
+            from minimax_h3_mlx.video_vae_checkpoint import validate_video_vae_wrapper
+
+            try:
+                wrapper = json.loads(metadata[metadata_key])
+            except (TypeError, json.JSONDecodeError) as exc:
+                raise ValueError("Single-file video_vae metadata is not valid JSON.") from exc
+            validate_video_vae_wrapper(wrapper)
     return ComponentReport(
         name=name,
         path=str(path),

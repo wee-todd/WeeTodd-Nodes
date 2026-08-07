@@ -50,6 +50,7 @@ class H3VideoFrames:
     height: int
     fps: int
     decode_seconds: float
+    decode_batch: int
 
 
 VideoVAEFactory = Callable[[H3VideoVAESpec], Any]
@@ -85,6 +86,7 @@ class H3VideoVAECache:
         *,
         unload_after: bool = True,
         check_interrupted: Callable[[], None] | None = None,
+        prepare_stage: Callable[[], None] | None = None,
     ) -> H3VideoFrames:
         import time
 
@@ -93,6 +95,8 @@ class H3VideoVAECache:
             spec.video_vae
         ).expanduser():
             raise ValueError("Latents were produced for a different MiniMax H3 video VAE.")
+        if prepare_stage is not None:
+            prepare_stage()
         with self._lock:
             if self._vae is None or self._spec != spec:
                 self._release_locked()
@@ -117,6 +121,7 @@ class H3VideoVAECache:
                     height=frames.shape[1],
                     fps=latents.fps,
                     decode_seconds=elapsed,
+                    decode_batch=int(self._vae.decode_batch),
                 )
             except BaseException:
                 self._release_locked()
@@ -237,6 +242,7 @@ class H3AudioVAECache:
         *,
         unload_after: bool = True,
         check_interrupted: Callable[[], None] | None = None,
+        prepare_stage: Callable[[], None] | None = None,
     ) -> H3AudioWaveform:
         import time
 
@@ -245,6 +251,8 @@ class H3AudioVAECache:
             spec.audio_vae
         ).expanduser():
             raise ValueError("Latents were produced for a different MiniMax H3 audio VAE.")
+        if prepare_stage is not None:
+            prepare_stage()
         with self._lock:
             if self._vae is None or self._spec != spec:
                 self._release_locked()

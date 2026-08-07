@@ -30,11 +30,12 @@ import mlx.nn as nn
 #: Spatial tiles pushed through the ViT decoder in one call. The decoder is per-item — attention
 #: never crosses the batch axis and the rotary grid is derived from a tile's own ``(d, h, w)`` — so
 #: stacking same-shaped tiles on the batch axis is exactly the arithmetic of decoding them one by
-#: one, with a fraction of the launches. A 768x448 clip is 8 tiles, so the default batches a whole
-#: clip in one call, which is what the PyTorch reference does. The cap exists because the fused
-#: SwiGLU projection is the widest activation and grows linearly with the batch.
+#: one, with a fraction of the launches. Four is the measured memory-efficient default: it is
+#: effectively tied with eight-tile decoding at both tested H3 geometries while lowering complete
+#: MLX peak allocation by roughly 0.7 GB at 640x384 and 1.0 GB at 1344x768. The cap matters because
+#: the fused SwiGLU projection is the widest activation and grows linearly with the batch.
 #: ``H3_VAE_BATCH=0`` (or 1) restores the one-call-per-tile loop.
-DEFAULT_DECODE_BATCH = 8
+DEFAULT_DECODE_BATCH = 4
 
 
 def resolved_decode_batch() -> int:

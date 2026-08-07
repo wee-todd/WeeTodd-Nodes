@@ -15,7 +15,7 @@ from wee_todd_nodes.sampling import H3Latents, H3TransformerSpec
 
 
 class FakeVideoVAE:
-    pass
+    decode_batch = 8
 
 
 class FakeVideoVAECache(H3VideoVAECache):
@@ -102,6 +102,7 @@ def test_video_vae_decode_returns_float_frames_and_unloads(tmp_path):
     assert result.frames.shape == (5, 8, 12, 3)
     assert result.frames.dtype == np.float32
     assert result.fps == 24
+    assert result.decode_batch == 8
     assert cache.loaded is False
     assert created == [spec]
 
@@ -139,6 +140,22 @@ def test_video_vae_decode_rejects_mismatched_provenance(tmp_path):
         cache.decode(spec, _latents("other-video-vae"))
 
     assert cache.loaded is False
+
+
+def test_video_vae_rejects_provenance_before_staged_release(tmp_path):
+    spec = _video_vae_spec(tmp_path)
+    prepared = False
+
+    def prepare_stage():
+        nonlocal prepared
+        prepared = True
+
+    with pytest.raises(ValueError, match="different MiniMax H3 video VAE"):
+        FakeVideoVAECache(lambda value: FakeVideoVAE()).decode(
+            spec, _latents("other-video-vae"), prepare_stage=prepare_stage
+        )
+
+    assert prepared is False
 
 
 def test_video_vae_failure_unloads(tmp_path):
