@@ -713,3 +713,59 @@ class VideoVAE(nn.Module):
             )
             out = out[:, :-pad_frames]
         return out.transpose(0, 4, 1, 2, 3)
+
+    def decode_chunks(self, z: mx.array):
+        """Yield temporal pixel chunks without retaining the complete decoded clip."""
+        z = z.transpose(0, 2, 3, 4, 1)
+        chunk_tokens = self.tokens_chunk_size
+        token_drop = self.config.token_drop
+        ratio_t = self.config.temporal_compression_ratio
+        chunk_num_frames = chunk_tokens * ratio_t
+
+        num_tokens = z.shape[1] + token_drop
+        pad_tokens = (-num_tokens) % chunk_tokens
+        num_chunks = (num_tokens + pad_tokens) // chunk_tokens - int(token_drop > 0)
+        if num_chunks < 1:
+            minimum = 2 * chunk_tokens - token_drop
+            raise ValueError(
+                f"Too few latent frames to decode: got {z.shape[1]}, need at least {minimum} "
+                f"(chunk {chunk_tokens} latent frames, token_drop {token_drop})."
+            )
+        if pad_tokens > 0:
+            tail = mx.broadcast_to(z[:, -1:], (z.shape[0], pad_tokens, *z.shape[2:]))
+            z = mx.concatenate([z, tail], axis=1)
+
+        pending = None
+        overlap = None
+        for index in range(num_chunks):
+            start = index * chunk_tokens
+            clip = self._decode_clip(z[:, start : start + chunk_tokens + self.token_overlap])
+            for part in range(int(token_drop > 0) + 1):
+                frame_start = part * chunk_num_frames
+                chunk = clip[:, frame_start : frame_start + chunk_num_frames]
+                chunk = chunk[:, self.frame_pre_padding :]
+                if part == 0:
+                    if overlap is not None:
+                        chunk = self._blend(overlap, chunk, self.frame_overlap, axis=1)
+                    if pending is not None:
+                        yield pending.transpose(0, 4, 1, 2, 3)
+                    pending = chunk
+                else:
+                    overlap = chunk
+        if overlap is not None:
+            if pending is not None:
+                yield pending.transpose(0, 4, 1, 2, 3)
+            pending = overlap
+
+        if pending is None:
+            return
+        if pad_tokens > 0:
+            intra_tail = self.config.clip_length % ratio_t
+            before_pad = z.shape[1] - pad_tokens
+            pad_frames = sum(
+                intra_tail if intra_tail and (before_pad + offset) % chunk_tokens == 0 else ratio_t
+                for offset in range(pad_tokens)
+            )
+            pending = pending[:, :-pad_frames]
+        if pending.shape[1] > 0:
+            yield pending.transpose(0, 4, 1, 2, 3)

@@ -78,6 +78,8 @@ class QuantConfig:
     adaln_bits: int = 8
     #: Layers whose quantization is overridden, by exact module path.
     overrides: dict[str, int] = field(default_factory=dict)
+    #: Apply ``bits`` to every eligible core projection. Disable for an overrides-only recipe.
+    quantize_core: bool = True
 
     def bits_for(self, path: str) -> int | None:
         """Bit width for a module path, or ``None`` to leave it unquantized."""
@@ -90,11 +92,15 @@ class QuantConfig:
         if ".adaln_proj." in path or path.endswith(".adaln_proj.linear"):
             return self.adaln_bits if self.quantize_adaln else None
         if any(path.endswith(suffix) for suffix in CORE_LINEARS):
-            return self.bits
+            return self.bits if self.quantize_core else None
         return None
 
 
-def _class_predicate(config: QuantConfig, counts: dict[int, int] | None = None, verbose: bool = False):
+def _class_predicate(
+    config: QuantConfig,
+    counts: dict[int, int] | None = None,
+    verbose: bool = False,
+):
     """Build the `nn.quantize` predicate for a recipe, shared by conversion and loading."""
 
     def predicate(path: str, module: nn.Module) -> bool | dict:
@@ -131,7 +137,11 @@ def apply_quantization_structure(model, config: QuantConfig) -> None:
     )
 
 
-def quantize_dit(model, config: QuantConfig | None = None, verbose: bool = False) -> dict[str, object]:
+def quantize_dit(
+    model,
+    config: QuantConfig | None = None,
+    verbose: bool = False,
+) -> dict[str, object]:
     """Quantize a :class:`~minimax_h3_mlx.dit.MiniMaxH3DiT` in place.
 
     Returns a summary with the before/after footprint and the per-width layer counts.

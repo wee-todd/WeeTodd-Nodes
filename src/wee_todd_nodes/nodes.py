@@ -13,6 +13,7 @@ from .decoding import (
     H3AudioVAESpec,
     H3VideoVAESpec,
 )
+from .direct_publishing import publish_latents_direct
 from .preflight import H3ComponentSetSpec, H3PreflightRequest, preflight_components
 from .publishing import publish_synchronized_media
 from .residency import prepare_low_memory_stage
@@ -277,8 +278,7 @@ class WeeToddH3TextEncode:
         conditioning = TEXT_ENCODER_RUNTIME.encode(
             H3TextEncoderSpec.from_components(components, load_vision=False),
             prompt,
-            unload_after=unload_after_encode
-            or memory_mode == "low_memory_bf16",
+            unload_after=unload_after_encode or memory_mode == "low_memory_bf16",
             prepare_stage=prepare_stage,
         )
         if check_interrupted is not None:
@@ -349,12 +349,8 @@ class WeeToddH3Sample:
         trajectory_forecast=None,
         loras=None,
     ):
-        if sum(
-            value is not None for value in (easycache, blockcache, trajectory_forecast)
-        ) > 1:
-            raise ValueError(
-                "Connect only one of EasyCache, BlockCache, or Trajectory Forecast."
-            )
+        if sum(value is not None for value in (easycache, blockcache, trajectory_forecast)) > 1:
+            raise ValueError("Connect only one of EasyCache, BlockCache, or Trajectory Forecast.")
         staged_releases = ()
 
         def prepare_stage():
@@ -409,9 +405,7 @@ class WeeToddH3Sample:
             "blockcache": asdict(blockcache) if blockcache is not None else None,
             "trajectory_forecasts": getattr(latents, "trajectory_forecasts", 0),
             "trajectory_fallbacks": getattr(latents, "trajectory_fallbacks", 0),
-            "trajectory_history_bytes": getattr(
-                latents, "trajectory_history_bytes", 0
-            ),
+            "trajectory_history_bytes": getattr(latents, "trajectory_history_bytes", 0),
             "trajectory_forecast": (
                 asdict(trajectory_forecast) if trajectory_forecast is not None else None
             ),
@@ -1049,6 +1043,141 @@ class WeeToddH3PublishVideoAudio:
         }
 
 
+class WeeToddH3DirectPublishLatents:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "components": ("WEETODD_H3_COMPONENTS",),
+                "latents": ("WEETODD_H3_LATENTS",),
+                "filename_prefix": ("STRING", {"default": "WeeTodd/H3_direct"}),
+                "crf": ("INT", {"default": 18, "min": 0, "max": 51}),
+                "max_av_drift_seconds": (
+                    "FLOAT",
+                    {"default": 0.025, "min": 0.0, "max": 0.25, "step": 0.001},
+                ),
+            },
+            "optional": {
+                "generation_metadata": (
+                    "STRING",
+                    {"default": "{}", "multiline": True},
+                ),
+                "sampling_info": ("STRING", {"default": ""}),
+            },
+        }
+
+    RETURN_TYPES = ("STRING", "STRING")
+    RETURN_NAMES = ("video_path", "generation_info")
+    OUTPUT_NODE = True
+    FUNCTION = "publish"
+    CATEGORY = "WeeTodd/H3/output"
+    DESCRIPTION = (
+        "Decode synchronized H3 latents directly to MP4 through staged MLX VAEs. "
+        "The node avoids a persistent ComfyUI IMAGE tensor and unloads each VAE after use."
+    )
+
+    def publish(
+        self,
+        components,
+        latents,
+        filename_prefix,
+        crf,
+        max_av_drift_seconds,
+        generation_metadata="{}",
+        sampling_info="",
+    ):
+        config = latents.generation_config
+        config.validate()
+        try:
+            supplied_metadata = json.loads(generation_metadata or "{}")
+        except json.JSONDecodeError as exc:
+            raise ValueError("Generation metadata must be a valid JSON object.") from exc
+        if not isinstance(supplied_metadata, dict):
+            raise ValueError("Generation metadata must be a JSON object.")
+        if sampling_info:
+            try:
+                supplied_metadata["sampling"] = json.loads(sampling_info)
+            except json.JSONDecodeError as exc:
+                raise ValueError("Sampling information must be valid JSON.") from exc
+
+        component_paths = components.resolved_paths()
+        try:
+            package_version = version("comfyui-weetodd-nodes")
+        except PackageNotFoundError:
+            package_version = "uninstalled"
+        try:
+            mlx_version = version("mlx")
+        except PackageNotFoundError:
+            mlx_version = "uninstalled"
+        metadata = {
+            **supplied_metadata,
+            "generation": asdict(config),
+            "precision_policy": (
+                "component-specific checkpoint precision; verify quantization in preflight"
+            ),
+            "components": {
+                "checkpoint": Path(components.checkpoint).name,
+                "task": components.task,
+                **{name: path.name for name, path in component_paths.items()},
+            },
+            "software": {
+                "python": platform.python_version(),
+                "mlx": mlx_version,
+                "weetodd_nodes": package_version,
+            },
+        }
+        check_interrupted = None
+        try:
+            import comfy.model_management
+
+            check_interrupted = comfy.model_management.throw_exception_if_processing_interrupted
+        except ImportError:
+            pass
+
+        video_releases = ()
+        audio_releases = ()
+
+        def prepare_video_stage():
+            nonlocal video_releases
+            video_releases = prepare_low_memory_stage("video_vae", config.memory_mode)
+
+        def prepare_audio_stage():
+            nonlocal audio_releases
+            audio_releases = prepare_low_memory_stage("audio_vae", config.memory_mode)
+
+        target = _safe_output_target(_output_directory(), filename_prefix, config.seed)
+        result = publish_latents_direct(
+            target,
+            components,
+            latents,
+            crf=crf,
+            max_av_drift_seconds=max_av_drift_seconds,
+            generation_metadata=json.dumps(metadata),
+            check_interrupted=check_interrupted,
+            prepare_video_stage=prepare_video_stage,
+            prepare_audio_stage=prepare_audio_stage,
+            metadata_updates=lambda: {
+                "staged_releases": {
+                    "video": list(video_releases),
+                    "audio": list(audio_releases),
+                }
+            },
+        )
+        info = json.dumps(result.metadata, indent=2, sort_keys=True)
+        output_root = _output_directory().resolve()
+        relative = result.video_path.resolve().relative_to(output_root)
+        preview = {
+            "filename": relative.name,
+            "subfolder": str(relative.parent) if str(relative.parent) != "." else "",
+            "type": "output",
+            "format": "video/mp4",
+        }
+        return {
+            "ui": {"gifs": [preview]},
+            "result": (str(result.video_path), info),
+        }
+
+
 class WeeToddH3ModelLoader:
     @classmethod
     def INPUT_TYPES(cls):
@@ -1259,6 +1388,7 @@ NODE_CLASS_MAPPINGS = {
     "WeeToddH3AudioVAEDecode": WeeToddH3AudioVAEDecode,
     "WeeToddH3UnloadAudioVAE": WeeToddH3UnloadAudioVAE,
     "WeeToddH3PublishVideoAudio": WeeToddH3PublishVideoAudio,
+    "WeeToddH3DirectPublishLatents": WeeToddH3DirectPublishLatents,
     "WeeToddH3ModelLoader": WeeToddH3ModelLoader,
     "WeeToddH3GenerationConfig": WeeToddH3GenerationConfig,
     "WeeToddH3Generate": WeeToddH3Generate,
@@ -1280,6 +1410,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "WeeToddH3AudioVAEDecode": "WeeTodd H3 Decode Audio VAE",
     "WeeToddH3UnloadAudioVAE": "WeeTodd H3 Unload Audio VAE",
     "WeeToddH3PublishVideoAudio": "WeeTodd H3 Publish Video + Audio",
+    "WeeToddH3DirectPublishLatents": "WeeTodd H3 Direct Publish Latents (MLX)",
     "WeeToddH3ModelLoader": "WeeTodd H3 Model Loader (MLX)",
     "WeeToddH3GenerationConfig": "WeeTodd H3 Generation Config",
     "WeeToddH3Generate": "WeeTodd H3 Generate Video + Audio",

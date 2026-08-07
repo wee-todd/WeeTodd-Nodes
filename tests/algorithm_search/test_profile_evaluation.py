@@ -26,3 +26,11 @@ def test_save_final_latents_round_trips(tmp_path: Path):
 
     assert loaded["video_latents"].shape == (1, 2, 3)
     assert loaded["audio_latents"].shape == (2, 3, 4)
+
+
+def test_blockcache_cli_modes_map_to_runtime_configuration():
+    module = _module()
+
+    assert module._blockcache_config("none") is None
+    assert module._blockcache_config("balanced").mode == "automatic_balanced"
+    assert module._blockcache_config("speed").mode == "automatic_speed"

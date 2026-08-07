@@ -23,6 +23,12 @@ class FakeVideoVAECache(H3VideoVAECache):
         return np.zeros((num_frames, 8, 12, 3), dtype=np.float32)
 
 
+class FakeStreamingVideoVAECache(H3VideoVAECache):
+    def _decode_normalized_chunks(self, normalized, num_frames):
+        yield np.zeros((2, 8, 12, 3), dtype=np.uint8)
+        yield np.ones((3, 8, 12, 3), dtype=np.uint8)
+
+
 class FailingVideoVAECache(H3VideoVAECache):
     def _decode_normalized(self, normalized, num_frames):
         raise RuntimeError("synthetic decode failure")
@@ -168,6 +174,46 @@ def test_video_vae_failure_unloads(tmp_path):
     assert cache.loaded is False
 
 
+def test_video_vae_stream_writes_bounded_chunks_and_unloads(tmp_path):
+    spec = _video_vae_spec(tmp_path)
+    cache = FakeStreamingVideoVAECache(lambda value: FakeVideoVAE())
+    chunks = []
+
+    result = cache.decode_stream(
+        spec,
+        _latents(spec.video_vae),
+        lambda chunk: chunks.append(chunk.copy()),
+    )
+
+    assert [chunk.shape[0] for chunk in chunks] == [2, 3]
+    assert result.num_frames == 5
+    assert result.peak_rgb8_chunk_bytes == chunks[1].nbytes
+    assert cache.loaded is False
+
+
+def test_video_vae_stream_cancellation_unloads(tmp_path):
+    spec = _video_vae_spec(tmp_path)
+    cache = FakeStreamingVideoVAECache(lambda value: FakeVideoVAE())
+    checks = 0
+
+    def cancel_on_second_chunk():
+        nonlocal checks
+        checks += 1
+        if checks == 2:
+            raise RuntimeError("synthetic stream cancellation")
+
+    with pytest.raises(RuntimeError, match="synthetic stream cancellation"):
+        cache.decode_stream(
+            spec,
+            _latents(spec.video_vae),
+            lambda chunk: None,
+            unload_after=False,
+            check_interrupted=cancel_on_second_chunk,
+        )
+
+    assert cache.loaded is False
+
+
 def test_audio_vae_decode_returns_stereo_timing_and_unloads(tmp_path):
     created = []
 
@@ -273,9 +319,7 @@ def test_audio_vae_mlx_normalization_boundary(tmp_path):
 
     spec = _audio_vae_spec(tmp_path)
     cache = H3AudioVAECache(lambda value: TinyAudioVAE())
-    latents = replace(
-        _latents(audio_vae=spec.audio_vae), audio=mx.zeros((2, 2, 4))
-    )
+    latents = replace(_latents(audio_vae=spec.audio_vae), audio=mx.zeros((2, 2, 4)))
 
     result = cache.decode(spec, latents)
 

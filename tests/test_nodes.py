@@ -56,7 +56,7 @@ def test_sampling_metadata_preserves_exact_prompt(monkeypatch):
 
 
 def test_expected_nodes_are_registered():
-    assert len(NODE_CLASS_MAPPINGS) == 19
+    assert len(NODE_CLASS_MAPPINGS) == 20
     assert "WeeToddH3ComponentLoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3Preflight" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3TextEncode" in NODE_CLASS_MAPPINGS
@@ -72,6 +72,7 @@ def test_expected_nodes_are_registered():
     assert "WeeToddH3AudioVAEDecode" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3UnloadAudioVAE" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3PublishVideoAudio" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3DirectPublishLatents" in NODE_CLASS_MAPPINGS
 
 
 def test_component_loader_returns_lazy_immutable_spec():

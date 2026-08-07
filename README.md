@@ -33,6 +33,9 @@ WeeTodd Nodes is an independent MLX-native MiniMax H3 engine and composable Comf
 - **WeeTodd H3 Unload Audio VAE** explicitly releases a warm process-local audio decoder.
 - **WeeTodd H3 Publish Video + Audio** validates synchronized ComfyUI images and audio, writes a
   collision-safe MP4 atomically, removes temporary files, and emits a JSON metadata sidecar.
+- **WeeTodd H3 Direct Publish Latents (MLX)** stages the video and audio VAEs, streams decoded RGB
+  chunks directly into FFmpeg, and publishes synchronized MP4 plus metadata without retaining a
+  complete ComfyUI `IMAGE` tensor.
 - **WeeTodd H3 Model Loader (MLX)** describes a full or quantized checkpoint and loads it lazily.
 - **WeeTodd H3 Generation Config** selects a resolution tier and aspect ratio, then validates the
   resolved canvas, duration, steps, seed, and AdaLN behavior. Exact custom dimensions remain
@@ -40,7 +43,7 @@ WeeTodd Nodes is an independent MLX-native MiniMax H3 engine and composable Comf
 - **WeeTodd H3 Generate Video + Audio** produces a synchronized MP4 and JSON sidecar.
 - **WeeTodd H3 Unload MLX Runtime** releases the warm pipeline and cached MLX allocations.
 
-The suite currently registers 19 composable nodes. The first release supports
+The suite currently registers 20 composable nodes. The first release supports
 text-to-video-plus-audio. First/last-frame and multi-reference nodes are next; the engine already
 contains much of the keyframe machinery.
 
@@ -128,6 +131,36 @@ These are endpoint measurements on one system, prompt, and seed. They show a mod
 workspace saving rather than a multi-gigabyte reduction because the complete-process figure also
 includes the large resident BF16 model. Strict unloading between the text encoder, transformer,
 and VAEs remains the larger memory-management mechanism.
+
+## Experimental mixed-precision checkpoints
+
+`scripts/convert_mixed_checkpoint.py` converts selected transformer modules into standard MLX
+affine quantized tensors one source tensor at a time. The output is a directly loadable sharded
+checkpoint with a versioned recipe, source SHA-256 identity, tensor inventory, and bounded failure
+cleanup. Conversion does not instantiate a second complete transformer in memory.
+
+The accepted experimental recipe stores the four core projections in blocks 38 through 49 as
+8-bit weights with group size 64. On a harder-motion 640 by 384 validation, it reduced transformer
+sample peak from 42.78 GB to 38.45 GB. Runtime remained within run variance. The result preserved
+the requested action and composition, but it is not numerically equivalent to BF16.
+
+BlockCache composes with this checkpoint. Balanced used five full evaluations and two cache hits,
+reducing transformer time by 27.2 percent; speed used four full evaluations and three hits,
+reducing it by 42.5 percent. Both cache policies introduced larger visible changes than q8 alone,
+so they remain explicit quality/speed choices.
+
+A projection-specific search found a promising approximately 8.02 GB recipe by extending 8-bit
+precision to both MLP projections in blocks 21 through 37. Its short three-evaluation test decoded
+to 31.27 dB video PSNR against BF16. It is a research candidate, not a published default; it still
+requires a longer trajectory and broader perceptual validation.
+
+## Direct MLX publication result
+
+The direct publisher decoded saved 640 by 384 latents into 124 H.264 frames and synchronized 32 kHz
+stereo AAC in 23.6 seconds. MLX peak allocation was 7.27 GB, the largest host RGB chunk was 12.5 MB,
+and measured pre-encode audio/video drift was 8.3 ms. The path atomically publishes the MP4 and JSON
+sidecar, checks interruption between stages, unloads both VAEs, and removes partial files after a
+failure.
 
 ## EasyCache benchmark results
 
