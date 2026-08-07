@@ -55,7 +55,11 @@ def save_sharded(model, out_dir: Path, metadata: dict) -> list[str]:
             weight_map[key] = name
 
     with open(out_dir / "model.safetensors.index.json", "w") as fh:
-        json.dump({"metadata": {"total_size": sum(sizes), **metadata}, "weight_map": weight_map}, fh, indent=2)
+        json.dump(
+            {"metadata": {"total_size": sum(sizes), **metadata}, "weight_map": weight_map},
+            fh,
+            indent=2,
+        )
     return names
 
 
@@ -65,10 +69,13 @@ def main() -> int:
     parser.add_argument("--out", required=True,
                         help="output directory; with several --bits it is the parent, "
                              "and each width lands in <out>/MiniMax-H3-MLX-<n>bit")
-    parser.add_argument("--bits", type=int, nargs="+", default=[4], choices=[2, 3, 4, 6, 8])
+    parser.add_argument("--bits", type=int, nargs="+", default=[4], choices=[2, 3, 4, 5, 6, 8])
     parser.add_argument("--group-size", type=int, default=64)
-    parser.add_argument("--quantize-adaln", action="store_true",
-                        help="also quantize the 13B adaln_proj (off by default; it is dropped at runtime)")
+    parser.add_argument(
+        "--quantize-adaln",
+        action="store_true",
+        help="also quantize the 13B adaln_proj (off by default; it is dropped at runtime)",
+    )
     parser.add_argument("--adaln-bits", type=int, default=8)
     args = parser.parse_args()
 
@@ -100,9 +107,15 @@ def main() -> int:
             quantize_adaln=args.quantize_adaln,
             adaln_bits=args.adaln_bits,
         )
-        print(f"quantizing at {bits}-bit (group {args.group_size})"
-              f"{', adaln at %d-bit' % args.adaln_bits if args.quantize_adaln else ', adaln left in bf16'}",
-              flush=True)
+        adaln_note = (
+            f", adaln at {args.adaln_bits}-bit"
+            if args.quantize_adaln
+            else ", adaln left in bf16"
+        )
+        print(
+            f"quantizing at {bits}-bit (group {args.group_size}){adaln_note}",
+            flush=True,
+        )
         summary = quantize_dit(model, config, verbose=True)
 
         footprint = resident_footprint(model)

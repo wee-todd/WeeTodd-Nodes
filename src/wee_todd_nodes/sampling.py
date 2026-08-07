@@ -136,6 +136,7 @@ class H3TransformerCache:
         blockcache=None,
         trajectory_forecast=None,
         loras: H3LoRAStack | None = None,
+        prepare_stage: Callable[[], None] | None = None,
     ) -> H3Latents:
         spec.validate()
         config.validate()
@@ -176,6 +177,8 @@ class H3TransformerCache:
             raise ValueError(
                 "EasyCache, BlockCache, and Trajectory Forecast are mutually exclusive."
             )
+        if prepare_stage is not None:
+            prepare_stage()
         lora_key = loras.cache_key
         with self._lock:
             if (

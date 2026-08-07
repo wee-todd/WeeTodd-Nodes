@@ -15,6 +15,7 @@ from .decoding import (
 )
 from .preflight import H3ComponentSetSpec, H3PreflightRequest, preflight_components
 from .publishing import publish_synchronized_media
+from .residency import prepare_low_memory_stage
 from .runtime import RUNTIME, H3GenerationConfig, H3ModelSpec
 from .sampling import TRANSFORMER_RUNTIME, H3TransformerSpec
 
@@ -257,6 +258,13 @@ class WeeToddH3TextEncode:
     )
 
     def encode(self, components, prompt, unload_after_encode, config=None):
+        memory_mode = getattr(config, "memory_mode", "normal")
+        staged_releases = ()
+
+        def prepare_stage():
+            nonlocal staged_releases
+            staged_releases = prepare_low_memory_stage("text_encoder", memory_mode)
+
         check_interrupted = None
         try:
             import comfy.model_management
@@ -270,7 +278,8 @@ class WeeToddH3TextEncode:
             H3TextEncoderSpec.from_components(components, load_vision=False),
             prompt,
             unload_after=unload_after_encode
-            or getattr(config, "memory_mode", "normal") == "low_memory_bf16",
+            or memory_mode == "low_memory_bf16",
+            prepare_stage=prepare_stage,
         )
         if check_interrupted is not None:
             check_interrupted()
@@ -278,7 +287,8 @@ class WeeToddH3TextEncode:
             "token_count": conditioning.token_count,
             "vision_loaded": conditioning.load_vision,
             "encoder_resident": TEXT_ENCODER_RUNTIME.loaded,
-            "memory_mode": getattr(config, "memory_mode", "normal"),
+            "memory_mode": memory_mode,
+            "staged_releases": list(staged_releases),
         }
         return conditioning, json.dumps(info, indent=2, sort_keys=True)
 
@@ -345,6 +355,12 @@ class WeeToddH3Sample:
             raise ValueError(
                 "Connect only one of EasyCache, BlockCache, or Trajectory Forecast."
             )
+        staged_releases = ()
+
+        def prepare_stage():
+            nonlocal staged_releases
+            staged_releases = prepare_low_memory_stage("transformer", config.memory_mode)
+
         progress = None
         check_interrupted = None
         try:
@@ -372,6 +388,7 @@ class WeeToddH3Sample:
             blockcache=blockcache,
             trajectory_forecast=trajectory_forecast,
             loras=loras,
+            prepare_stage=prepare_stage,
         )
         info = {
             "prompt": conditioning.prompt,
@@ -407,6 +424,7 @@ class WeeToddH3Sample:
             "attention_query_chunk_size": config.attention_query_chunk_size,
             "compute_dtype": "bfloat16",
             "preview_policy": "none",
+            "staged_releases": list(staged_releases),
         }
         return latents, json.dumps(info, indent=2, sort_keys=True)
 
@@ -728,6 +746,14 @@ class WeeToddH3VideoVAEDecode:
     )
 
     def decode(self, components, latents, unload_after_decode):
+        staged_releases = ()
+
+        def prepare_stage():
+            nonlocal staged_releases
+            staged_releases = prepare_low_memory_stage(
+                "video_vae", latents.generation_config.memory_mode
+            )
+
         check_interrupted = None
         try:
             import comfy.model_management
@@ -740,6 +766,7 @@ class WeeToddH3VideoVAEDecode:
             latents,
             unload_after=unload_after_decode,
             check_interrupted=check_interrupted,
+            prepare_stage=prepare_stage,
         )
         import torch
 
@@ -752,9 +779,8 @@ class WeeToddH3VideoVAEDecode:
             "decode_seconds": result.decode_seconds,
             "video_vae_resident": VIDEO_VAE_RUNTIME.loaded,
             "memory_mode": latents.generation_config.memory_mode,
-            "tile_decode_batch": 1
-            if latents.generation_config.memory_mode == "low_memory_bf16"
-            else None,
+            "tile_decode_batch": result.decode_batch,
+            "staged_releases": list(staged_releases),
         }
         return frames, json.dumps(info, indent=2, sort_keys=True)
 
@@ -798,6 +824,14 @@ class WeeToddH3AudioVAEDecode:
     )
 
     def decode(self, components, latents, unload_after_decode):
+        staged_releases = ()
+
+        def prepare_stage():
+            nonlocal staged_releases
+            staged_releases = prepare_low_memory_stage(
+                "audio_vae", latents.generation_config.memory_mode
+            )
+
         check_interrupted = None
         try:
             import comfy.model_management
@@ -810,6 +844,7 @@ class WeeToddH3AudioVAEDecode:
             latents,
             unload_after=unload_after_decode,
             check_interrupted=check_interrupted,
+            prepare_stage=prepare_stage,
         )
         import torch
 
@@ -827,6 +862,7 @@ class WeeToddH3AudioVAEDecode:
             "decode_seconds": result.decode_seconds,
             "audio_vae_resident": AUDIO_VAE_RUNTIME.loaded,
             "memory_mode": latents.generation_config.memory_mode,
+            "staged_releases": list(staged_releases),
         }
         return audio, json.dumps(info, indent=2, sort_keys=True)
 
@@ -1147,6 +1183,7 @@ class WeeToddH3Generate:
 
     def generate(self, model, config, prompt, filename_prefix):
         config.validate()
+        prepare_low_memory_stage("pipeline", config.memory_mode)
         progress = None
         check_interrupted = None
         try:

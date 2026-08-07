@@ -65,6 +65,11 @@ class H3RuntimeCache:
         self._spec: H3ModelSpec | None = None
         self._pipeline: Any = None
 
+    @property
+    def loaded(self) -> bool:
+        with self._lock:
+            return self._pipeline is not None
+
     def get(self, spec: H3ModelSpec):
         spec.validate()
         with self._lock:

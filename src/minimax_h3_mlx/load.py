@@ -177,6 +177,7 @@ def load_video_vae(model_dir: str | Path, strict: bool = True):
     ``(C_out, C_in, kD, kH, kW)`` and MLX wants ``(C_out, kD, kH, kW, C_in)``.
     """
     from .video_vae import VideoVAE, VideoVAEConfig
+    from .video_vae_checkpoint import VIDEO_VAE_SOURCE_LAYOUT, prepare_video_vae_tensor
 
     model_dir = Path(model_dir)
     with open(model_dir / "config.json") as fh:
@@ -215,18 +216,7 @@ def load_video_vae(model_dir: str | Path, strict: bool = True):
         if key not in expected:
             unexpected.append(key)
             continue
-        if tensor.ndim == 5:
-            # Channels-last conv weights, materialized one at a time **on the CPU stream**.
-            #
-            # Deferring 10 GB of transposes into a single graph overruns the Metal command-buffer
-            # deadline outright. Doing them individually on the GPU is enough on an idle machine but
-            # still fails when something else is competing for the device — which is exactly when a
-            # user is most likely to be loading a model. The CPU stream has no such deadline. It
-            # trades some load time for not failing — a one-time cost on a path that otherwise
-            # aborts a multi-hour run at the last component.
-            with mx.stream(mx.cpu):
-                tensor = mx.contiguous(tensor.transpose(0, 2, 3, 4, 1))
-                mx.eval(tensor)
+        tensor = prepare_video_vae_tensor(tensor, VIDEO_VAE_SOURCE_LAYOUT)
         weights[key] = tensor
 
     missing = sorted(expected - weights.keys())
@@ -241,11 +231,13 @@ def load_video_vae(model_dir: str | Path, strict: bool = True):
 
 
 def load_compact_video_vae(path: str | Path, strict: bool = True):
-    """Load ddalcu's self-describing single-file video VAE export."""
+    """Load a self-describing single-file video VAE export."""
     from .video_vae import VideoVAE, VideoVAEConfig
+    from .video_vae_checkpoint import prepare_video_vae_tensor, validate_video_vae_wrapper
 
     path = Path(path)
     wrapper = _metadata_json(safetensor_metadata(path), "minimax_h3_video_vae")
+    stored_layout = validate_video_vae_wrapper(wrapper)
     source = wrapper["source_config"]
     ch = source["ch"]
     config = VideoVAEConfig(
@@ -277,12 +269,7 @@ def load_compact_video_vae(path: str | Path, strict: bool = True):
         if key not in expected:
             unexpected.append(key)
             continue
-        if tensor.ndim == 5:
-            # Same hazard, same fix as `load_video_vae` above — and this is the loader the staged
-            # runner actually calls, so the hardening has to be here or it never runs.
-            with mx.stream(mx.cpu):
-                tensor = mx.contiguous(tensor.transpose(0, 2, 3, 4, 1))
-                mx.eval(tensor)
+        tensor = prepare_video_vae_tensor(tensor, stored_layout)
         weights[key] = tensor
 
     missing = sorted(expected - weights.keys())

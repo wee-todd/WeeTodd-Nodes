@@ -273,6 +273,7 @@ class MiniMaxH3Pipeline:
         easycache_config=None,
         blockcache_config=None,
         trajectory_forecast_config=None,
+        diagnostics=None,
     ) -> LatentResult:
         """Sample synchronized text-only video and audio latents without loading either VAE."""
         run_started = time.perf_counter()
@@ -381,6 +382,12 @@ class MiniMaxH3Pipeline:
             )
             blockcache_hit = False
             if reused is None:
+                if diagnostics is not None and hasattr(diagnostics, "begin_evaluation"):
+                    diagnostics.begin_evaluation(
+                        index,
+                        timestep=float(timestep),
+                        audio_timestep=float(audio_sched.timesteps[index].item()),
+                    )
                 video_pred, audio_pred = self.dit(
                     video_input,
                     audio_input,
@@ -398,6 +405,7 @@ class MiniMaxH3Pipeline:
                     forecast_coordinate=float(timestep),
                     step_index=index,
                     total_steps=total_steps,
+                    diagnostics=diagnostics,
                 )
                 transformer_evaluations += int(
                     (blockcache is None or not blockcache.last_was_hit)
@@ -440,6 +448,9 @@ class MiniMaxH3Pipeline:
                 )
         if step_callback is not None:
             step_callback(total_steps, total_steps)
+
+        if diagnostics is not None:
+            diagnostics.write_metadata()
 
         video_latents = unpatchify_video_tokens(
             video_rows,
