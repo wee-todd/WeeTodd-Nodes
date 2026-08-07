@@ -65,7 +65,7 @@ def test_blockcache_auto_policies_resolve_bounded_thresholds(mode, lower, upper)
 
 
 def test_blockcache_rejects_invalid_configuration():
-    with pytest.raises(ValueError, match="either EasyCache or BlockCache"):
+    with pytest.raises(ValueError, match="Connect only one"):
         from wee_todd_nodes.nodes import WeeToddH3Sample
 
         WeeToddH3Sample().sample(

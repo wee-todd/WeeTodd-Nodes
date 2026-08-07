@@ -144,6 +144,7 @@ class Attention(nn.Module):
         self.q_norm = nn.RMSNorm(config.attention_head_dim, eps=config.qk_norm_eps)
         self.k_norm = nn.RMSNorm(config.attention_head_dim, eps=config.qk_norm_eps)
         self.out_proj = nn.Linear(config.inner_dim, config.hidden_size, bias=False)
+        self.query_chunk_size: int | None = None
 
     def __call__(
         self,
@@ -164,7 +165,22 @@ class Attention(nn.Module):
             q = apply_rotary(q, *rotary)
             k = apply_rotary(k, *rotary)
 
-        out = mx.fast.scaled_dot_product_attention(q, k, v, scale=self.scale, mask=mask)
+        chunk = self.query_chunk_size
+        if chunk is None or q.shape[-2] <= chunk:
+            out = mx.fast.scaled_dot_product_attention(q, k, v, scale=self.scale, mask=mask)
+        else:
+            pieces = []
+            for start in range(0, q.shape[-2], chunk):
+                stop = min(start + chunk, q.shape[-2])
+                chunk_mask = mask
+                if mask is not None and mask.shape[-2] == q.shape[-2]:
+                    chunk_mask = mask[..., start:stop, :]
+                piece = mx.fast.scaled_dot_product_attention(
+                    q[..., start:stop, :], k, v, scale=self.scale, mask=chunk_mask
+                )
+                mx.eval(piece)
+                pieces.append(piece)
+            out = mx.concatenate(pieces, axis=-2)
         out = out.transpose(0, 2, 1, 3).reshape(B, S, self.heads * self.head_dim)
         return self.out_proj(out.astype(x.dtype))
 
@@ -338,6 +354,15 @@ class MiniMaxH3DiT(nn.Module):
         # Rotary is a computed buffer, not a parameter (`rope.inv_freq` is recomputed bit-exactly).
         self.rope = RotaryPosEmbed3D(config)
 
+    def set_attention_query_chunk_size(self, chunk_size: int | None) -> None:
+        """Select dense attention or memory-bounded query chunks for every attention layer."""
+        if chunk_size is not None and chunk_size < 1:
+            raise ValueError("attention query chunk size must be positive")
+        for block in self.token_refiner.blocks:
+            block.attn.query_chunk_size = chunk_size
+        for block in self.blocks:
+            block.attn.query_chunk_size = chunk_size
+
     def embed_timesteps(self, timesteps: mx.array) -> mx.array:
         """Return original MLP embeddings or linearly interpolated pruned AdaLN coordinates."""
         if self.config.adaln_curve_grid is None:
@@ -433,6 +458,8 @@ class MiniMaxH3DiT(nn.Module):
         modulation_cache: "ModulationCache | None" = None,
         mask: mx.array | None = None,
         blockcache=None,
+        trajectory_forecast=None,
+        forecast_coordinate: float | None = None,
         step_index: int = 0,
         total_steps: int = 1,
     ) -> tuple[mx.array, mx.array]:
@@ -454,6 +481,20 @@ class MiniMaxH3DiT(nn.Module):
             ``(video_velocity, audio_velocity)`` in the row order of ``video_indices`` /
             ``audio_indices``.
         """
+        if trajectory_forecast is not None and forecast_coordinate is not None:
+            predicted = trajectory_forecast.try_predict(
+                forecast_coordinate, step_index, total_steps
+            )
+            if predicted is not None:
+                temb = self.embed_timesteps(timestep)
+                return self._project_target_features(
+                    predicted[0],
+                    predicted[1],
+                    temb,
+                    timestep_indices[video_indices],
+                    timestep_indices[audio_indices],
+                )
+
         x, temb, adaln_indices, rotary = self.pack_inputs(
             video_latents,
             audio_latents,
@@ -496,8 +537,34 @@ class MiniMaxH3DiT(nn.Module):
                 audio_indices,
             )
 
+        if trajectory_forecast is not None and forecast_coordinate is not None:
+            trajectory_forecast.update(
+                forecast_coordinate,
+                x[:, video_indices],
+                x[:, audio_indices],
+            )
+
         # 4. Both heads run over every row, then each modality's rows are selected.
         x = self.final_layer.norm_out(x, temb, timestep_indices)
         video_out = self.final_layer.video_out(x.astype(param_dtype(self.final_layer.video_out)))
         audio_out = self.final_layer.audio_out(x.astype(param_dtype(self.final_layer.audio_out)))
         return video_out[:, video_indices], audio_out[:, audio_indices]
+
+    def _project_target_features(
+        self,
+        video_hidden,
+        audio_hidden,
+        temb,
+        video_timestep_indices,
+        audio_timestep_indices,
+    ):
+        """Run current exact output modulation and heads over compact target features."""
+        video = self.final_layer.norm_out(video_hidden, temb, video_timestep_indices)
+        audio = self.final_layer.norm_out(audio_hidden, temb, audio_timestep_indices)
+        video = self.final_layer.video_out(
+            video.astype(param_dtype(self.final_layer.video_out))
+        )
+        audio = self.final_layer.audio_out(
+            audio.astype(param_dtype(self.final_layer.audio_out))
+        )
+        return video, audio

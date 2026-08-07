@@ -17,6 +17,7 @@ from minimax_h3_mlx.config import TAG_AUDIO, TAG_TEXT, TAG_VIDEO, DiTConfig
 from minimax_h3_mlx.dit import MiniMaxH3DiT
 from minimax_h3_mlx.easycache import H3EasyCacheConfig
 from minimax_h3_mlx.pipeline import MiniMaxH3Pipeline
+from minimax_h3_mlx.trajectory_forecast import H3TrajectoryForecastConfig
 
 
 def tiny_config() -> DiTConfig:
@@ -96,6 +97,20 @@ def _forward_fixture():
 
 def test_forward_shapes():
     _forward_fixture()
+
+
+def test_query_chunked_attention_matches_dense_within_bf16_precision():
+    dit, _, args = _forward_fixture()
+    dense_v, dense_a = dit(*args)
+    mx.eval(dense_v, dense_a)
+
+    dit.set_attention_query_chunk_size(4)
+    chunked_v, chunked_a = dit(*args)
+    mx.eval(chunked_v, chunked_a)
+
+    np.testing.assert_allclose(np.asarray(chunked_v), np.asarray(dense_v), rtol=2e-2, atol=2e-2)
+    np.testing.assert_allclose(np.asarray(chunked_a), np.asarray(dense_a), rtol=2e-2, atol=2e-2)
+    assert all(block.attn.query_chunk_size == 4 for block in dit.blocks)
 
 
 def test_modulation_cache_matches_live_projection():
@@ -209,6 +224,35 @@ def test_h3_blockcache_reuses_later_blocks_but_runs_each_sampling_step():
     assert result.blockcache_hits > 0
     assert result.transformer_evaluations + result.blockcache_hits == 7
     assert result.blockcache_cache_bytes > 0
+    assert result.video_latents.shape == (1, cfg.latents_dim, 37, 2, 2)
+    assert result.audio_latents.shape == (2, cfg.audio_latents_dim, 207)
+
+
+def test_h3_trajectory_forecast_runs_current_heads_on_turbo_length_schedule():
+    cfg = tiny_config()
+    mx.random.seed(9)
+    result = MiniMaxH3Pipeline(MiniMaxH3DiT(cfg), None, None, None).sample_latents(
+        mx.random.normal((1, 3, cfg.text_dim)),
+        np.full((3,), TAG_TEXT, dtype=np.int32),
+        duration_seconds=5.0,
+        num_inference_steps=5,
+        height=32,
+        width=32,
+        drop_adaln=False,
+        verbose=False,
+        trajectory_forecast_config=H3TrajectoryForecastConfig(
+            mode="manual",
+            forecast_strength=0.75,
+            warmup_steps=2,
+            tail_actual_steps=1,
+            max_forecast_fraction=0.5,
+            max_delta_ratio=100.0,
+        ),
+    )
+
+    assert result.trajectory_forecasts == 1
+    assert result.transformer_evaluations == 3
+    assert result.trajectory_history_bytes > 0
     assert result.video_latents.shape == (1, cfg.latents_dim, 37, 2, 2)
     assert result.audio_latents.shape == (2, cfg.audio_latents_dim, 207)
 

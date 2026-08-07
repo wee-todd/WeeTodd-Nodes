@@ -118,6 +118,19 @@ def test_video_vae_cache_reuses_equal_spec(tmp_path):
     assert cache.loaded is True
 
 
+def test_low_memory_mode_forces_video_vae_unload(tmp_path):
+    spec = _video_vae_spec(tmp_path)
+    cache = FakeVideoVAECache(lambda value: FakeVideoVAE())
+    latents = replace(
+        _latents(spec.video_vae),
+        generation_config=H3GenerationConfig(memory_mode="low_memory_bf16"),
+    )
+
+    cache.decode(spec, latents, unload_after=False)
+
+    assert cache.loaded is False
+
+
 def test_video_vae_decode_rejects_mismatched_provenance(tmp_path):
     spec = _video_vae_spec(tmp_path)
     cache = FakeVideoVAECache(lambda value: FakeVideoVAE())

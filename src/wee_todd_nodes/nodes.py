@@ -243,7 +243,8 @@ class WeeToddH3TextEncode:
                 "components": ("WEETODD_H3_COMPONENTS",),
                 "prompt": ("STRING", {"multiline": True, "dynamicPrompts": True}),
                 "unload_after_encode": ("BOOLEAN", {"default": True}),
-            }
+            },
+            "optional": {"config": ("WEETODD_H3_CONFIG",)},
         }
 
     RETURN_TYPES = ("WEETODD_H3_CONDITIONING", "STRING")
@@ -255,7 +256,7 @@ class WeeToddH3TextEncode:
         "The encoder can unload after it produces conditioning."
     )
 
-    def encode(self, components, prompt, unload_after_encode):
+    def encode(self, components, prompt, unload_after_encode, config=None):
         check_interrupted = None
         try:
             import comfy.model_management
@@ -268,7 +269,8 @@ class WeeToddH3TextEncode:
         conditioning = TEXT_ENCODER_RUNTIME.encode(
             H3TextEncoderSpec.from_components(components, load_vision=False),
             prompt,
-            unload_after=unload_after_encode,
+            unload_after=unload_after_encode
+            or getattr(config, "memory_mode", "normal") == "low_memory_bf16",
         )
         if check_interrupted is not None:
             check_interrupted()
@@ -276,6 +278,7 @@ class WeeToddH3TextEncode:
             "token_count": conditioning.token_count,
             "vision_loaded": conditioning.load_vision,
             "encoder_resident": TEXT_ENCODER_RUNTIME.loaded,
+            "memory_mode": getattr(config, "memory_mode", "normal"),
         }
         return conditioning, json.dumps(info, indent=2, sort_keys=True)
 
@@ -311,6 +314,7 @@ class WeeToddH3Sample:
             "optional": {
                 "easycache": ("WEETODD_H3_EASYCACHE",),
                 "blockcache": ("WEETODD_H3_BLOCKCACHE",),
+                "trajectory_forecast": ("WEETODD_H3_TRAJECTORY_FORECAST",),
                 "loras": ("WEETODD_H3_LORAS",),
             },
         }
@@ -332,10 +336,15 @@ class WeeToddH3Sample:
         unload_after_sample,
         easycache=None,
         blockcache=None,
+        trajectory_forecast=None,
         loras=None,
     ):
-        if easycache is not None and blockcache is not None:
-            raise ValueError("Connect either EasyCache or BlockCache, not both.")
+        if sum(
+            value is not None for value in (easycache, blockcache, trajectory_forecast)
+        ) > 1:
+            raise ValueError(
+                "Connect only one of EasyCache, BlockCache, or Trajectory Forecast."
+            )
         progress = None
         check_interrupted = None
         try:
@@ -361,6 +370,7 @@ class WeeToddH3Sample:
             step_callback=on_step,
             easycache=easycache,
             blockcache=blockcache,
+            trajectory_forecast=trajectory_forecast,
             loras=loras,
         )
         info = {
@@ -380,11 +390,23 @@ class WeeToddH3Sample:
             ),
             "blockcache_cache_bytes": getattr(latents, "blockcache_cache_bytes", 0),
             "blockcache": asdict(blockcache) if blockcache is not None else None,
+            "trajectory_forecasts": getattr(latents, "trajectory_forecasts", 0),
+            "trajectory_fallbacks": getattr(latents, "trajectory_fallbacks", 0),
+            "trajectory_history_bytes": getattr(
+                latents, "trajectory_history_bytes", 0
+            ),
+            "trajectory_forecast": (
+                asdict(trajectory_forecast) if trajectory_forecast is not None else None
+            ),
             "loras": loras.metadata() if loras is not None else [],
             "lora_report": list(getattr(latents, "lora_report", ())),
             "seconds_per_evaluation": latents.seconds_per_evaluation,
             "total_seconds": latents.total_seconds,
             "transformer_resident": TRANSFORMER_RUNTIME.loaded,
+            "memory_mode": config.memory_mode,
+            "attention_query_chunk_size": config.attention_query_chunk_size,
+            "compute_dtype": "bfloat16",
+            "preview_policy": "none",
         }
         return latents, json.dumps(info, indent=2, sort_keys=True)
 
@@ -519,6 +541,72 @@ class WeeToddH3EasyCache:
         return (config,)
 
 
+class WeeToddH3TrajectoryForecast:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "mode": (
+                    [
+                        "manual",
+                        "automatic_conservative",
+                        "automatic_balanced",
+                        "automatic_speed",
+                    ],
+                    {"default": "automatic_balanced"},
+                ),
+                "forecast_strength": (
+                    "FLOAT",
+                    {"default": 0.75, "min": 0.0, "max": 1.0, "step": 0.05},
+                ),
+                "warmup_steps": ("INT", {"default": 2, "min": 2, "max": 20}),
+                "tail_actual_steps": ("INT", {"default": 1, "min": 1, "max": 10}),
+                "max_history": ("INT", {"default": 2, "min": 2, "max": 2}),
+                "max_forecast_fraction": (
+                    "FLOAT",
+                    {"default": 0.35, "min": 0.0, "max": 0.5, "step": 0.05},
+                ),
+                "max_delta_ratio": (
+                    "FLOAT",
+                    {"default": 1.75, "min": 0.0, "max": 5.0, "step": 0.05},
+                ),
+            }
+        }
+
+    RETURN_TYPES = ("WEETODD_H3_TRAJECTORY_FORECAST",)
+    RETURN_NAMES = ("trajectory_forecast",)
+    FUNCTION = "configure"
+    CATEGORY = "WeeTodd/H3/sampling"
+    DESCRIPTION = (
+        "Experimentally forecast compact post-transformer H3 video and audio features. "
+        "Current timestep output heads still run on every step. Turbo LoRA is supported."
+    )
+
+    def configure(
+        self,
+        mode,
+        forecast_strength,
+        warmup_steps,
+        tail_actual_steps,
+        max_history,
+        max_forecast_fraction,
+        max_delta_ratio,
+    ):
+        from minimax_h3_mlx.trajectory_forecast import H3TrajectoryForecastConfig
+
+        config = H3TrajectoryForecastConfig(
+            mode=mode,
+            forecast_strength=forecast_strength,
+            warmup_steps=warmup_steps,
+            tail_actual_steps=tail_actual_steps,
+            max_history=max_history,
+            max_forecast_fraction=max_forecast_fraction,
+            max_delta_ratio=max_delta_ratio,
+        )
+        config.validate()
+        return (config,)
+
+
 class WeeToddH3BlockCache:
     @classmethod
     def INPUT_TYPES(cls):
@@ -553,6 +641,16 @@ class WeeToddH3BlockCache:
                     "FLOAT",
                     {"default": 0.35, "min": 0.0, "max": 0.6, "step": 0.05},
                 ),
+                "allow_turbo_experimental": (
+                    "BOOLEAN",
+                    {
+                        "default": False,
+                        "tooltip": (
+                            "Experimental: permit BlockCache with a Turbo LoRA. This combines "
+                            "two approximations and may change motion, detail, or audio."
+                        ),
+                    },
+                ),
             }
         }
 
@@ -574,6 +672,7 @@ class WeeToddH3BlockCache:
         end_percent,
         auto_multiplier,
         max_hit_fraction,
+        allow_turbo_experimental=False,
     ):
         from minimax_h3_mlx.blockcache import H3BlockCacheConfig
 
@@ -584,6 +683,7 @@ class WeeToddH3BlockCache:
             end_percent=end_percent,
             auto_multiplier=auto_multiplier,
             max_hit_fraction=max_hit_fraction,
+            allow_turbo_experimental=allow_turbo_experimental,
         )
         config.validate()
         return (config,)
@@ -651,6 +751,10 @@ class WeeToddH3VideoVAEDecode:
             "fps": result.fps,
             "decode_seconds": result.decode_seconds,
             "video_vae_resident": VIDEO_VAE_RUNTIME.loaded,
+            "memory_mode": latents.generation_config.memory_mode,
+            "tile_decode_batch": 1
+            if latents.generation_config.memory_mode == "low_memory_bf16"
+            else None,
         }
         return frames, json.dumps(info, indent=2, sort_keys=True)
 
@@ -722,6 +826,7 @@ class WeeToddH3AudioVAEDecode:
             "fps": result.fps,
             "decode_seconds": result.decode_seconds,
             "audio_vae_resident": AUDIO_VAE_RUNTIME.loaded,
+            "memory_mode": latents.generation_config.memory_mode,
         }
         return audio, json.dumps(info, indent=2, sort_keys=True)
 
@@ -955,6 +1060,21 @@ class WeeToddH3GenerationConfig:
                     {"default": 768, "min": 32, "max": 4096, "step": 32, "advanced": True},
                 ),
                 "drop_adaln": ("BOOLEAN", {"default": True}),
+                "memory_mode": (
+                    ["normal", "low_memory_bf16"],
+                    {"default": "normal", "advanced": True},
+                ),
+                "attention_chunk_size": (
+                    ["automatic", "512", "1024", "2048"],
+                    {
+                        "default": "automatic",
+                        "advanced": True,
+                        "tooltip": (
+                            "Used only by low_memory_bf16. Automatic selects the measured "
+                            "512-row policy. Larger values are diagnostic overrides."
+                        ),
+                    },
+                ),
             }
         }
 
@@ -979,6 +1099,8 @@ class WeeToddH3GenerationConfig:
         custom_width,
         custom_height,
         drop_adaln,
+        memory_mode="normal",
+        attention_chunk_size="automatic",
     ):
         width, height = _resolve_h3_resolution(
             resolution_mode,
@@ -997,6 +1119,8 @@ class WeeToddH3GenerationConfig:
             resolution_mode=resolution_mode,
             resolution_tier=resolution_tier if resolution_mode == "preset" else "custom",
             aspect_ratio=aspect_ratio if resolution_mode == "preset" else "custom",
+            memory_mode=memory_mode,
+            attention_chunk_size=attention_chunk_size,
         )
         config.validate()
         return config, f"{width} x {height} pixels"
@@ -1090,6 +1214,7 @@ NODE_CLASS_MAPPINGS = {
     "WeeToddH3Sample": WeeToddH3Sample,
     "WeeToddH3LoRALoader": WeeToddH3LoRALoader,
     "WeeToddH3EasyCache": WeeToddH3EasyCache,
+    "WeeToddH3TrajectoryForecast": WeeToddH3TrajectoryForecast,
     "WeeToddH3BlockCache": WeeToddH3BlockCache,
     "WeeToddH3UnloadTransformer": WeeToddH3UnloadTransformer,
     "WeeToddH3VideoVAEDecode": WeeToddH3VideoVAEDecode,
@@ -1110,6 +1235,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "WeeToddH3Sample": "WeeTodd H3 Sample Video + Audio Latents",
     "WeeToddH3LoRALoader": "WeeTodd H3 LoRA Loader (MLX)",
     "WeeToddH3EasyCache": "WeeTodd H3 EasyCache (MLX)",
+    "WeeToddH3TrajectoryForecast": "WeeTodd H3 Trajectory Forecast (MLX)",
     "WeeToddH3BlockCache": "WeeTodd H3 BlockCache (MLX)",
     "WeeToddH3UnloadTransformer": "WeeTodd H3 Unload Transformer",
     "WeeToddH3VideoVAEDecode": "WeeTodd H3 Decode Video VAE",

@@ -18,6 +18,8 @@ def test_t2va_api_prompt_uses_registered_nodes_and_staged_unloading():
     assert prompt["3"]["inputs"]["resolution_mode"] == "preset"
     assert prompt["3"]["inputs"]["resolution_tier"] == "384P (fast smoke)"
     assert prompt["3"]["inputs"]["aspect_ratio"] == "16:9"
+    assert prompt["3"]["inputs"]["memory_mode"] == "normal"
+    assert prompt["3"]["inputs"]["attention_chunk_size"] == "automatic"
     assert prompt["9"]["inputs"] == {
         "mode": "manual",
         "reuse_threshold": 0.2,
@@ -51,6 +53,8 @@ def test_t2va_ui_workflow_links_are_consistent():
         640,
         384,
         True,
+        "normal",
+        "automatic",
     ]
     for link_id, origin_id, origin_slot, target_id, target_slot, link_type in links.values():
         assert link_id in nodes[origin_id]["outputs"][origin_slot]["links"]

@@ -17,6 +17,7 @@ class H3BlockCacheConfig:
     subsample_factor: int = 8
     auto_multiplier: float = 1.4
     max_hit_fraction: float = 0.35
+    allow_turbo_experimental: bool = False
 
     def validate(self) -> None:
         modes = {

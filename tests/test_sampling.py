@@ -5,10 +5,20 @@ from types import SimpleNamespace
 import mlx.core as mx
 import pytest
 
+from minimax_h3_mlx.blockcache import H3BlockCacheConfig
+from minimax_h3_mlx.trajectory_forecast import H3TrajectoryForecastConfig
 from wee_todd_nodes.conditioning import H3Conditioning, H3TextEncoderSpec
 from wee_todd_nodes.lora import H3LoRASpec, H3LoRAStack
 from wee_todd_nodes.runtime import H3GenerationConfig
 from wee_todd_nodes.sampling import H3TransformerCache, H3TransformerSpec
+
+
+class FakeDiT:
+    def __init__(self):
+        self.query_chunk_size = None
+
+    def set_attention_query_chunk_size(self, value):
+        self.query_chunk_size = value
 
 
 class FakeSampler:
@@ -16,7 +26,7 @@ class FakeSampler:
         self.spec = spec
         self.fail = fail
         self.calls = []
-        self.dit = object()
+        self.dit = FakeDiT()
 
     def sample_latents(self, embeddings, token_tags, **kwargs):
         self.calls.append((embeddings, token_tags, kwargs))
@@ -125,6 +135,18 @@ def test_transformer_cache_reuses_only_equal_schedule(tmp_path: Path):
     assert cache.loaded is True
 
 
+def test_low_memory_mode_forces_transformer_unload(tmp_path: Path):
+    cache = H3TransformerCache(lambda spec: FakeSampler(spec))
+    spec = _spec(tmp_path)
+    cache.sample(
+        spec,
+        _conditioning(spec),
+        H3GenerationConfig(steps=3, memory_mode="low_memory_bf16"),
+        unload_after=False,
+    )
+    assert cache.loaded is False
+
+
 def _lora_stack(tmp_path: Path) -> H3LoRAStack:
     path = tmp_path / "generic.safetensors"
     mx.save_safetensors(
@@ -136,6 +158,11 @@ def _lora_stack(tmp_path: Path) -> H3LoRAStack:
         metadata={"base_model": "MiniMax-H3"},
     )
     return H3LoRAStack().append(H3LoRASpec(str(path), profile="standard"))
+
+
+def _turbo_lora_stack(tmp_path: Path) -> H3LoRAStack:
+    stack = _lora_stack(tmp_path)
+    return H3LoRAStack((H3LoRASpec(stack.adapters[0].path, profile="turbo"),))
 
 
 def test_transformer_cache_reloads_when_lora_stack_changes(tmp_path: Path, monkeypatch):
@@ -182,6 +209,51 @@ def test_lora_application_failure_releases_transformer(tmp_path: Path, monkeypat
         )
 
     assert not cache.loaded
+
+
+def test_turbo_blockcache_requires_explicit_experimental_opt_in(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr("minimax_h3_mlx.lora.apply_lora_stack", lambda dit, requests: ())
+    cache = H3TransformerCache(lambda spec: FakeSampler(spec))
+    spec = _spec(tmp_path)
+    conditioning = _conditioning(spec)
+    config = H3GenerationConfig(steps=5)
+    turbo = _turbo_lora_stack(tmp_path)
+
+    with pytest.raises(ValueError, match="explicit experimental opt-in"):
+        cache.sample(spec, conditioning, config, loras=turbo, blockcache=H3BlockCacheConfig())
+
+    allowed = H3BlockCacheConfig(allow_turbo_experimental=True)
+    result = cache.sample(spec, conditioning, config, loras=turbo, blockcache=allowed)
+
+    assert result.transformer_evaluations == 2
+    assert cache.loaded is False
+
+
+def test_turbo_trajectory_forecast_is_supported_and_exclusive(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr("minimax_h3_mlx.lora.apply_lora_stack", lambda dit, requests: ())
+    cache = H3TransformerCache(lambda spec: FakeSampler(spec))
+    spec = _spec(tmp_path)
+    conditioning = _conditioning(spec)
+    config = H3GenerationConfig(steps=5)
+    forecast = H3TrajectoryForecastConfig()
+
+    result = cache.sample(
+        spec,
+        conditioning,
+        config,
+        loras=_turbo_lora_stack(tmp_path),
+        trajectory_forecast=forecast,
+    )
+    assert result.transformer_evaluations == 2
+
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        cache.sample(
+            spec,
+            conditioning,
+            config,
+            trajectory_forecast=forecast,
+            blockcache=H3BlockCacheConfig(),
+        )
 
 
 def test_transformer_failure_releases_sampler(tmp_path: Path):

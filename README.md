@@ -21,6 +21,9 @@ WeeTodd Nodes is an independent MLX-native MiniMax H3 engine and composable Comf
   bounded manual or automatic policy.
 - **WeeTodd H3 BlockCache (MLX)** always runs block zero and the current output heads, then reuses
   the cached video and audio residual of later blocks when both modality checks permit reuse.
+- **WeeTodd H3 Trajectory Forecast (MLX)** predicts a bounded future joint video/audio transformer
+  result from recent real evaluations. It keeps current timestep output processing active and
+  falls back to a real evaluation when its safety checks reject a forecast.
 - **WeeTodd H3 Unload Transformer** releases the transformer-only sampler and MLX cache.
 - **WeeTodd H3 Decode Video VAE** converts normalized video latents to ComfyUI `IMAGE` frames. It
   checks component provenance and can unload the final video VAE after decoding.
@@ -37,7 +40,27 @@ WeeTodd Nodes is an independent MLX-native MiniMax H3 engine and composable Comf
 - **WeeTodd H3 Generate Video + Audio** produces a synchronized MP4 and JSON sidecar.
 - **WeeTodd H3 Unload MLX Runtime** releases the warm pipeline and cached MLX allocations.
 
-The first release supports text-to-video-plus-audio. First/last-frame and multi-reference nodes are next; the engine already contains much of the keyframe machinery.
+The suite currently registers 19 composable nodes. The first release supports
+text-to-video-plus-audio. First/last-frame and multi-reference nodes are next; the engine already
+contains much of the keyframe machinery.
+
+## Acceleration and memory controls
+
+The sampler exposes three optional acceleration strategies. **EasyCache** reuses complete joint
+predictions, **BlockCache** keeps the first block and output heads live while reusing later-block
+residuals, and **Trajectory Forecast** extrapolates a compact joint video/audio feature history.
+They are intentionally mutually exclusive so a workflow has one clear approximation policy.
+
+Each strategy offers explicit controls and automatic conservative, balanced, and speed-oriented
+policies where applicable. Cache hits and forecasts can change generated pixels or audio; they are
+performance/quality tradeoffs, not mathematically exact execution. Turbo LoRA can be combined with
+Trajectory Forecast, although the combined result remains experimental.
+
+For memory-constrained systems, select `low_memory_bf16`. This preserves BF16 model precision and
+uses staged component unloading, tile-serial VAE decoding, explicit MLX materialization boundaries,
+and chunked attention queries. `automatic` currently selects a 512-token query chunk. Manual 512,
+1024, and 2048-token choices are available for machine-specific tuning. Low-memory execution is
+intended to preserve the generation result; only scheduling and peak live allocations change.
 
 ## Generic LoRA and Turbo LoRA support
 
@@ -83,8 +106,28 @@ Preflight before generation.
 
 The first T2VA baseline uses the unquantized reference precision policy. Most transformer weights
 use BF16. The small patch, timestep, and output modules remain FP32 because the audited reference
-keeps those stability-sensitive modules in FP32. Quantized execution remains deferred until the
-BF16-class smoke test works.
+keeps those stability-sensitive modules in FP32. Current generation testing remains focused on
+this BF16-class path; broader base-model quantization is planned for later optimization work.
+
+## Low-memory BF16 results
+
+Endpoint sweeps measured the complete ComfyUI process, including resident model components and
+transient MLX allocations. At 640 by 384, 512-token query chunks reduced measured peak memory by
+about 204 MiB and increased sampling time by 4.1 percent. At 1344 by 768, the same setting reduced
+peak memory by about 472 MiB and increased sampling time by 2.8 percent. Larger chunks produced a
+similar memory reduction in these runs, with variable timing overhead.
+
+| Canvas | Attention mode | Complete process peak | Sampling time | Peak saved |
+| --- | --- | ---: | ---: | ---: |
+| 640 by 384 | Dense | 48.26 GB | 97.49 s | Baseline |
+| 640 by 384 | 512-token chunks | 48.06 GB | 101.53 s | 204 MiB |
+| 1344 by 768 | Dense | 61.83 GB | 704.42 s | Baseline |
+| 1344 by 768 | 512-token chunks | 61.36 GB | 723.94 s | 472 MiB |
+
+These are endpoint measurements on one system, prompt, and seed. They show a modest attention
+workspace saving rather than a multi-gigabyte reduction because the complete-process figure also
+includes the large resident BF16 model. Strict unloading between the text encoder, transformer,
+and VAEs remains the larger memory-management mechanism.
 
 ## EasyCache benchmark results
 
@@ -125,6 +168,22 @@ no-cache baseline. The request-local video and audio cache used approximately 95
 All 12 BlockCache outputs contained synchronized video and audio streams. These single-prompt,
 single-seed measurements do not prove perceptual equivalence. Generated media remains local under
 `benchmarks/artifacts/media/blockcache-384p/`.
+
+## Trajectory Forecast benchmark result
+
+A five-second 640 by 384 Turbo LoRA smoke test compared four real transformer evaluations with the
+balanced forecast policy. The forecast run performed three real evaluations and one forecast,
+reducing sampling time from 97.49 seconds to 75.43 seconds and complete workflow time from 134.31
+seconds to 120.54 seconds. It produced 124 video frames and synchronized 32 kHz stereo audio.
+
+| Mode | Real evaluations | Forecasts | Sampling | Workflow | Complete process peak |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| No forecast | 4 | 0 | 97.49 s | 134.31 s | 48.26 GB |
+| Balanced forecast | 3 | 1 | 75.43 s | 120.54 s | 49.07 GB |
+
+The approximately 772 MiB higher process peak includes forecast history and allocator behavior;
+the measured two-snapshot request history itself was about 191 MiB. This single smoke test shows a
+useful speed signal, but it does not establish perceptual equivalence or a general quality claim.
 
 Models are never bundled. Detailed project documentation and the OKF knowledge bundle are kept
 local and are intentionally excluded from Git.

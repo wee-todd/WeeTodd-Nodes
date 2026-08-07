@@ -9,6 +9,32 @@ def test_config_accepts_small_wiring_canvas():
     H3GenerationConfig(width=640, height=384, steps=8).validate()
 
 
+def test_low_memory_mode_selects_query_chunks_without_quantization():
+    config = H3GenerationConfig(memory_mode="low_memory_bf16")
+    config.validate()
+    assert config.attention_query_chunk_size == 512
+
+
+@pytest.mark.parametrize("chunk", ["512", "1024", "2048"])
+def test_low_memory_mode_accepts_explicit_query_chunk(chunk):
+    config = H3GenerationConfig(
+        memory_mode="low_memory_bf16", attention_chunk_size=chunk
+    )
+    config.validate()
+    assert config.attention_query_chunk_size == int(chunk)
+
+
+def test_normal_mode_ignores_attention_chunk_selection():
+    config = H3GenerationConfig(memory_mode="normal", attention_chunk_size="2048")
+    config.validate()
+    assert config.attention_query_chunk_size is None
+
+
+def test_config_rejects_unknown_memory_mode():
+    with pytest.raises(ValueError, match="memory_mode"):
+        H3GenerationConfig(memory_mode="tiny").validate()
+
+
 @pytest.mark.parametrize("width,height", [(641, 384), (640, 385)])
 def test_config_rejects_unaligned_canvas(width, height):
     with pytest.raises(ValueError, match="divisible by 32"):

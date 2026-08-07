@@ -125,6 +125,15 @@ class H3TextEncoderCache:
                 self._spec = spec
             try:
                 embeddings, token_tags = self._encoder.encode(prompt)
+                # Materialize the only live outputs before dropping the encoder. Otherwise MLX's
+                # lazy graph can retain encoder parameters into the transformer stage.
+                try:
+                    import mlx.core as mx
+
+                    if type(embeddings).__module__.startswith("mlx."):
+                        mx.eval(embeddings, token_tags)
+                except ImportError:
+                    pass
                 token_count = int(token_tags.shape[0])
                 conditioning = H3Conditioning(
                     embeddings=embeddings,

@@ -1,0 +1,3 @@
+policy,width,height,video_frames,requested_steps,scheduled_evaluations,full_transformer_evaluations,trajectory_forecasts,trajectory_fallbacks,sampling_seconds,workflow_seconds,comfy_idle_footprint_bytes,comfy_peak_footprint_bytes,comfy_incremental_peak_bytes,trajectory_history_bytes,av_drift_seconds
+dense_control,640,384,124,5,4,4,0,0,97.492319,134.309,491586952,48262183920,47770596968,0,0.008333
+automatic_balanced,640,384,124,5,4,3,1,0,75.433688,120.540,492373408,49070373872,48578000464,199858176,0.008333

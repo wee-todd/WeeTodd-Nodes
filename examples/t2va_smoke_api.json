@@ -27,6 +27,8 @@
     "class_type": "WeeToddH3GenerationConfig",
     "inputs": {
       "drop_adaln": true,
+      "memory_mode": "normal",
+      "attention_chunk_size": "automatic",
       "duration_seconds": 5.0,
       "resolution_mode": "preset",
       "resolution_tier": "384P (fast smoke)",
