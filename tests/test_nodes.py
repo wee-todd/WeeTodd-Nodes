@@ -8,6 +8,7 @@ from wee_todd_nodes.nodes import (
     NODE_CLASS_MAPPINGS,
     WeeToddH3ComponentLoader,
     WeeToddH3GenerationConfig,
+    WeeToddH3QuantizedTransformerLoader,
     _resolve_h3_resolution,
     _safe_output_target,
 )
@@ -56,8 +57,9 @@ def test_sampling_metadata_preserves_exact_prompt(monkeypatch):
 
 
 def test_expected_nodes_are_registered():
-    assert len(NODE_CLASS_MAPPINGS) == 20
+    assert len(NODE_CLASS_MAPPINGS) == 22
     assert "WeeToddH3ComponentLoader" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3QuantizedTransformerLoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3Preflight" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3TextEncode" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3TrajectoryForecast" in NODE_CLASS_MAPPINGS
@@ -65,6 +67,7 @@ def test_expected_nodes_are_registered():
     assert "WeeToddH3Sample" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3EasyCache" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3BlockCache" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3HierarchicalBlockCache" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3LoRALoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3UnloadTransformer" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3VideoVAEDecode" in NODE_CLASS_MAPPINGS
@@ -88,6 +91,44 @@ def test_component_loader_resolves_relative_root_below_comfy_models(monkeypatch,
     (spec,) = WeeToddH3ComponentLoader().specify("MiniMax-H3/FL2VA", "t2va")
 
     assert spec.checkpoint == str(tmp_path / "MiniMax-H3" / "FL2VA")
+
+
+def test_quantized_loader_selects_validated_named_profile(tmp_path):
+    from minimax_h3_mlx.mixed_checkpoint import (
+        MIXED_CHECKPOINT_FORMAT,
+        Q8_EXTENDED_PROFILE,
+        extended_q8_mlp_recipe,
+    )
+
+    transformer = tmp_path / "q8_extended"
+    transformer.mkdir()
+    (transformer / "config.json").write_text("{}\n")
+    (transformer / "model.safetensors.index.json").write_text("{}\n")
+    (transformer / "quant_config.json").write_text(
+        json.dumps(
+            {
+                "format": MIXED_CHECKPOINT_FORMAT,
+                "format_version": 1,
+                "profile": Q8_EXTENDED_PROFILE,
+                "bits": 8,
+                "group_size": 64,
+                "quantize_core": False,
+                "quantize_adaln": False,
+                "overrides": extended_q8_mlp_recipe().overrides,
+            }
+        )
+    )
+    components = WeeToddH3ComponentLoader().specify(str(tmp_path), "t2va")[0]
+
+    selected, info = WeeToddH3QuantizedTransformerLoader().select(
+        components,
+        "q8_extended",
+        str(tmp_path),
+        str(transformer),
+    )
+
+    assert selected.transformer == str(transformer)
+    assert json.loads(info)["selected_modules"] == 82
 
 
 def test_generation_config_node_returns_validated_value():

@@ -2,7 +2,7 @@
 
 import json
 import platform
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
@@ -189,6 +189,48 @@ class WeeToddH3ComponentLoader:
                 audio_vae=audio_vae or None,
             ),
         )
+
+
+class WeeToddH3QuantizedTransformerLoader:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "components": ("WEETODD_H3_COMPONENTS",),
+                "profile": (
+                    ["q8_conservative", "q8_extended"],
+                    {"default": "q8_conservative"},
+                ),
+                "transformer_root": (
+                    "STRING",
+                    {"default": "MiniMax-H3/transformers"},
+                ),
+            },
+            "optional": {
+                "transformer_override": ("STRING", {"default": ""}),
+            },
+        }
+
+    RETURN_TYPES = ("WEETODD_H3_COMPONENTS", "STRING")
+    RETURN_NAMES = ("components", "profile_info")
+    FUNCTION = "select"
+    CATEGORY = "WeeTodd/H3/loaders"
+    DESCRIPTION = (
+        "Select and validate a named mixed-precision H3 transformer without loading weights. "
+        "Both q8 profiles are approximate and keep BlockCache disabled by default."
+    )
+
+    def select(self, components, profile, transformer_root, transformer_override=""):
+        from minimax_h3_mlx.mixed_checkpoint import validate_named_q8_checkpoint
+
+        if transformer_override.strip():
+            transformer = Path(_resolve_component_root(transformer_override))
+        else:
+            root = Path(_resolve_component_root(transformer_root))
+            transformer = root / profile
+        info = validate_named_q8_checkpoint(transformer, profile)
+        selected = replace(components, transformer=str(transformer))
+        return (selected, json.dumps(info, indent=2, sort_keys=True))
 
 
 class WeeToddH3Preflight:
@@ -402,6 +444,18 @@ class WeeToddH3Sample:
                 latents, "blockcache_resolved_threshold", None
             ),
             "blockcache_cache_bytes": getattr(latents, "blockcache_cache_bytes", 0),
+            "blockcache_segment_hits": list(
+                getattr(latents, "blockcache_segment_hits", ())
+            ),
+            "blockcache_segment_thresholds": list(
+                getattr(latents, "blockcache_segment_thresholds", ())
+            ),
+            "blockcache_executed_blocks": getattr(
+                latents, "blockcache_executed_blocks", 0
+            ),
+            "blockcache_skipped_blocks": getattr(
+                latents, "blockcache_skipped_blocks", 0
+            ),
             "blockcache": asdict(blockcache) if blockcache is not None else None,
             "trajectory_forecasts": getattr(latents, "trajectory_forecasts", 0),
             "trajectory_fallbacks": getattr(latents, "trajectory_fallbacks", 0),
@@ -695,6 +749,53 @@ class WeeToddH3BlockCache:
             end_percent=end_percent,
             auto_multiplier=auto_multiplier,
             max_hit_fraction=max_hit_fraction,
+            allow_turbo_experimental=allow_turbo_experimental,
+        )
+        config.validate()
+        return (config,)
+
+
+class WeeToddH3HierarchicalBlockCache:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "mode": (
+                    [
+                        "automatic_conservative",
+                        "automatic_balanced",
+                        "automatic_speed",
+                    ],
+                    {"default": "automatic_balanced"},
+                ),
+                "allow_turbo_experimental": (
+                    "BOOLEAN",
+                    {
+                        "default": False,
+                        "tooltip": (
+                            "Permit hierarchical BlockCache with Turbo. Each segment remains an "
+                            "independent approximation and may change motion, detail, or audio."
+                        ),
+                    },
+                ),
+            }
+        }
+
+    RETURN_TYPES = ("WEETODD_H3_BLOCKCACHE",)
+    RETURN_NAMES = ("blockcache",)
+    FUNCTION = "configure"
+    CATEGORY = "WeeTodd/H3/sampling"
+    DESCRIPTION = (
+        "Split the 50 H3 blocks into three contiguous segments. Always evaluate each segment's "
+        "anchor block, accept video and audio together, and reuse eligible segment tails "
+        "independently."
+    )
+
+    def configure(self, mode, allow_turbo_experimental=False):
+        from minimax_h3_mlx.blockcache import H3HierarchicalBlockCacheConfig
+
+        config = H3HierarchicalBlockCacheConfig(
+            mode=mode,
             allow_turbo_experimental=allow_turbo_experimental,
         )
         config.validate()
@@ -1374,6 +1475,7 @@ class WeeToddH3Unload:
 
 NODE_CLASS_MAPPINGS = {
     "WeeToddH3ComponentLoader": WeeToddH3ComponentLoader,
+    "WeeToddH3QuantizedTransformerLoader": WeeToddH3QuantizedTransformerLoader,
     "WeeToddH3Preflight": WeeToddH3Preflight,
     "WeeToddH3TextEncode": WeeToddH3TextEncode,
     "WeeToddH3UnloadTextEncoder": WeeToddH3UnloadTextEncoder,
@@ -1382,6 +1484,7 @@ NODE_CLASS_MAPPINGS = {
     "WeeToddH3EasyCache": WeeToddH3EasyCache,
     "WeeToddH3TrajectoryForecast": WeeToddH3TrajectoryForecast,
     "WeeToddH3BlockCache": WeeToddH3BlockCache,
+    "WeeToddH3HierarchicalBlockCache": WeeToddH3HierarchicalBlockCache,
     "WeeToddH3UnloadTransformer": WeeToddH3UnloadTransformer,
     "WeeToddH3VideoVAEDecode": WeeToddH3VideoVAEDecode,
     "WeeToddH3UnloadVideoVAE": WeeToddH3UnloadVideoVAE,
@@ -1396,6 +1499,7 @@ NODE_CLASS_MAPPINGS = {
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     "WeeToddH3ComponentLoader": "WeeTodd H3 Component Loader",
+    "WeeToddH3QuantizedTransformerLoader": "WeeTodd H3 Quantized Transformer Loader",
     "WeeToddH3Preflight": "WeeTodd H3 Component Preflight",
     "WeeToddH3TextEncode": "WeeTodd H3 Text Encode (Qwen3-VL)",
     "WeeToddH3UnloadTextEncoder": "WeeTodd H3 Unload Qwen3-VL",
@@ -1404,6 +1508,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "WeeToddH3EasyCache": "WeeTodd H3 EasyCache (MLX)",
     "WeeToddH3TrajectoryForecast": "WeeTodd H3 Trajectory Forecast (MLX)",
     "WeeToddH3BlockCache": "WeeTodd H3 BlockCache (MLX)",
+    "WeeToddH3HierarchicalBlockCache": "WeeTodd H3 Hierarchical BlockCache (MLX)",
     "WeeToddH3UnloadTransformer": "WeeTodd H3 Unload Transformer",
     "WeeToddH3VideoVAEDecode": "WeeTodd H3 Decode Video VAE",
     "WeeToddH3UnloadVideoVAE": "WeeTodd H3 Unload Video VAE",

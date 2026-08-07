@@ -733,37 +733,103 @@ class MiniMaxH3DiT(nn.Module):
             diagnostics,
         )
 
-        before_block_zero = x
-        for i, block in enumerate(self.blocks):
-            if diagnostics is not None:
-                diagnostics.prepare_block(x, i)
-            modulation = (
-                modulation_cache.get(i) if modulation_cache is not None else block.adaln_proj(temb)
-            )
-            x = block(
-                x,
-                modulation,
-                adaln_indices,
-                rotary,
-                mask,
-                diagnostics=diagnostics,
-                block_index=i,
-            )
-            if i == 0 and blockcache is not None:
-                after_block_zero = x
-                reused = blockcache.try_reuse(
-                    before_block_zero,
-                    after_block_zero,
-                    video_indices,
-                    audio_indices,
-                    step_index,
-                    total_steps,
+        if blockcache is not None and hasattr(blockcache, "segment_start"):
+            blockcache.begin_step()
+            i = 0
+            current_segment = None
+            before_anchor = None
+            after_anchor = None
+            while i < len(self.blocks):
+                segment_index = blockcache.segment_start(i)
+                if segment_index is not None:
+                    current_segment = segment_index
+                    before_anchor = x
+                block = self.blocks[i]
+                if diagnostics is not None:
+                    diagnostics.prepare_block(x, i)
+                modulation = (
+                    modulation_cache.get(i)
+                    if modulation_cache is not None
+                    else block.adaln_proj(temb)
                 )
-                if reused is not None:
-                    x = reused
-                    break
+                x = block(
+                    x,
+                    modulation,
+                    adaln_indices,
+                    rotary,
+                    mask,
+                    diagnostics=diagnostics,
+                    block_index=i,
+                )
+                if segment_index is not None:
+                    after_anchor = x
+                    reused = blockcache.try_reuse_segment(
+                        segment_index,
+                        before_anchor,
+                        after_anchor,
+                        video_indices,
+                        audio_indices,
+                        step_index,
+                        total_steps,
+                    )
+                    if reused is not None:
+                        x = reused
+                        i = blockcache.segment_end(segment_index) + 1
+                        continue
+                if (
+                    current_segment is not None
+                    and i == blockcache.segment_end(current_segment)
+                ):
+                    blockcache.update_segment(
+                        current_segment,
+                        before_anchor,
+                        after_anchor,
+                        x,
+                        video_indices,
+                        audio_indices,
+                    )
+                    current_segment = None
+                    before_anchor = None
+                    after_anchor = None
+                i += 1
+        else:
+            before_block_zero = x
+            for i, block in enumerate(self.blocks):
+                if diagnostics is not None:
+                    diagnostics.prepare_block(x, i)
+                modulation = (
+                    modulation_cache.get(i)
+                    if modulation_cache is not None
+                    else block.adaln_proj(temb)
+                )
+                x = block(
+                    x,
+                    modulation,
+                    adaln_indices,
+                    rotary,
+                    mask,
+                    diagnostics=diagnostics,
+                    block_index=i,
+                )
+                if i == 0 and blockcache is not None:
+                    after_block_zero = x
+                    reused = blockcache.try_reuse(
+                        before_block_zero,
+                        after_block_zero,
+                        video_indices,
+                        audio_indices,
+                        step_index,
+                        total_steps,
+                    )
+                    if reused is not None:
+                        x = reused
+                        break
 
-        if blockcache is not None and not blockcache.last_was_hit:
+        if (
+            blockcache is not None
+            and not hasattr(blockcache, "segment_start")
+            and not blockcache.last_was_hit
+        ):
             blockcache.update(
                 before_block_zero,
                 after_block_zero,

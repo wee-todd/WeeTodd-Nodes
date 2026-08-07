@@ -293,7 +293,9 @@ def _quantization(path: Path, headers: list[SafetensorsHeader], component: str) 
             raise ValueError(f"{component} quantization bits must be 4, 5, 6, or 8, got {bits!r}.")
         if not isinstance(group_size, int) or group_size < 1:
             raise ValueError(f"{component} quantization group size must be positive.")
-        return f"mlx-affine-{bits}bit-group-{group_size}"
+        profile = recipe.get("profile")
+        suffix = f" ({profile})" if isinstance(profile, str) and profile else ""
+        return f"mlx-affine-{bits}bit-group-{group_size}{suffix}"
     metadata = {key: value for header in headers for key, value in header.metadata.items()}
     for key in ("quantization", "quant_config", "format"):
         if key in metadata:

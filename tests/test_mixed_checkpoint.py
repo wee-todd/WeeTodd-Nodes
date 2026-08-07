@@ -15,9 +15,14 @@ from minimax_h3_mlx.dit import MiniMaxH3DiT
 from minimax_h3_mlx.load import load_dit
 from minimax_h3_mlx.mixed_checkpoint import (
     MIXED_CHECKPOINT_FORMAT,
+    Q8_CONSERVATIVE_PROFILE,
+    Q8_EXTENDED_PROFILE,
     accepted_q8_blocks_38_49_recipe,
     block_core_paths,
     convert_mixed_checkpoint,
+    extended_q8_mlp_recipe,
+    q8_profile_info,
+    validate_named_q8_checkpoint,
 )
 from minimax_h3_mlx.quantize import QuantConfig
 
@@ -95,6 +100,19 @@ def test_accepted_recipe_selects_only_late_core_blocks():
     assert max(int(path.split(".")[1]) for path in recipe.overrides) == 49
 
 
+def test_extended_recipe_adds_only_middle_mlp_projections():
+    conservative = accepted_q8_blocks_38_49_recipe()
+    extended = extended_q8_mlp_recipe()
+
+    assert len(conservative.overrides) == 48
+    assert len(extended.overrides) == 82
+    added = set(extended.overrides).difference(conservative.overrides)
+    assert len(added) == 34
+    assert all(21 <= int(path.split(".")[1]) <= 37 for path in added)
+    assert all(path.endswith((".mlp.fc1", ".mlp.fc2")) for path in added)
+    assert q8_profile_info(Q8_EXTENDED_PROFILE)["parameter_bytes_saved"] == 8_020_131_840
+
+
 def test_streamed_checkpoint_loads_directly_and_matches_in_memory_quantization(tmp_path):
     source, config, weights = _source(tmp_path)
     output = tmp_path / "mixed"
@@ -115,6 +133,7 @@ def test_streamed_checkpoint_loads_directly_and_matches_in_memory_quantization(t
     quant_config = json.loads((output / "quant_config.json").read_text())
     assert quant_config["quantize_core"] is False
     assert quant_config["overrides"] == dict(sorted(recipe.overrides.items()))
+    assert quant_config["profile"] is None
     assert (
         quant_config["source"][0]["sha256"]
         == hashlib.sha256((source / "model.safetensors").read_bytes()).hexdigest()
@@ -134,6 +153,34 @@ def test_streamed_checkpoint_loads_directly_and_matches_in_memory_quantization(t
     mx.eval(expected_video, expected_audio, loaded_video, loaded_audio)
     assert mx.array_equal(expected_video, loaded_video).item()
     assert mx.array_equal(expected_audio, loaded_audio).item()
+
+
+def test_named_checkpoint_validation_accepts_exact_profile(tmp_path):
+    directory = tmp_path / "q8"
+    directory.mkdir()
+    recipe = accepted_q8_blocks_38_49_recipe()
+    (directory / "config.json").write_text("{}\n")
+    (directory / "model.safetensors.index.json").write_text("{}\n")
+    (directory / "quant_config.json").write_text(
+        json.dumps(
+            {
+                "format": MIXED_CHECKPOINT_FORMAT,
+                "format_version": 1,
+                "profile": Q8_CONSERVATIVE_PROFILE,
+                "bits": 8,
+                "group_size": 64,
+                "quantize_core": False,
+                "quantize_adaln": False,
+                "overrides": recipe.overrides,
+            }
+        )
+    )
+
+    info = validate_named_q8_checkpoint(directory, Q8_CONSERVATIVE_PROFILE)
+
+    assert info["selected_modules"] == 48
+    with pytest.raises(ValueError, match="does not match"):
+        validate_named_q8_checkpoint(directory, Q8_EXTENDED_PROFILE)
 
 
 def test_streamed_checkpoint_cleans_partial_output_on_recipe_mismatch(tmp_path):

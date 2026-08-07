@@ -21,6 +21,9 @@ from .quantize import CORE_LINEARS, QuantConfig
 MIXED_CHECKPOINT_FORMAT = "minimax-h3-mlx-mixed-quant"
 MIXED_CHECKPOINT_VERSION = 1
 DEFAULT_MAX_SHARD_BYTES = 1024**3
+Q8_CONSERVATIVE_PROFILE = "q8_conservative"
+Q8_EXTENDED_PROFILE = "q8_extended"
+Q8_PROFILE_NAMES = (Q8_CONSERVATIVE_PROFILE, Q8_EXTENDED_PROFILE)
 
 
 def block_core_paths(
@@ -46,6 +49,107 @@ def accepted_q8_blocks_38_49_recipe() -> QuantConfig:
         overrides={path: 8 for path in block_core_paths(range(38, 50))},
         quantize_core=False,
     )
+
+
+def extended_q8_mlp_recipe() -> QuantConfig:
+    """Return the validated 8.02 GB q8 recipe with the middle MLP extension."""
+    paths = set(block_core_paths(range(38, 50)))
+    paths.update(
+        block_core_paths(
+            range(21, 38),
+            projections=(".mlp.fc1", ".mlp.fc2"),
+        )
+    )
+    return QuantConfig(
+        bits=8,
+        group_size=64,
+        overrides={path: 8 for path in sorted(paths)},
+        quantize_core=False,
+    )
+
+
+def named_q8_recipe(profile: str) -> QuantConfig:
+    """Resolve a stable user-facing q8 profile name to its exact module recipe."""
+    if profile == Q8_CONSERVATIVE_PROFILE:
+        return accepted_q8_blocks_38_49_recipe()
+    if profile == Q8_EXTENDED_PROFILE:
+        return extended_q8_mlp_recipe()
+    raise ValueError(f"Unknown H3 q8 profile {profile!r}; expected one of {Q8_PROFILE_NAMES}.")
+
+
+def identify_q8_profile(recipe: QuantConfig) -> str | None:
+    """Return the named profile whose complete recipe matches the supplied configuration."""
+    for profile in Q8_PROFILE_NAMES:
+        expected = named_q8_recipe(profile)
+        if (
+            recipe.bits == expected.bits
+            and recipe.group_size == expected.group_size
+            and recipe.quantize_core == expected.quantize_core
+            and recipe.quantize_adaln == expected.quantize_adaln
+            and recipe.overrides == expected.overrides
+        ):
+            return profile
+    return None
+
+
+def q8_profile_info(profile: str) -> dict[str, Any]:
+    """Return measured selection metadata without loading checkpoint tensors."""
+    recipe = named_q8_recipe(profile)
+    measured = {
+        Q8_CONSERVATIVE_PROFILE: {
+            "parameter_bytes_saved": 4_335_262_688,
+            "risk": "Lower approximation than the extended profile; not BF16-equivalent.",
+            "blockcache_default": False,
+        },
+        Q8_EXTENDED_PROFILE: {
+            "parameter_bytes_saved": 8_020_131_840,
+            "risk": "Higher approximation than the conservative profile; not BF16-equivalent.",
+            "blockcache_default": False,
+        },
+    }[profile]
+    return {
+        "profile": profile,
+        "bits": recipe.bits,
+        "group_size": recipe.group_size,
+        "selected_modules": len(recipe.overrides),
+        "lora_compatible": True,
+        **measured,
+    }
+
+
+def validate_named_q8_checkpoint(path: str | Path, profile: str) -> dict[str, Any]:
+    """Validate a named mixed checkpoint from JSON indexes without loading tensor payloads."""
+    directory = Path(path).expanduser()
+    if not directory.is_dir():
+        raise FileNotFoundError(f"MiniMax H3 q8 checkpoint directory not found: {directory}")
+    required = ("config.json", "quant_config.json", "model.safetensors.index.json")
+    missing = [name for name in required if not (directory / name).is_file()]
+    if missing:
+        raise FileNotFoundError(
+            f"MiniMax H3 q8 checkpoint is missing required files: {', '.join(missing)}"
+        )
+    with (directory / "quant_config.json").open() as handle:
+        stored = json.load(handle)
+    expected = named_q8_recipe(profile)
+    stored_overrides = {str(key): int(value) for key, value in stored.get("overrides", {}).items()}
+    if (
+        stored.get("format") != MIXED_CHECKPOINT_FORMAT
+        or stored.get("format_version") != MIXED_CHECKPOINT_VERSION
+        or stored.get("bits") != expected.bits
+        or stored.get("group_size") != expected.group_size
+        or stored.get("quantize_core") is not False
+        or stored.get("quantize_adaln") is not False
+        or stored_overrides != expected.overrides
+    ):
+        raise ValueError(
+            f"MiniMax H3 q8 checkpoint does not match the selected {profile!r} recipe."
+        )
+    recorded_profile = stored.get("profile")
+    if recorded_profile is not None and recorded_profile != profile:
+        raise ValueError(
+            f"MiniMax H3 q8 checkpoint records profile {recorded_profile!r}, not {profile!r}."
+        )
+    return q8_profile_info(profile)
 
 
 def _sha256(path: Path) -> str:
@@ -221,6 +325,7 @@ def convert_mixed_checkpoint(
         quant_config = {
             "format": MIXED_CHECKPOINT_FORMAT,
             "format_version": MIXED_CHECKPOINT_VERSION,
+            "profile": identify_q8_profile(recipe),
             "bits": recipe.bits,
             "group_size": recipe.group_size,
             "quantize_core": False,
