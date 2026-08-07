@@ -38,6 +38,36 @@ def parse_block_bit_overrides(values: Iterable[str]) -> dict[int, int]:
     return overrides
 
 
+def parse_module_bit_overrides(values: Iterable[str]) -> dict[str, int]:
+    """Parse repeatable ``MODULE=BITS`` values for projection-specific experiments."""
+    overrides: dict[str, int] = {}
+    for value in values:
+        try:
+            path, bits_text = value.rsplit("=", 1)
+            bits = int(bits_text)
+        except (TypeError, ValueError) as error:
+            raise ValueError(
+                f"module quantization override must be MODULE=BITS, got {value!r}"
+            ) from error
+        if not path.startswith("blocks.") or not path.endswith(CORE_LINEARS):
+            raise ValueError(f"unsupported core projection module path: {path!r}")
+        try:
+            block = int(path.split(".", 2)[1])
+        except (IndexError, ValueError) as error:
+            raise ValueError(f"invalid transformer block module path: {path!r}") from error
+        if block < 0:
+            raise ValueError("module quantization block index must be non-negative")
+        if bits not in SUPPORTED_EXPERIMENTAL_BITS:
+            raise ValueError(
+                f"module quantization bits must be one of "
+                f"{sorted(SUPPORTED_EXPERIMENTAL_BITS)}"
+            )
+        if path in overrides:
+            raise ValueError(f"duplicate module quantization override for {path}")
+        overrides[path] = bits
+    return overrides
+
+
 def selected_block_predicate(
     block_indices: Iterable[int],
     *,
@@ -105,6 +135,47 @@ def quantize_selected_blocks(
         "bits": bits,
         "group_size": group_size,
         "selected_paths": sorted(selected_paths),
+        "parameter_bytes_before": before,
+        "parameter_bytes_after": after,
+        "parameter_bytes_saved": before - after,
+    }
+
+
+def quantize_selected_modules(
+    model: Any,
+    overrides: dict[str, int],
+    *,
+    group_size: int = 64,
+) -> dict[str, Any]:
+    """Quantize exact core-projection paths in one module-tree rewrite."""
+    if not overrides:
+        raise ValueError("module quantization overrides must not be empty")
+    if group_size < 1:
+        raise ValueError("experimental quantization group size must be positive")
+    wanted = parse_module_bit_overrides(f"{path}={bits}" for path, bits in overrides.items())
+    selected: list[str] = []
+
+    def predicate(path: str, module: nn.Module) -> bool | dict[str, int]:
+        if not isinstance(module, nn.Linear) or path not in wanted:
+            return False
+        if module.weight.shape[-1] % group_size:
+            raise ValueError(
+                f"selected module input width is not divisible by group size: {path}"
+            )
+        selected.append(path)
+        return {"group_size": group_size, "bits": wanted[path]}
+
+    before = _parameter_bytes(model)
+    nn.quantize(model, group_size=group_size, bits=8, class_predicate=predicate)
+    missing = sorted(set(wanted).difference(selected))
+    if missing:
+        raise ValueError(f"module quantization did not match paths: {missing[:4]!r}")
+    mx.eval(model.parameters())
+    after = _parameter_bytes(model)
+    return {
+        "group_size": group_size,
+        "overrides": dict(sorted(wanted.items())),
+        "selected_paths": sorted(selected),
         "parameter_bytes_before": before,
         "parameter_bytes_after": after,
         "parameter_bytes_saved": before - after,

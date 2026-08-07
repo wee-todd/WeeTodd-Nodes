@@ -13,11 +13,14 @@ import numpy as np
 
 from minimax_h3_mlx.algorithm_search.block_quantization import (
     parse_block_bit_overrides,
+    parse_module_bit_overrides,
     quantize_selected_blocks,
+    quantize_selected_modules,
 )
 from minimax_h3_mlx.algorithm_search.capture import CaptureConfig, DiagnosticSession
 from minimax_h3_mlx.algorithm_search.hybrid_swap import SelectiveHybridBlockController
 from minimax_h3_mlx.algorithm_search.preflight import validate_profile_components
+from minimax_h3_mlx.blockcache import H3BlockCacheConfig
 from minimax_h3_mlx.config import PipelineConfig
 from minimax_h3_mlx.load import load_dit
 from minimax_h3_mlx.pipeline import MiniMaxH3Pipeline
@@ -35,6 +38,12 @@ def _save_final_latents(output_directory: Path, result) -> Path:
         },
     )
     return target
+
+
+def _blockcache_config(mode: str) -> H3BlockCacheConfig | None:
+    if mode == "none":
+        return None
+    return H3BlockCacheConfig(mode=f"automatic_{mode}")
 
 
 def main() -> int:
@@ -64,9 +73,15 @@ def main() -> int:
     parser.add_argument("--quantize-block", type=int, action="append", default=[])
     parser.add_argument("--quantize-all-blocks", action="store_true")
     parser.add_argument("--quantize-block-bit", action="append", default=[])
+    parser.add_argument("--quantize-module-bit", action="append", default=[])
     parser.add_argument("--quantize-bits", type=int, default=5, choices=[4, 5, 6, 8])
     parser.add_argument("--quantize-group-size", type=int, default=64)
     parser.add_argument("--save-final-latents", action="store_true")
+    parser.add_argument(
+        "--blockcache",
+        choices=("none", "balanced", "speed"),
+        default="none",
+    )
     args = parser.parse_args()
     validate_profile_components(
         model_index=args.model_index,
@@ -93,11 +108,29 @@ def main() -> int:
     dit = load_dit(args.transformer)
     quantization = None
     block_overrides = parse_block_bit_overrides(args.quantize_block_bit)
+    module_overrides = parse_module_bit_overrides(args.quantize_module_bit)
     selected_blocks = set(args.quantize_block)
     if args.quantize_all_blocks:
         selected_blocks.update(range(len(dit.blocks)))
     selected_blocks.update(block_overrides)
-    if selected_blocks:
+    if module_overrides and selected_blocks:
+        raise ValueError("use block or module quantization overrides, not both")
+    if module_overrides:
+        invalid = sorted(
+            path
+            for path in module_overrides
+            if int(path.split(".", 2)[1]) >= len(dit.blocks)
+        )
+        if invalid:
+            raise ValueError(f"quantized module paths exceed model depth: {invalid[:4]!r}")
+        quantization = quantize_selected_modules(
+            dit,
+            module_overrides,
+            group_size=args.quantize_group_size,
+        )
+        gc.collect()
+        mx.clear_cache()
+    elif selected_blocks:
         invalid = sorted(index for index in selected_blocks if index >= len(dit.blocks))
         if invalid:
             raise ValueError(f"quantized block indices exceed model depth: {invalid}")
@@ -173,6 +206,7 @@ def main() -> int:
         height=args.height,
         width=args.width,
         drop_adaln=True,
+        blockcache_config=_blockcache_config(args.blockcache),
         diagnostics=session,
     )
     sample_peak_memory = int(mx.get_peak_memory())
@@ -187,6 +221,10 @@ def main() -> int:
                 "total_seconds": result.total_seconds,
                 "active_before_sample_bytes": active_before_sample,
                 "sample_peak_memory_bytes": sample_peak_memory,
+                "blockcache_mode": args.blockcache,
+                "blockcache_hits": result.blockcache_hits,
+                "blockcache_resolved_threshold": result.blockcache_resolved_threshold,
+                "blockcache_cache_bytes": result.blockcache_cache_bytes,
                 "quantization": quantization,
                 "final_latents": latent_path.name if latent_path is not None else None,
             },

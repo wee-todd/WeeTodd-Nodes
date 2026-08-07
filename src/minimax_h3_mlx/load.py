@@ -122,10 +122,19 @@ def load_dit(
                 group_size=recipe["group_size"],
                 quantize_adaln=recipe.get("quantize_adaln", False),
                 adaln_bits=recipe.get("adaln_bits") or 8,
+                overrides={
+                    str(path): int(bits)
+                    for path, bits in recipe.get("overrides", {}).items()
+                },
+                quantize_core=recipe.get("quantize_core", True),
             ),
         )
         if verbose:
-            print(f"  quantized structure: {recipe['bits']}-bit, group {recipe['group_size']}")
+            scope = "core" if recipe.get("quantize_core", True) else "selected modules"
+            print(
+                f"  quantized structure: {recipe['bits']}-bit {scope}, "
+                f"group {recipe['group_size']}"
+            )
 
     expected = {key for key, _ in tree_flatten(model.parameters())}
     weights: dict[str, mx.array] = {}

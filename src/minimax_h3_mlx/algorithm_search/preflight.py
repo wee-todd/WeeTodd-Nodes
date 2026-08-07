@@ -16,16 +16,20 @@ def validate_profile_components(
     text_config: Path | None = None,
 ) -> None:
     """Reject incorrect file-versus-directory component arguments before model loading."""
-    files = {
-        "model index": model_index,
-        "transformer": transformer,
-        "prompt": prompt_file,
-    }
+    files = {"model index": model_index, "prompt": prompt_file}
     if text_config is not None:
         files["text config"] = text_config
     for label, path in files.items():
         if not path.is_file():
             raise ValueError(f"{label} must be an existing file: {path}")
+
+    if transformer.is_dir():
+        if not (transformer / "config.json").is_file():
+            raise ValueError(f"transformer directory lacks config.json: {transformer}")
+        if not list(transformer.glob("*.safetensors")):
+            raise ValueError(f"transformer directory contains no safetensors: {transformer}")
+    elif not transformer.is_file():
+        raise ValueError(f"transformer must be an existing file or directory: {transformer}")
 
     directories = {
         "text encoder": text_encoder_directory,

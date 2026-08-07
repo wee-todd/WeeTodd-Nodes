@@ -53,6 +53,19 @@ class H3VideoFrames:
     decode_batch: int
 
 
+@dataclass(frozen=True)
+class H3VideoStream:
+    """Timing and geometry for a streamed video VAE decode."""
+
+    num_frames: int
+    width: int
+    height: int
+    fps: int
+    decode_seconds: float
+    decode_batch: int
+    peak_rgb8_chunk_bytes: int
+
+
 VideoVAEFactory = Callable[[H3VideoVAESpec], Any]
 
 
@@ -91,9 +104,10 @@ class H3VideoVAECache:
         import time
 
         spec.validate()
-        if Path(latents.transformer_spec.video_vae).expanduser() != Path(
-            spec.video_vae
-        ).expanduser():
+        if (
+            Path(latents.transformer_spec.video_vae).expanduser()
+            != Path(spec.video_vae).expanduser()
+        ):
             raise ValueError("Latents were produced for a different MiniMax H3 video VAE.")
         if prepare_stage is not None:
             prepare_stage()
@@ -137,20 +151,109 @@ class H3VideoVAECache:
         from minimax_h3_mlx.packing import PIXEL_MEAN, PIXEL_STD
 
         cfg = self._vae.config
-        mean = mx.array(np.asarray(cfg.latents_mean, dtype=np.float32)).reshape(
-            1, -1, 1, 1, 1
-        )
-        std = mx.array(np.asarray(cfg.latents_std, dtype=np.float32)).reshape(
-            1, -1, 1, 1, 1
-        )
-        decoded = np.asarray(
-            self._vae.decode((normalized * std + mean).astype(mx.float32))
-        )
+        mean = mx.array(np.asarray(cfg.latents_mean, dtype=np.float32)).reshape(1, -1, 1, 1, 1)
+        std = mx.array(np.asarray(cfg.latents_std, dtype=np.float32)).reshape(1, -1, 1, 1, 1)
+        decoded = np.asarray(self._vae.decode((normalized * std + mean).astype(mx.float32)))
         pixel_mean = np.asarray(PIXEL_MEAN, dtype=np.float32).reshape(1, 3, 1, 1, 1)
         pixel_std = np.asarray(PIXEL_STD, dtype=np.float32).reshape(1, 3, 1, 1, 1)
         frames = np.clip(decoded * pixel_std + pixel_mean, 0.0, 1.0)
         frames = frames[0, :, :num_frames].transpose(1, 2, 3, 0)
         return np.ascontiguousarray(frames, dtype=np.float32)
+
+    def decode_stream(
+        self,
+        spec: H3VideoVAESpec,
+        latents: H3Latents,
+        write_chunk: Callable[[Any], None],
+        *,
+        unload_after: bool = True,
+        check_interrupted: Callable[[], None] | None = None,
+        prepare_stage: Callable[[], None] | None = None,
+    ) -> H3VideoStream:
+        """Decode temporal chunks to uint8 RGB and release each chunk after writing."""
+        import time
+
+        spec.validate()
+        if (
+            Path(latents.transformer_spec.video_vae).expanduser()
+            != Path(spec.video_vae).expanduser()
+        ):
+            raise ValueError("Latents were produced for a different MiniMax H3 video VAE.")
+        if prepare_stage is not None:
+            prepare_stage()
+        with self._lock:
+            if self._vae is None or self._spec != spec:
+                self._release_locked()
+                self._vae = self._factory(spec)
+                self._spec = spec
+            try:
+                if latents.generation_config.memory_mode == "low_memory_bf16":
+                    self._vae.decode_batch = 1
+                started = time.perf_counter()
+                frame_count = 0
+                width = height = 0
+                peak_rgb8_chunk_bytes = 0
+                for chunk in self._decode_normalized_chunks(latents.video, latents.num_frames):
+                    if check_interrupted is not None:
+                        check_interrupted()
+                    if chunk.ndim != 4 or chunk.shape[-1] != 3:
+                        raise ValueError(
+                            "Streamed video chunk must have shape (frames, H, W, 3); "
+                            f"got {chunk.shape}."
+                        )
+                    if frame_count + chunk.shape[0] > latents.num_frames:
+                        chunk = chunk[: latents.num_frames - frame_count]
+                    if chunk.shape[0] == 0:
+                        continue
+                    height, width = int(chunk.shape[1]), int(chunk.shape[2])
+                    peak_rgb8_chunk_bytes = max(peak_rgb8_chunk_bytes, int(chunk.nbytes))
+                    write_chunk(chunk)
+                    frame_count += int(chunk.shape[0])
+                    del chunk
+                if frame_count != latents.num_frames:
+                    raise ValueError(
+                        f"Streamed video decode produced {frame_count} frames; "
+                        f"expected {latents.num_frames}."
+                    )
+                result = H3VideoStream(
+                    num_frames=frame_count,
+                    width=width,
+                    height=height,
+                    fps=latents.fps,
+                    decode_seconds=time.perf_counter() - started,
+                    decode_batch=int(self._vae.decode_batch),
+                    peak_rgb8_chunk_bytes=peak_rgb8_chunk_bytes,
+                )
+            except BaseException:
+                self._release_locked()
+                raise
+            if unload_after or latents.generation_config.memory_mode == "low_memory_bf16":
+                self._release_locked()
+            return result
+
+    def _decode_normalized_chunks(self, normalized: Any, num_frames: int):
+        import mlx.core as mx
+        import numpy as np
+
+        from minimax_h3_mlx.packing import PIXEL_MEAN, PIXEL_STD
+
+        cfg = self._vae.config
+        mean = mx.array(np.asarray(cfg.latents_mean, dtype=np.float32)).reshape(1, -1, 1, 1, 1)
+        std = mx.array(np.asarray(cfg.latents_std, dtype=np.float32)).reshape(1, -1, 1, 1, 1)
+        denormalized = (normalized * std + mean).astype(mx.float32)
+        pixel_mean = mx.array(np.asarray(PIXEL_MEAN, dtype=np.float32)).reshape(1, 3, 1, 1, 1)
+        pixel_std = mx.array(np.asarray(PIXEL_STD, dtype=np.float32)).reshape(1, 3, 1, 1, 1)
+        emitted = 0
+        for decoded in self._vae.decode_chunks(denormalized):
+            frames = mx.clip(decoded * pixel_std + pixel_mean, 0.0, 1.0)
+            frames = mx.round(frames * 255.0).astype(mx.uint8)
+            frames = frames[0].transpose(1, 2, 3, 0)
+            remaining = num_frames - emitted
+            frames = frames[:remaining]
+            emitted += frames.shape[0]
+            yield np.ascontiguousarray(np.asarray(frames), dtype=np.uint8)
+            if emitted >= num_frames:
+                break
 
     def unload(self) -> None:
         with self._lock:
@@ -247,9 +350,10 @@ class H3AudioVAECache:
         import time
 
         spec.validate()
-        if Path(latents.transformer_spec.audio_vae).expanduser() != Path(
-            spec.audio_vae
-        ).expanduser():
+        if (
+            Path(latents.transformer_spec.audio_vae).expanduser()
+            != Path(spec.audio_vae).expanduser()
+        ):
             raise ValueError("Latents were produced for a different MiniMax H3 audio VAE.")
         if prepare_stage is not None:
             prepare_stage()
@@ -301,8 +405,7 @@ class H3AudioVAECache:
         )
         if decoded.ndim != 3 or decoded.shape[0] != 2 or decoded.shape[1] != 1:
             raise ValueError(
-                "Audio VAE output must have shape (2, 1, samples); "
-                f"got {decoded.shape}."
+                f"Audio VAE output must have shape (2, 1, samples); got {decoded.shape}."
             )
         return np.ascontiguousarray(decoded[:, 0, :], dtype=np.float32)
 

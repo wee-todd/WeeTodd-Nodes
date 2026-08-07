@@ -35,3 +35,37 @@ def test_profile_preflight_accepts_complete_component_contract(tmp_path):
         tokenizer_directory=tmp_path,
         prompt_file=_touch(tmp_path / "prompt.txt"),
     )
+
+
+def test_profile_preflight_accepts_sharded_transformer_directory(tmp_path):
+    transformer = tmp_path / "transformer"
+    _touch(transformer / "config.json")
+    _touch(transformer / "model-00001.safetensors")
+    _touch(tmp_path / "text_encoder.safetensors")
+    _touch(tmp_path / "tokenizer.json")
+
+    validate_profile_components(
+        model_index=_touch(tmp_path / "model_index.json"),
+        transformer=transformer,
+        text_encoder_directory=tmp_path,
+        processor_directory=tmp_path,
+        tokenizer_directory=tmp_path,
+        prompt_file=_touch(tmp_path / "prompt.txt"),
+    )
+
+
+def test_profile_preflight_rejects_incomplete_transformer_directory(tmp_path):
+    transformer = tmp_path / "transformer"
+    transformer.mkdir()
+    _touch(tmp_path / "text_encoder.safetensors")
+    _touch(tmp_path / "tokenizer.json")
+
+    with pytest.raises(ValueError, match="lacks config.json"):
+        validate_profile_components(
+            model_index=_touch(tmp_path / "model_index.json"),
+            transformer=transformer,
+            text_encoder_directory=tmp_path,
+            processor_directory=tmp_path,
+            tokenizer_directory=tmp_path,
+            prompt_file=_touch(tmp_path / "prompt.txt"),
+        )

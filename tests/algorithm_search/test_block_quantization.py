@@ -4,7 +4,9 @@ import pytest
 
 from minimax_h3_mlx.algorithm_search.block_quantization import (
     parse_block_bit_overrides,
+    parse_module_bit_overrides,
     quantize_selected_blocks,
+    quantize_selected_modules,
     selected_block_predicate,
 )
 
@@ -60,6 +62,33 @@ def test_selected_block_quantized_model_executes():
     mx.eval(output)
 
     assert output.shape == (2, 192)
+
+
+def test_parse_module_bit_overrides_requires_exact_core_projection_paths():
+    values = parse_module_bit_overrides(
+        ["blocks.1.mlp.fc1=8", "blocks.0.attn.qkv_proj=6"]
+    )
+    assert values == {"blocks.1.mlp.fc1": 8, "blocks.0.attn.qkv_proj": 6}
+    with pytest.raises(ValueError, match="unsupported core projection"):
+        parse_module_bit_overrides(["blocks.1.norm1=8"])
+
+
+def test_selected_module_quantization_changes_only_exact_paths():
+    model = _Model()
+    report = quantize_selected_modules(
+        model,
+        {"blocks.1.mlp.fc1": 8, "blocks.1.attn.qkv_proj": 8},
+        group_size=64,
+    )
+
+    assert report["selected_paths"] == [
+        "blocks.1.attn.qkv_proj",
+        "blocks.1.mlp.fc1",
+    ]
+    assert isinstance(model.blocks[1].mlp.fc1, nn.QuantizedLinear)
+    assert isinstance(model.blocks[1].attn.qkv_proj, nn.QuantizedLinear)
+    assert isinstance(model.blocks[1].mlp.fc2, nn.Linear)
+    assert isinstance(model.blocks[0].mlp.fc1, nn.Linear)
 
 
 @pytest.mark.parametrize(
