@@ -69,6 +69,13 @@ def param_dtype(layer: nn.Module) -> mx.Dtype:
     return scales.dtype if scales is not None else layer.weight.dtype
 
 
+def projection_weight_shape(layer: nn.Module) -> list[int]:
+    """Return the stored projection shape through activation-space adapter wrappers."""
+    while hasattr(layer, "base"):
+        layer = layer.base
+    return list(layer.weight.shape)
+
+
 def timestep_embedding(
     timesteps: mx.array,
     dim: int,
@@ -224,7 +231,7 @@ class Attention(nn.Module):
             block=block_index,
             metadata={
                 "input_shape": list(x.shape),
-                "weight_shape": list(self.qkv_proj.weight.shape),
+                "weight_shape": projection_weight_shape(self.qkv_proj),
             },
             capture_as="qkv_output",
         )
@@ -284,7 +291,7 @@ class Attention(nn.Module):
             f"{prefix}.out_proj",
             lambda: self.out_proj(out.astype(x.dtype)),
             block=block_index,
-            metadata={"weight_shape": list(self.out_proj.weight.shape)},
+            metadata={"weight_shape": projection_weight_shape(self.out_proj)},
             capture_as="attention_output",
         )
 
@@ -315,7 +322,10 @@ class FeedForward(nn.Module):
             f"{prefix}.fc1",
             lambda: self.fc1(x),
             block=block_index,
-            metadata={"input_shape": list(x.shape), "weight_shape": list(self.fc1.weight.shape)},
+            metadata={
+                "input_shape": list(x.shape),
+                "weight_shape": projection_weight_shape(self.fc1),
+            },
         )
         activated = _diagnostic_run(
             diagnostics,
@@ -328,7 +338,7 @@ class FeedForward(nn.Module):
             f"{prefix}.fc2",
             lambda: self.fc2(activated),
             block=block_index,
-            metadata={"weight_shape": list(self.fc2.weight.shape)},
+            metadata={"weight_shape": projection_weight_shape(self.fc2)},
             capture_as="mlp_output",
         )
 
