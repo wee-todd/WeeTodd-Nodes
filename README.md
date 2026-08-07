@@ -149,10 +149,14 @@ reducing transformer time by 27.2 percent; speed used four full evaluations and 
 reducing it by 42.5 percent. Both cache policies introduced larger visible changes than q8 alone,
 so they remain explicit quality/speed choices.
 
-A projection-specific search found a promising approximately 8.02 GB recipe by extending 8-bit
-precision to both MLP projections in blocks 21 through 37. Its short three-evaluation test decoded
-to 31.27 dB video PSNR against BF16. It is a research candidate, not a published default; it still
-requires a longer trajectory and broader perceptual validation.
+A projection-specific recipe extends 8-bit precision to both MLP projections in blocks 21 through
+37. It saved 8.02 GB of transformer sample peak in a full seven-evaluation 640 by 384 trajectory
+and a three-evaluation 1344 by 768 probe. Decoded video reached 22.50 dB and 31.64 dB PSNR,
+respectively, while preserving the requested action and final state in both contact sheets.
+
+The extended recipe is an optional experimental low-memory choice, not a published default or a
+BF16-equivalent checkpoint. The smaller blocks-38-through-49 recipe remains the conservative q8
+choice. Neither recipe demonstrated a repeatable speed improvement.
 
 ## Direct MLX publication result
 
