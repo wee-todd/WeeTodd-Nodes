@@ -88,6 +88,10 @@ class H3Latents:
     blockcache_hits: int = 0
     blockcache_resolved_threshold: float | None = None
     blockcache_cache_bytes: int = 0
+    blockcache_segment_hits: tuple[int, ...] = ()
+    blockcache_segment_thresholds: tuple[float | None, ...] = ()
+    blockcache_executed_blocks: int = 0
+    blockcache_skipped_blocks: int = 0
     trajectory_forecasts: int = 0
     trajectory_fallbacks: int = 0
     trajectory_history_bytes: int = 0
@@ -242,6 +246,18 @@ class H3TransformerCache:
                         result, "blockcache_resolved_threshold", None
                     ),
                     blockcache_cache_bytes=getattr(result, "blockcache_cache_bytes", 0),
+                    blockcache_segment_hits=getattr(
+                        result, "blockcache_segment_hits", ()
+                    ),
+                    blockcache_segment_thresholds=getattr(
+                        result, "blockcache_segment_thresholds", ()
+                    ),
+                    blockcache_executed_blocks=getattr(
+                        result, "blockcache_executed_blocks", 0
+                    ),
+                    blockcache_skipped_blocks=getattr(
+                        result, "blockcache_skipped_blocks", 0
+                    ),
                     trajectory_forecasts=getattr(result, "trajectory_forecasts", 0),
                     trajectory_fallbacks=getattr(result, "trajectory_fallbacks", 0),
                     trajectory_history_bytes=getattr(

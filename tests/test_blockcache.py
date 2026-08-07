@@ -3,7 +3,12 @@ from dataclasses import replace
 import mlx.core as mx
 import pytest
 
-from minimax_h3_mlx.blockcache import H3BlockCacheConfig, H3BlockCacheState
+from minimax_h3_mlx.blockcache import (
+    H3BlockCacheConfig,
+    H3BlockCacheState,
+    H3HierarchicalBlockCacheConfig,
+    H3HierarchicalBlockCacheState,
+)
 
 
 def _hidden(scale=1.0):
@@ -79,3 +84,40 @@ def test_blockcache_rejects_invalid_configuration():
 
     with pytest.raises(ValueError, match="maximum hit fraction"):
         replace(H3BlockCacheConfig(), max_hit_fraction=0.7).validate()
+
+
+def test_hierarchical_blockcache_tracks_segments_independently():
+    config = H3HierarchicalBlockCacheConfig(mode="manual", reuse_threshold=1.0)
+    state = H3HierarchicalBlockCacheState(config)
+    video = mx.array([0, 1, 2, 3], dtype=mx.int32)
+    audio = mx.array([4, 5], dtype=mx.int32)
+    before = _hidden()
+
+    for segment_index, tail in enumerate((2, 3, 4)):
+        after_anchor = before + segment_index + 1
+        state.update_segment(
+            segment_index,
+            before,
+            after_anchor,
+            after_anchor + tail,
+            video,
+            audio,
+        )
+
+    state.begin_step()
+    first = state.try_reuse_segment(0, before, before + 1, video, audio, 2, 8)
+    second = state.try_reuse_segment(1, before, before + 20, video, audio, 2, 8)
+    third = state.try_reuse_segment(2, before, before + 3, video, audio, 2, 8)
+
+    assert first is not None
+    assert second is None
+    assert third is not None
+    assert state.segment_hits == (1, 0, 1)
+    assert state.last_segment_hits == [True, False, True]
+    assert state.hits == 2
+    assert state.cache_bytes > 0
+
+
+def test_hierarchical_blockcache_requires_exact_h3_coverage():
+    with pytest.raises(ValueError, match="cover all 50"):
+        replace(H3HierarchicalBlockCacheConfig(), segments=((0, 24), (25, 48))).validate()

@@ -9,8 +9,10 @@ from pathlib import Path
 
 from minimax_h3_mlx.mixed_checkpoint import (
     DEFAULT_MAX_SHARD_BYTES,
-    accepted_q8_blocks_38_49_recipe,
+    Q8_CONSERVATIVE_PROFILE,
+    Q8_PROFILE_NAMES,
     convert_mixed_checkpoint,
+    named_q8_recipe,
 )
 
 
@@ -18,6 +20,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path, help="BF16 transformer file or directory")
     parser.add_argument("output", type=Path, help="new mixed-precision checkpoint directory")
+    parser.add_argument(
+        "--profile",
+        choices=Q8_PROFILE_NAMES,
+        default=Q8_CONSERVATIVE_PROFILE,
+        help="validated mixed-precision recipe",
+    )
     parser.add_argument(
         "--max-shard-mib",
         type=int,
@@ -30,7 +38,7 @@ def main() -> int:
     result = convert_mixed_checkpoint(
         args.source,
         args.output,
-        accepted_q8_blocks_38_49_recipe(),
+        named_q8_recipe(args.profile),
         max_shard_bytes=args.max_shard_mib * 1024**2,
     )
     print(json.dumps(result, indent=2))

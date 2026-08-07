@@ -8,6 +8,9 @@ WeeTodd Nodes is an independent MLX-native MiniMax H3 engine and composable Comf
 
 - **WeeTodd H3 Component Loader** creates a lazy specification for the transformer, Qwen3-VL,
   processor, tokenizer, video VAE, and audio VAE.
+- **WeeTodd H3 Quantized Transformer Loader** selects an exact `q8_conservative` or `q8_extended`
+  recipe, validates its JSON indexes without loading weights, and reports measured memory savings
+  and approximation warnings.
 - **WeeTodd H3 Component Preflight** validates the manifest, component files, task, configuration,
   and quantization recipe. It estimates staged memory without loading tensor payloads.
 - **WeeTodd H3 LoRA Loader (MLX)** builds an ordered, lazy LoRA stack. It validates safetensors
@@ -21,6 +24,9 @@ WeeTodd Nodes is an independent MLX-native MiniMax H3 engine and composable Comf
   bounded manual or automatic policy.
 - **WeeTodd H3 BlockCache (MLX)** always runs block zero and the current output heads, then reuses
   the cached video and audio residual of later blocks when both modality checks permit reuse.
+- **WeeTodd H3 Hierarchical BlockCache (MLX)** splits all 50 blocks into three contiguous segments.
+  It always runs each segment anchor and accepts each segment tail independently with joint video
+  and audio checks.
 - **WeeTodd H3 Trajectory Forecast (MLX)** predicts a bounded future joint video/audio transformer
   result from recent real evaluations. It keeps current timestep output processing active and
   falls back to a real evaluation when its safety checks reject a forecast.
@@ -43,7 +49,7 @@ WeeTodd Nodes is an independent MLX-native MiniMax H3 engine and composable Comf
 - **WeeTodd H3 Generate Video + Audio** produces a synchronized MP4 and JSON sidecar.
 - **WeeTodd H3 Unload MLX Runtime** releases the warm pipeline and cached MLX allocations.
 
-The suite currently registers 20 composable nodes. The first release supports
+The suite currently registers 22 composable nodes. The first release supports
 text-to-video-plus-audio. First/last-frame and multi-reference nodes are next; the engine already
 contains much of the keyframe machinery.
 
@@ -51,7 +57,8 @@ contains much of the keyframe machinery.
 
 The sampler exposes three optional acceleration strategies. **EasyCache** reuses complete joint
 predictions, **BlockCache** keeps the first block and output heads live while reusing later-block
-residuals, and **Trajectory Forecast** extrapolates a compact joint video/audio feature history.
+residuals, **Hierarchical BlockCache** independently reuses three block tails, and **Trajectory
+Forecast** extrapolates a compact joint video/audio feature history.
 They are intentionally mutually exclusive so a workflow has one clear approximation policy.
 
 Each strategy offers explicit controls and automatic conservative, balanced, and speed-oriented
@@ -64,6 +71,18 @@ uses staged component unloading, tile-serial VAE decoding, explicit MLX material
 and chunked attention queries. `automatic` currently selects a 512-token query chunk. Manual 512,
 1024, and 2048-token choices are available for machine-specific tuning. Low-memory execution is
 intended to preserve the generation result; only scheduling and peak live allocations change.
+
+### Hierarchical BlockCache validation
+
+The three-segment speed policy completed q8-extended plus Turbo generations at 640 by 384 and 1344
+by 768. Each run reused all three segment tails on one sampling step and skipped 47 of 200 block
+executions while retaining all four scheduler evaluations.
+
+At 640 by 384, sampling took 70.85 seconds and the complete workflow took 96.58 seconds. At 1344 by
+768, sampling took 582.49 seconds, 13.2 percent less than the 670.80-second no-cache control. The
+native cache stored 1.216 GB and increased the complete ComfyUI process peak from 54.74 GB to 58.48
+GB. Both outputs contained 124 H.264 frames, stereo 32 kHz AAC, and 8.3 ms audio-video drift. Treat
+the speed policy as an explicit quality-memory tradeoff, not a default or low-memory mode.
 
 ## Generic LoRA and Turbo LoRA support
 
@@ -138,6 +157,21 @@ and VAEs remains the larger memory-management mechanism.
 affine quantized tensors one source tensor at a time. The output is a directly loadable sharded
 checkpoint with a versioned recipe, source SHA-256 identity, tensor inventory, and bounded failure
 cleanup. Conversion does not instantiate a second complete transformer in memory.
+
+Choose `--profile q8_conservative` for the 48-module, approximately 4.34 GB recipe. Choose
+`--profile q8_extended` for the validated 82-module, approximately 8.02 GB recipe. The quantized
+transformer loader rejects a directory whose recorded module overrides do not exactly match the
+selected profile.
+
+The real extended conversion produced 37 directly loadable shards and 33.38 GB of tensor storage.
+Its maximum conversion buffer was 1.07 GB. Direct loading reconstructed all 82 selected modules
+and released their MLX allocation after unload.
+
+A fresh ComfyUI process also completed the native 1344 by 768 Turbo workflow from the sharded
+`q8_extended` checkpoint. Four transformer evaluations took 670.80 seconds, or 167.68 seconds per
+evaluation. The complete ComfyUI process reached a 54.74 GB physical-footprint peak. Direct
+publication produced 124 H.264 frames and stereo 32 kHz AAC with 8.3 ms audio-video drift. The
+measurement includes ComfyUI, Python, file mappings, Metal allocations, and transient decode state.
 
 The accepted experimental recipe stores the four core projections in blocks 38 through 49 as
 8-bit weights with group size 64. On a harder-motion 640 by 384 validation, it reduced transformer

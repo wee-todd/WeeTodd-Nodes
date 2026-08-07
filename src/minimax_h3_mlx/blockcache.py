@@ -165,3 +165,106 @@ class H3BlockCacheState:
     def cache_bytes(self) -> int:
         values = (self.video_tail, self.audio_tail)
         return sum(int(value.nbytes) for value in values if value is not None)
+
+
+@dataclass(frozen=True)
+class H3HierarchicalBlockCacheConfig(H3BlockCacheConfig):
+    """Reuse three H3 block segments independently after evaluating each anchor block."""
+
+    segments: tuple[tuple[int, int], ...] = ((0, 16), (17, 33), (34, 49))
+
+    def validate(self) -> None:
+        super().validate()
+        expected_start = 0
+        for start, end in self.segments:
+            if start != expected_start or end < start:
+                raise ValueError("Hierarchical BlockCache segments must be contiguous and ordered.")
+            expected_start = end + 1
+        if expected_start != 50:
+            raise ValueError("Hierarchical BlockCache segments must cover all 50 H3 blocks.")
+
+
+class H3HierarchicalBlockCacheState:
+    """Request-local independent cache state for contiguous H3 transformer segments."""
+
+    def __init__(self, config: H3HierarchicalBlockCacheConfig) -> None:
+        config.validate()
+        self.config = config
+        self.segments = config.segments
+        self._states = tuple(H3BlockCacheState(config) for _ in self.segments)
+        self._starts = {start: index for index, (start, _) in enumerate(self.segments)}
+        self.last_was_hit = False
+        self.last_segment_hits = [False] * len(self.segments)
+        self.executed_blocks = 0
+        self.skipped_blocks = 0
+
+    def begin_step(self) -> None:
+        self.last_was_hit = False
+        self.last_segment_hits = [False] * len(self.segments)
+        self.executed_blocks += 50
+
+    def segment_start(self, block_index: int) -> int | None:
+        return self._starts.get(block_index)
+
+    def segment_end(self, segment_index: int) -> int:
+        return self.segments[segment_index][1]
+
+    def try_reuse_segment(
+        self,
+        segment_index,
+        before_anchor,
+        after_anchor,
+        video_indices,
+        audio_indices,
+        step_index,
+        total_steps,
+    ):
+        reused = self._states[segment_index].try_reuse(
+            before_anchor,
+            after_anchor,
+            video_indices,
+            audio_indices,
+            step_index,
+            total_steps,
+        )
+        if reused is not None:
+            self.last_was_hit = True
+            self.last_segment_hits[segment_index] = True
+            start, end = self.segments[segment_index]
+            skipped = end - start
+            self.executed_blocks -= skipped
+            self.skipped_blocks += skipped
+        return reused
+
+    def update_segment(
+        self,
+        segment_index,
+        before_anchor,
+        after_anchor,
+        after_segment,
+        video_indices,
+        audio_indices,
+    ) -> None:
+        self._states[segment_index].update(
+            before_anchor,
+            after_anchor,
+            after_segment,
+            video_indices,
+            audio_indices,
+        )
+
+    @property
+    def hits(self) -> int:
+        return sum(state.hits for state in self._states)
+
+    @property
+    def segment_hits(self) -> tuple[int, ...]:
+        return tuple(state.hits for state in self._states)
+
+    @property
+    def resolved_threshold(self) -> tuple[float | None, ...]:
+        return tuple(state.resolved_threshold for state in self._states)
+
+    @property
+    def cache_bytes(self) -> int:
+        return sum(state.cache_bytes for state in self._states)

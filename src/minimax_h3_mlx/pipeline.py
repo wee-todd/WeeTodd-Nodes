@@ -127,6 +127,10 @@ class LatentResult:
     blockcache_hits: int = 0
     blockcache_resolved_threshold: float | None = None
     blockcache_cache_bytes: int = 0
+    blockcache_segment_hits: tuple[int, ...] = ()
+    blockcache_segment_thresholds: tuple[float | None, ...] = ()
+    blockcache_executed_blocks: int = 0
+    blockcache_skipped_blocks: int = 0
     trajectory_forecasts: int = 0
     trajectory_fallbacks: int = 0
     trajectory_history_bytes: int = 0
@@ -356,9 +360,14 @@ class MiniMaxH3Pipeline:
             easycache = H3EasyCacheState(easycache_config)
         blockcache = None
         if blockcache_config is not None:
-            from .blockcache import H3BlockCacheState
+            from .blockcache import H3BlockCacheState, H3HierarchicalBlockCacheState
 
-            blockcache = H3BlockCacheState(blockcache_config)
+            state_type = (
+                H3HierarchicalBlockCacheState
+                if hasattr(blockcache_config, "segments")
+                else H3BlockCacheState
+            )
+            blockcache = state_type(blockcache_config)
         trajectory_forecast = None
         if trajectory_forecast_config is not None:
             from .trajectory_forecast import H3TrajectoryForecastState
@@ -381,6 +390,9 @@ class MiniMaxH3Pipeline:
                 else None
             )
             blockcache_hit = False
+            hierarchical_blockcache = blockcache is not None and hasattr(
+                blockcache, "segment_hits"
+            )
             if reused is None:
                 if diagnostics is not None and hasattr(diagnostics, "begin_evaluation"):
                     diagnostics.begin_evaluation(
@@ -408,7 +420,8 @@ class MiniMaxH3Pipeline:
                     diagnostics=diagnostics,
                 )
                 transformer_evaluations += int(
-                    (blockcache is None or not blockcache.last_was_hit)
+                    hierarchical_blockcache
+                    or (blockcache is None or not blockcache.last_was_hit)
                     and (
                         trajectory_forecast is None
                         or not trajectory_forecast.last_was_forecast
@@ -434,7 +447,11 @@ class MiniMaxH3Pipeline:
                 trajectory_forecast is not None
                 and trajectory_forecast.last_was_forecast
             )
-            if reused is None and not blockcache_hit and not forecast_hit:
+            if (
+                reused is None
+                and (not blockcache_hit or hierarchical_blockcache)
+                and not forecast_hit
+            ):
                 transformer_times.append(elapsed)
             if verbose:
                 completed = index + 1
@@ -475,9 +492,27 @@ class MiniMaxH3Pipeline:
             ),
             blockcache_hits=blockcache.hits if blockcache is not None else 0,
             blockcache_resolved_threshold=(
-                blockcache.resolved_threshold if blockcache is not None else None
+                blockcache.resolved_threshold
+                if blockcache is not None and not hasattr(blockcache, "segment_hits")
+                else None
             ),
             blockcache_cache_bytes=blockcache.cache_bytes if blockcache is not None else 0,
+            blockcache_segment_hits=(
+                blockcache.segment_hits if hasattr(blockcache, "segment_hits") else ()
+            ),
+            blockcache_segment_thresholds=(
+                blockcache.resolved_threshold
+                if hasattr(blockcache, "segment_hits")
+                else ()
+            ),
+            blockcache_executed_blocks=(
+                blockcache.executed_blocks
+                if hasattr(blockcache, "executed_blocks")
+                else transformer_evaluations * 50
+            ),
+            blockcache_skipped_blocks=(
+                blockcache.skipped_blocks if hasattr(blockcache, "skipped_blocks") else 0
+            ),
             trajectory_forecasts=(
                 trajectory_forecast.forecasts if trajectory_forecast is not None else 0
             ),
