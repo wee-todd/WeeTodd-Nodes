@@ -99,6 +99,10 @@ class H3VideoVAECache:
                 self._vae = self._factory(spec)
                 self._spec = spec
             try:
+                if latents.generation_config.memory_mode == "low_memory_bf16":
+                    # Keep the existing tile geometry, but hold one decoder activation set at a
+                    # time. Weights and decoder arithmetic remain in their checkpoint dtypes.
+                    self._vae.decode_batch = 1
                 if check_interrupted is not None:
                     check_interrupted()
                 started = time.perf_counter()
@@ -117,7 +121,7 @@ class H3VideoVAECache:
             except BaseException:
                 self._release_locked()
                 raise
-            if unload_after:
+            if unload_after or latents.generation_config.memory_mode == "low_memory_bf16":
                 self._release_locked()
             return result
 
@@ -272,7 +276,7 @@ class H3AudioVAECache:
             except BaseException:
                 self._release_locked()
                 raise
-            if unload_after:
+            if unload_after or latents.generation_config.memory_mode == "low_memory_bf16":
                 self._release_locked()
             return result
 

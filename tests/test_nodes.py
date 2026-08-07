@@ -56,10 +56,11 @@ def test_sampling_metadata_preserves_exact_prompt(monkeypatch):
 
 
 def test_expected_nodes_are_registered():
-    assert len(NODE_CLASS_MAPPINGS) == 18
+    assert len(NODE_CLASS_MAPPINGS) == 19
     assert "WeeToddH3ComponentLoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3Preflight" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3TextEncode" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3TrajectoryForecast" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3UnloadTextEncoder" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3Sample" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3EasyCache" in NODE_CLASS_MAPPINGS
@@ -99,11 +100,15 @@ def test_generation_config_node_returns_validated_value():
         1344,
         768,
         True,
+        "low_memory_bf16",
+        "1024",
     )
     assert config.seed == 42
     assert config.drop_adaln is True
     assert (config.width, config.height) == (1344, 768)
     assert config.aspect_ratio == "16:9"
+    assert config.memory_mode == "low_memory_bf16"
+    assert config.attention_query_chunk_size == 1024
     assert resolved == "1344 x 768 pixels"
 
 

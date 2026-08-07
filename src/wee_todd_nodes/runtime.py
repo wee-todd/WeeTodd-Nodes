@@ -32,6 +32,8 @@ class H3GenerationConfig:
     resolution_mode: str = "custom"
     resolution_tier: str = "custom"
     aspect_ratio: str = "custom"
+    memory_mode: str = "normal"
+    attention_chunk_size: str = "automatic"
 
     def validate(self) -> None:
         if not 5.0 <= self.duration_seconds <= 15.0:
@@ -42,6 +44,19 @@ class H3GenerationConfig:
             raise ValueError("width and height must be at least 32 pixels")
         if self.width % 32 or self.height % 32:
             raise ValueError("width and height must be divisible by 32")
+        if self.memory_mode not in {"normal", "low_memory_bf16"}:
+            raise ValueError("memory_mode must be 'normal' or 'low_memory_bf16'")
+        if self.attention_chunk_size not in {"automatic", "512", "1024", "2048"}:
+            raise ValueError("attention_chunk_size must be automatic, 512, 1024, or 2048")
+
+    @property
+    def attention_query_chunk_size(self) -> int | None:
+        """Query rows per dense-attention call; weights and activations remain BF16."""
+        if self.memory_mode != "low_memory_bf16":
+            return None
+        if self.attention_chunk_size == "automatic":
+            return 512
+        return int(self.attention_chunk_size)
 
 
 class H3RuntimeCache:

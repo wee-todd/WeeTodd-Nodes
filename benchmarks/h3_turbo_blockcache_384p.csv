@@ -1,0 +1,5 @@
+policy,requested_steps,scheduled_evaluations,full_transformer_evaluations,blockcache_hits,resolved_threshold,sampling_seconds,workflow_seconds,blockcache_bytes,av_drift_seconds
+none,5,4,4,0,,98.644563,143.90,0,0.008333
+conservative,5,4,4,0,0.200000,101.088209,135.85,99929088,0.008333
+balanced,5,4,4,0,0.350000,96.716771,123.05,99929088,0.008333
+speed,5,4,3,1,0.600000,74.750351,101.33,99929088,0.008333

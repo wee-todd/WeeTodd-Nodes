@@ -127,6 +127,9 @@ class LatentResult:
     blockcache_hits: int = 0
     blockcache_resolved_threshold: float | None = None
     blockcache_cache_bytes: int = 0
+    trajectory_forecasts: int = 0
+    trajectory_fallbacks: int = 0
+    trajectory_history_bytes: int = 0
     seconds_per_evaluation: float = 0.0
     total_seconds: float = 0.0
 
@@ -269,6 +272,7 @@ class MiniMaxH3Pipeline:
         step_callback: Callable[[int, int], None] | None = None,
         easycache_config=None,
         blockcache_config=None,
+        trajectory_forecast_config=None,
     ) -> LatentResult:
         """Sample synchronized text-only video and audio latents without loading either VAE."""
         run_started = time.perf_counter()
@@ -336,8 +340,14 @@ class MiniMaxH3Pipeline:
         self._ensure_cache(timestep_table, drop_adaln, verbose)
         embeds = prompt_embeds.astype(mx.bfloat16)
 
-        if easycache_config is not None and blockcache_config is not None:
-            raise ValueError("EasyCache and BlockCache are mutually exclusive.")
+        accelerators = sum(
+            value is not None
+            for value in (easycache_config, blockcache_config, trajectory_forecast_config)
+        )
+        if accelerators > 1:
+            raise ValueError(
+                "EasyCache, BlockCache, and Trajectory Forecast are mutually exclusive."
+            )
         easycache = None
         if easycache_config is not None:
             from .easycache import H3EasyCacheState
@@ -348,6 +358,11 @@ class MiniMaxH3Pipeline:
             from .blockcache import H3BlockCacheState
 
             blockcache = H3BlockCacheState(blockcache_config)
+        trajectory_forecast = None
+        if trajectory_forecast_config is not None:
+            from .trajectory_forecast import H3TrajectoryForecastState
+
+            trajectory_forecast = H3TrajectoryForecastState(trajectory_forecast_config)
 
         step_times = []
         transformer_times = []
@@ -379,11 +394,17 @@ class MiniMaxH3Pipeline:
                     layout.text_indices,
                     modulation_cache=self._cache,
                     blockcache=blockcache,
+                    trajectory_forecast=trajectory_forecast,
+                    forecast_coordinate=float(timestep),
                     step_index=index,
                     total_steps=total_steps,
                 )
-                transformer_evaluations += (
-                    1 if blockcache is None or not blockcache.last_was_hit else 0
+                transformer_evaluations += int(
+                    (blockcache is None or not blockcache.last_was_hit)
+                    and (
+                        trajectory_forecast is None
+                        or not trajectory_forecast.last_was_forecast
+                    )
                 )
                 blockcache_hit = blockcache is not None and blockcache.last_was_hit
                 if easycache is not None:
@@ -401,7 +422,11 @@ class MiniMaxH3Pipeline:
             mx.eval(video_rows, audio_rows)
             elapsed = time.perf_counter() - started
             step_times.append(elapsed)
-            if reused is None and not blockcache_hit:
+            forecast_hit = (
+                trajectory_forecast is not None
+                and trajectory_forecast.last_was_forecast
+            )
+            if reused is None and not blockcache_hit and not forecast_hit:
                 transformer_times.append(elapsed)
             if verbose:
                 completed = index + 1
@@ -409,7 +434,7 @@ class MiniMaxH3Pipeline:
                 eta = mean * (total_steps - completed)
                 print(
                     f"  step {completed}/{total_steps}  {step_times[-1]:.1f}s  "
-                    f"{'cached  ' if reused is not None or blockcache_hit else ''}"
+                    f"{'forecast  ' if forecast_hit else 'cached  ' if reused is not None or blockcache_hit else ''}"
                     f"eta {eta / 60:.1f} min",
                     flush=True,
                 )
@@ -442,6 +467,15 @@ class MiniMaxH3Pipeline:
                 blockcache.resolved_threshold if blockcache is not None else None
             ),
             blockcache_cache_bytes=blockcache.cache_bytes if blockcache is not None else 0,
+            trajectory_forecasts=(
+                trajectory_forecast.forecasts if trajectory_forecast is not None else 0
+            ),
+            trajectory_fallbacks=(
+                trajectory_forecast.fallbacks if trajectory_forecast is not None else 0
+            ),
+            trajectory_history_bytes=(
+                trajectory_forecast.history_bytes if trajectory_forecast is not None else 0
+            ),
             seconds_per_evaluation=(sum(transformer_times) / max(len(transformer_times), 1)),
             total_seconds=time.perf_counter() - run_started,
         )

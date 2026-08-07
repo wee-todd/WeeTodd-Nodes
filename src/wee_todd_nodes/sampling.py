@@ -88,6 +88,9 @@ class H3Latents:
     blockcache_hits: int = 0
     blockcache_resolved_threshold: float | None = None
     blockcache_cache_bytes: int = 0
+    trajectory_forecasts: int = 0
+    trajectory_fallbacks: int = 0
+    trajectory_history_bytes: int = 0
     lora_report: tuple[dict[str, Any], ...] = ()
 
 
@@ -111,7 +114,7 @@ class H3TransformerCache:
         self._lock = RLock()
         self._factory = factory or _default_sampler_factory
         self._spec: H3TransformerSpec | None = None
-        self._schedule_key: tuple[int, bool] | None = None
+        self._schedule_key: tuple[int, bool, str] | None = None
         self._lora_key = None
         self._lora_report: tuple[dict[str, Any], ...] = ()
         self._sampler: Any = None
@@ -131,6 +134,7 @@ class H3TransformerCache:
         step_callback=None,
         easycache=None,
         blockcache=None,
+        trajectory_forecast=None,
         loras: H3LoRAStack | None = None,
     ) -> H3Latents:
         spec.validate()
@@ -148,13 +152,29 @@ class H3TransformerCache:
             raise ValueError(
                 "Conditioning was produced by a different Qwen3-VL component specification."
             )
-        schedule_key = (config.steps, config.drop_adaln)
+        schedule_key = (config.steps, config.drop_adaln, config.memory_mode)
         loras = loras or H3LoRAStack()
         loras.validate_for_steps(config.steps)
-        if loras.has_turbo and (easycache is not None or blockcache is not None):
+        if loras.has_turbo and easycache is not None:
             raise ValueError(
-                "Turbo LoRA sampling does not yet support EasyCache or BlockCache. "
-                "Disconnect the cache node before sampling."
+                "Turbo LoRA sampling does not support EasyCache. Disconnect the cache node "
+                "before sampling."
+            )
+        if (
+            loras.has_turbo
+            and blockcache is not None
+            and not getattr(blockcache, "allow_turbo_experimental", False)
+        ):
+            raise ValueError(
+                "Turbo LoRA with BlockCache requires the explicit experimental opt-in on the "
+                "BlockCache node. This combination may change motion, detail, or audio."
+            )
+        accelerators = sum(
+            value is not None for value in (easycache, blockcache, trajectory_forecast)
+        )
+        if accelerators > 1:
+            raise ValueError(
+                "EasyCache, BlockCache, and Trajectory Forecast are mutually exclusive."
             )
         lora_key = loras.cache_key
         with self._lock:
@@ -184,6 +204,9 @@ class H3TransformerCache:
                     self._release_locked()
                     raise
             try:
+                self._sampler.dit.set_attention_query_chunk_size(
+                    config.attention_query_chunk_size
+                )
                 result = self._sampler.sample_latents(
                     conditioning.embeddings,
                     conditioning.token_tags,
@@ -196,6 +219,7 @@ class H3TransformerCache:
                     step_callback=step_callback,
                     easycache_config=easycache,
                     blockcache_config=blockcache,
+                    trajectory_forecast_config=trajectory_forecast,
                 )
                 latents = H3Latents(
                     video=result.video_latents,
@@ -215,16 +239,28 @@ class H3TransformerCache:
                         result, "blockcache_resolved_threshold", None
                     ),
                     blockcache_cache_bytes=getattr(result, "blockcache_cache_bytes", 0),
+                    trajectory_forecasts=getattr(result, "trajectory_forecasts", 0),
+                    trajectory_fallbacks=getattr(result, "trajectory_fallbacks", 0),
+                    trajectory_history_bytes=getattr(
+                        result, "trajectory_history_bytes", 0
+                    ),
                     lora_report=self._lora_report,
                     seconds_per_evaluation=result.seconds_per_evaluation,
                     total_seconds=result.total_seconds,
                     transformer_spec=spec,
                     generation_config=config,
                 )
+                try:
+                    import mlx.core as mx
+
+                    if type(latents.video).__module__.startswith("mlx."):
+                        mx.eval(latents.video, latents.audio)
+                except ImportError:
+                    pass
             except BaseException:
                 self._release_locked()
                 raise
-            if unload_after:
+            if unload_after or config.memory_mode == "low_memory_bf16":
                 self._release_locked()
             return latents
 
