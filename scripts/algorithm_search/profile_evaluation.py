@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import gc
 import json
+import math
 from pathlib import Path
 
 import mlx.core as mx
@@ -23,6 +24,7 @@ from minimax_h3_mlx.algorithm_search.preflight import validate_profile_component
 from minimax_h3_mlx.blockcache import H3BlockCacheConfig
 from minimax_h3_mlx.config import PipelineConfig
 from minimax_h3_mlx.load import load_dit
+from minimax_h3_mlx.lora import LoRARequest, apply_lora
 from minimax_h3_mlx.pipeline import MiniMaxH3Pipeline
 from minimax_h3_mlx.text_encoder import MiniMaxH3TextEncoder
 
@@ -44,6 +46,30 @@ def _blockcache_config(mode: str) -> H3BlockCacheConfig | None:
     if mode == "none":
         return None
     return H3BlockCacheConfig(mode=f"automatic_{mode}")
+
+
+def _lora_request(
+    path: Path | None,
+    strength: float,
+    adaln_input_grid: Path | None,
+) -> LoRARequest | None:
+    if path is None:
+        if adaln_input_grid is not None:
+            raise ValueError("LoRA AdaLN input grid requires a LoRA checkpoint.")
+        return None
+    if not path.is_file():
+        raise FileNotFoundError(f"MiniMax H3 LoRA file not found: {path}")
+    if not math.isfinite(strength) or not -10.0 <= strength <= 10.0:
+        raise ValueError("MiniMax H3 LoRA strength must be finite and between -10 and 10.")
+    if adaln_input_grid is not None and not adaln_input_grid.is_file():
+        raise FileNotFoundError(
+            f"MiniMax H3 LoRA AdaLN input grid not found: {adaln_input_grid}"
+        )
+    return LoRARequest(
+        path=str(path),
+        strength=strength,
+        adaln_input_grid=(str(adaln_input_grid) if adaln_input_grid is not None else None),
+    )
 
 
 def main() -> int:
@@ -76,6 +102,9 @@ def main() -> int:
     parser.add_argument("--quantize-module-bit", action="append", default=[])
     parser.add_argument("--quantize-bits", type=int, default=5, choices=[4, 5, 6, 8])
     parser.add_argument("--quantize-group-size", type=int, default=64)
+    parser.add_argument("--lora", type=Path)
+    parser.add_argument("--lora-strength", type=float, default=1.0)
+    parser.add_argument("--lora-adaln-grid", type=Path)
     parser.add_argument("--save-final-latents", action="store_true")
     parser.add_argument(
         "--blockcache",
@@ -83,6 +112,7 @@ def main() -> int:
         default="none",
     )
     args = parser.parse_args()
+    lora_request = _lora_request(args.lora, args.lora_strength, args.lora_adaln_grid)
     validate_profile_components(
         model_index=args.model_index,
         transformer=args.transformer,
@@ -160,6 +190,10 @@ def main() -> int:
         )
         gc.collect()
         mx.clear_cache()
+    lora_report = apply_lora(dit, lora_request) if lora_request is not None else None
+    if lora_report is not None:
+        gc.collect()
+        mx.clear_cache()
     hybrid_values = (args.hybrid_block, args.hybrid_text_rows, args.hybrid_audio_rows)
     if any(value is not None for value in hybrid_values) and not all(
         value is not None for value in hybrid_values
@@ -226,6 +260,17 @@ def main() -> int:
                 "blockcache_resolved_threshold": result.blockcache_resolved_threshold,
                 "blockcache_cache_bytes": result.blockcache_cache_bytes,
                 "quantization": quantization,
+                "lora": (
+                    {
+                        "path": lora_report.path,
+                        "strength": lora_report.strength,
+                        "targets": lora_report.targets,
+                        "adaln_targets": lora_report.adaln_targets,
+                        "tensor_bytes": lora_report.tensor_bytes,
+                    }
+                    if lora_report is not None
+                    else None
+                ),
                 "final_latents": latent_path.name if latent_path is not None else None,
             },
             indent=2,

@@ -141,6 +141,10 @@ def _logical_shape(layer) -> tuple[int, int]:
     weight = getattr(base, "weight", None)
     if not isinstance(weight, mx.array) or weight.ndim != 2:
         raise TypeError(f"LoRA target {type(base).__name__} is not a supported linear layer.")
+    bits = getattr(base, "bits", None)
+    if weight.dtype == mx.uint32 and bits is not None:
+        logical_input_width = int(weight.shape[1]) * 32 // int(bits)
+        return int(weight.shape[0]), logical_input_width
     return int(weight.shape[0]), int(weight.shape[1])
 
 

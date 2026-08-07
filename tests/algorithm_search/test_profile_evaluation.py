@@ -3,6 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import mlx.core as mx
+import pytest
 
 
 def _module():
@@ -34,3 +35,21 @@ def test_blockcache_cli_modes_map_to_runtime_configuration():
     assert module._blockcache_config("none") is None
     assert module._blockcache_config("balanced").mode == "automatic_balanced"
     assert module._blockcache_config("speed").mode == "automatic_speed"
+
+
+def test_lora_request_validates_paths_and_strength(tmp_path: Path):
+    module = _module()
+    lora = tmp_path / "turbo.safetensors"
+    grid = tmp_path / "grid.safetensors"
+    lora.touch()
+    grid.touch()
+
+    request = module._lora_request(lora, 1.0, grid)
+
+    assert request.path == str(lora)
+    assert request.strength == 1.0
+    assert request.adaln_input_grid == str(grid)
+    with pytest.raises(ValueError, match="requires a LoRA checkpoint"):
+        module._lora_request(None, 1.0, grid)
+    with pytest.raises(ValueError, match="finite and between"):
+        module._lora_request(lora, float("nan"), grid)

@@ -1,9 +1,10 @@
 from dataclasses import replace
 
 import mlx.core as mx
+import mlx.nn as nn
 import pytest
 
-from minimax_h3_mlx.dit import MiniMaxH3DiT
+from minimax_h3_mlx.dit import MiniMaxH3DiT, projection_weight_shape
 from minimax_h3_mlx.lora import LoRARequest, apply_lora, prepare_lora_timesteps
 from tests.test_dit_smoke import tiny_config
 from wee_todd_nodes.lora import H3LoRASpec, H3LoRAStack
@@ -36,7 +37,40 @@ def test_generic_lora_runs_as_activation_space_update(tmp_path):
 
     assert mx.array_equal(output, expected)
     assert report.targets == 1
+    assert projection_weight_shape(model.blocks[0].attn.out_proj) == list(layer.weight.shape)
     assert report.adaln_targets == 0
+
+
+def test_generic_lora_targets_quantized_projection_by_logical_width(tmp_path):
+    model = MiniMaxH3DiT(tiny_config())
+    nn.quantize(
+        model,
+        group_size=32,
+        bits=8,
+        class_predicate=lambda path, module: path == "blocks.0.attn.out_proj",
+    )
+    layer = model.blocks[0].attn.out_proj
+    value = mx.arange(2 * 64, dtype=mx.float32).reshape(2, 64) / 128
+    base = layer(value)
+    a = mx.full((2, 64), 0.01, dtype=mx.bfloat16)
+    b = mx.full((64, 2), 0.02, dtype=mx.bfloat16)
+    path = tmp_path / "quantized.safetensors"
+    _save(
+        path,
+        {
+            "blocks.0.attn.out_proj.lora_A.weight": a,
+            "blocks.0.attn.out_proj.lora_B.weight": b,
+        },
+    )
+
+    report = apply_lora(model, LoRARequest(str(path)))
+    output = model.blocks[0].attn.out_proj(value)
+    expected = base + ((value.astype(a.dtype) @ a.T) @ b.T).astype(base.dtype)
+    mx.eval(output, expected)
+
+    assert mx.array_equal(output, expected)
+    assert report.targets == 1
+    assert projection_weight_shape(model.blocks[0].attn.out_proj) == list(layer.weight.shape)
 
 
 def test_pruned_adaln_lora_uses_supplied_original_input_grid(tmp_path):
