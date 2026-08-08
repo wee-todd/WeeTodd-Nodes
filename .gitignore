@@ -1,8 +1,6 @@
 .DS_Store
 .venv/
 .agents/
-.github/
-.GitHub/
 __pycache__/
 *.py[cod]
 .pytest_cache/
