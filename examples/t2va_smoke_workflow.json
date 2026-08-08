@@ -48,7 +48,7 @@
         {"name": "resolved_resolution", "type": "STRING", "links": null, "slot_index": 1}
       ],
       "properties": {"Node name for S&R": "WeeToddH3GenerationConfig"},
-      "widgets_values": [5.0, 8, 0, "preset", "384P (fast smoke)", "16:9", 640, 384, true, "normal", "automatic"]
+      "widgets_values": [5.0, 8, 0, "preset", "384P (fast smoke)", "16:9", 640, 384, true, "normal", "automatic", "mlx"]
     },
     {
       "id": 4,

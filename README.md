@@ -89,6 +89,13 @@ ComfyUI/models/
 Do not add a second directory level inside any downloaded repository. The paging manifests must
 be at the roots shown above.
 
+The Component Loader resolves relative paths through all compatible model roots registered by
+ComfyUI, including roots from `extra_model_paths.yaml`. It checks the component's normal ComfyUI
+category first and then the remaining registered model categories. Absolute paths remain available
+for diagnostics, but portable workflows should use relative paths.
+
+The Generation Config presets include 640p as a 1120 by 640 canvas on H3's required 32-pixel grid.
+
 ## Run the low-memory ComfyUI smoke test
 
 Load
@@ -200,6 +207,12 @@ user account that performs the download.
 
 Check that `paged_manifest.json` or `paged_text_encoder_manifest.json` is directly inside the
 selected override directory. Remove accidental nested repository folders.
+
+### Generation Config values shift after loading an older workflow
+
+Restart ComfyUI and reload the workflow. The frontend migration restores legacy Generation Config
+layouts that predate `resolution_mode`, including the older `384P (fast mode)` label. Save the
+workflow again after it loads correctly.
 
 ### Preflight reports a missing processor, tokenizer, or audio VAE
 

@@ -55,6 +55,7 @@ def test_t2va_ui_workflow_links_are_consistent():
         True,
         "normal",
         "automatic",
+        "mlx",
     ]
     for link_id, origin_id, origin_slot, target_id, target_slot, link_type in links.values():
         assert link_id in nodes[origin_id]["outputs"][origin_slot]["links"]

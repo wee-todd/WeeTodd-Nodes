@@ -71,15 +71,61 @@ def _safe_output_target(output_directory: Path, filename_prefix: str, seed: int)
     return target
 
 
-def _resolve_component_root(checkpoint: str) -> str:
-    """Resolve a relative H3 root below ComfyUI's model directory when available."""
+_COMPONENT_MODEL_CATEGORIES = {
+    "checkpoint": ("checkpoints", "diffusers", "diffusion_models"),
+    "transformer": ("diffusion_models", "checkpoints", "diffusers"),
+    "text_encoder": ("text_encoders", "checkpoints"),
+    "processor": ("text_encoders", "checkpoints"),
+    "tokenizer": ("text_encoders", "checkpoints"),
+    "video_vae": ("vae", "checkpoints"),
+    "audio_vae": ("vae", "checkpoints"),
+}
+
+
+def _resolve_component_root(checkpoint: str, component: str = "checkpoint") -> str:
+    """Resolve an H3 path through every model root registered with ComfyUI."""
     path = Path(checkpoint).expanduser()
     if path.is_absolute() or path.exists():
         return str(path)
+    if ".." in path.parts:
+        raise ValueError("Relative H3 component paths cannot contain '..'.")
     try:
         import folder_paths
 
-        return str(Path(folder_paths.models_dir) / path)
+        roots = []
+        seen = set()
+
+        def add_root(value):
+            root = Path(value).expanduser()
+            key = str(root)
+            if key not in seen:
+                seen.add(key)
+                roots.append(root)
+
+        get_folder_paths = getattr(folder_paths, "get_folder_paths", None)
+        if get_folder_paths is not None:
+            for category in _COMPONENT_MODEL_CATEGORIES.get(component, ()):
+                try:
+                    for root in get_folder_paths(category):
+                        add_root(root)
+                except KeyError:
+                    continue
+
+        models_dir = Path(folder_paths.models_dir)
+        add_root(models_dir)
+
+        registered = getattr(folder_paths, "folder_names_and_paths", {})
+        for category, entry in registered.items():
+            if category in {"custom_nodes", "datasets"} or not entry:
+                continue
+            for root in entry[0]:
+                add_root(root)
+
+        for root in roots:
+            candidate = root / path
+            if candidate.exists():
+                return str(candidate)
+        return str(models_dir / path)
     except ImportError:
         return str(path)
 
@@ -87,6 +133,7 @@ def _resolve_component_root(checkpoint: str) -> str:
 _H3_RESOLUTION_SHORT_EDGES = {
     "384P (fast smoke)": 384,
     "512P (balanced)": 512,
+    "640P (quality preview)": 640,
     "768P (native quality)": 768,
     "2K (experimental, very high memory)": 1152,
 }
@@ -179,14 +226,18 @@ class WeeToddH3ComponentLoader:
     ):
         return (
             H3ComponentSetSpec(
-                checkpoint=_resolve_component_root(checkpoint),
+                checkpoint=_resolve_component_root(checkpoint, "checkpoint"),
                 task=task,
-                transformer=_resolve_component_root(transformer) if transformer else None,
-                text_encoder=_resolve_component_root(text_encoder) if text_encoder else None,
-                processor=_resolve_component_root(processor) if processor else None,
-                tokenizer=_resolve_component_root(tokenizer) if tokenizer else None,
-                video_vae=_resolve_component_root(video_vae) if video_vae else None,
-                audio_vae=_resolve_component_root(audio_vae) if audio_vae else None,
+                transformer=(
+                    _resolve_component_root(transformer, "transformer") if transformer else None
+                ),
+                text_encoder=(
+                    _resolve_component_root(text_encoder, "text_encoder") if text_encoder else None
+                ),
+                processor=(_resolve_component_root(processor, "processor") if processor else None),
+                tokenizer=(_resolve_component_root(tokenizer, "tokenizer") if tokenizer else None),
+                video_vae=(_resolve_component_root(video_vae, "video_vae") if video_vae else None),
+                audio_vae=(_resolve_component_root(audio_vae, "audio_vae") if audio_vae else None),
             ),
         )
 

@@ -129,6 +129,49 @@ def test_component_loader_resolves_relative_root_below_comfy_models(monkeypatch,
     assert spec.text_encoder == str(tmp_path / "MiniMax-H3" / "text_encoders" / "q8-paged")
 
 
+def test_component_loader_resolves_shared_comfy_model_roots(monkeypatch, tmp_path):
+    instance_models = tmp_path / "instance" / "models"
+    shared_checkpoints = tmp_path / "shared" / "checkpoints"
+    shared_text_encoders = tmp_path / "shared" / "text_encoders"
+    checkpoint = shared_checkpoints / "MiniMax-H3" / "FL2VA"
+    text_encoder = shared_text_encoders / "MiniMax-H3" / "text_encoders" / "q8-paged"
+    checkpoint.mkdir(parents=True)
+    text_encoder.mkdir(parents=True)
+
+    roots = {
+        "checkpoints": [str(instance_models / "checkpoints"), str(shared_checkpoints)],
+        "text_encoders": [
+            str(instance_models / "text_encoders"),
+            str(shared_text_encoders),
+        ],
+    }
+    monkeypatch.setitem(
+        sys.modules,
+        "folder_paths",
+        SimpleNamespace(
+            models_dir=str(instance_models),
+            get_folder_paths=lambda category: roots.get(category, []),
+            folder_names_and_paths={
+                category: (paths, {".safetensors"}) for category, paths in roots.items()
+            },
+        ),
+    )
+
+    (spec,) = WeeToddH3ComponentLoader().specify(
+        "MiniMax-H3/FL2VA",
+        "t2va",
+        text_encoder="MiniMax-H3/text_encoders/q8-paged",
+    )
+
+    assert spec.checkpoint == str(checkpoint)
+    assert spec.text_encoder == str(text_encoder)
+
+
+def test_component_loader_rejects_relative_parent_traversal():
+    with pytest.raises(ValueError, match="cannot contain"):
+        WeeToddH3ComponentLoader().specify("../outside", "t2va")
+
+
 def test_quantized_loader_selects_validated_named_profile(tmp_path):
     from minimax_h3_mlx.mixed_checkpoint import (
         MIXED_CHECKPOINT_FORMAT,
@@ -211,6 +254,13 @@ def test_resolution_presets_follow_ratio_and_h3_grid(ratio, expected):
 
 def test_custom_resolution_uses_exact_dimensions():
     assert _resolve_h3_resolution("custom", "unused", "unused", 640, 384) == (640, 384)
+
+
+def test_640p_widescreen_preset_uses_h3_grid():
+    assert _resolve_h3_resolution("preset", "640P (quality preview)", "16:9", 640, 384) == (
+        1120,
+        640,
+    )
 
 
 def test_experimental_2k_preset_resolves_common_widescreen_canvas():
