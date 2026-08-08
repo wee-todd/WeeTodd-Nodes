@@ -1,548 +1,243 @@
 # WeeTodd Nodes
 
-Experimental ComfyUI nodes for running MiniMax H3 natively through MLX on Apple Silicon.
+Experimental MLX-native MiniMax H3 nodes for ComfyUI on Apple Silicon.
 
-WeeTodd Nodes is an independent MLX-native MiniMax H3 engine and composable ComfyUI node suite. It
-provides explicit loaders, reusable model state, generation controls, conditioning tools, memory
-controls, quantization, synchronized output, and workflow examples for Apple Silicon.
+WeeTodd Nodes keeps the MiniMax H3 engine separate from the ComfyUI adapter. The current release
+focuses on synchronized text-to-video-plus-audio generation, staged model unloading, and a
+low-memory path that can be tested before enabling optional acceleration.
 
-## Requirements and current scope
+## Current scope
 
-- Use an Apple Silicon Mac and macOS.
-- Use Python 3.11 or later in the same environment as ComfyUI.
-- Install FFmpeg with H.264 video and Advanced Audio Coding (AAC) support.
-- Supply the MiniMax H3 transformer, Qwen3-VL text encoder, processor, tokenizer, video variational
-  autoencoder (VAE), and audio VAE. The project does not bundle or download models.
-- Start with text-to-video-plus-audio (T2VA). First-frame, last-frame, first/last-frame, and
-  reference-conditioning nodes are not registered yet.
-- Expect no live latent preview in the current sampler. Generated metadata records
-  `preview_policy: none`.
+- Apple Silicon and macOS
+- Python 3.11 or later in the ComfyUI environment
+- MLX 0.32.0 or later
+- Text-to-video-plus-audio (`t2va`)
+- Synchronized H.264 video and 32 kHz stereo AAC audio
+- Twenty-two composable nodes under `WeeTodd/H3`
 
-## Minimal composable workflow
+First-frame, last-frame, combined first/last-frame, and reference-conditioning nodes are not yet
+registered. The current sampler does not provide a live latent preview.
 
-Build the first graph in this order:
+## Install
 
-1. Connect **Component Loader** to **Quantized Transformer Loader** when using a named q8 profile.
-2. Connect the selected components and **Generation Config** to **Component Preflight**.
-3. Connect preflight components to **Text Encode** and enable unloading after encoding.
-4. Connect the conditioning, components, and configuration to **Sample Video + Audio Latents**.
-5. Optionally connect one LoRA stack and one acceleration node to the sampler.
-6. Connect the synchronized latents to **Direct Publish Latents** for staged VAE decode and muxing.
+Clone the project into the ComfyUI custom-node directory. Install it with the same Python
+interpreter that runs ComfyUI.
 
-EasyCache, BlockCache, Hierarchical BlockCache, and Trajectory Forecast are mutually exclusive.
-Turbo with either BlockCache node requires the explicit experimental opt-in. Use five requested
-schedule points for four transformer evaluations. Eight requested schedule points produce seven
-transformer evaluations.
+```bash
+COMFYUI_ROOT=/path/to/ComfyUI
 
-### Ready-to-run low-memory workflow
+git clone https://github.com/wee-todd/WeeTodd-Nodes.git \
+  "$COMFYUI_ROOT/custom_nodes/WeeTodd-Nodes"
 
-Load [`examples/t2va_low_memory_paged_workflow.json`](examples/t2va_low_memory_paged_workflow.json)
-in ComfyUI after preparing both paged checkpoints. The matching API prompt is
-[`examples/t2va_low_memory_paged_api.json`](examples/t2va_low_memory_paged_api.json).
+"$COMFYUI_ROOT/.venv/bin/python" -m pip install -e \
+  "$COMFYUI_ROOT/custom_nodes/WeeTodd-Nodes"
+```
 
-The following public, gated MLX artifacts are available on Hugging Face:
+Install FFmpeg with H.264 encoding and Advanced Audio Coding (AAC) support. Restart ComfyUI and
+confirm that the `WeeTodd/H3` category is present.
+
+## Obtain the model components
+
+The following public, gated MLX artifacts are provided for the low-memory workflow:
 
 - [H3 q8-extended paged transformer](https://huggingface.co/Vayden/MiniMax-H3-MLX-q8-extended-paged)
 - [Qwen3-VL Q8 paged conditioner](https://huggingface.co/Vayden/Qwen3-VL-32B-H3-MLX-q8-paged)
 - [MiniMax H3 video VAE MLX Q8](https://huggingface.co/Vayden/MiniMax-H3-Video-VAE-MLX-Q8)
 
-Browse all three artifacts in the
+They are grouped in the
 [WeeTodd MiniMax H3 MLX collection](https://huggingface.co/collections/Vayden/weetodd-minimax-h3-mlx-for-comfyui-6a7765772401cdd54a992af0).
 
-Review and acknowledge the license terms on each model page. Then authenticate with the Hugging
-Face CLI and download the repositories into the ComfyUI model directory:
+Review and accept the license terms on each model page. Then download the artifacts into the
+ComfyUI model directory.
 
 ```bash
 COMFYUI_ROOT=/path/to/ComfyUI
 
-hf auth login
+"$COMFYUI_ROOT/.venv/bin/hf" auth login
 
-hf download Vayden/MiniMax-H3-MLX-q8-extended-paged \
+"$COMFYUI_ROOT/.venv/bin/hf" download Vayden/MiniMax-H3-MLX-q8-extended-paged \
   --local-dir "$COMFYUI_ROOT/models/MiniMax-H3/transformers/q8_extended_paged"
 
-hf download Vayden/Qwen3-VL-32B-H3-MLX-q8-paged \
+"$COMFYUI_ROOT/.venv/bin/hf" download Vayden/Qwen3-VL-32B-H3-MLX-q8-paged \
   --local-dir "$COMFYUI_ROOT/models/MiniMax-H3/text_encoders/q8-paged"
 
-hf download Vayden/MiniMax-H3-Video-VAE-MLX-Q8 \
+"$COMFYUI_ROOT/.venv/bin/hf" download Vayden/MiniMax-H3-Video-VAE-MLX-Q8 \
   --local-dir "$COMFYUI_ROOT/models/MiniMax-H3/vae/q8"
 ```
 
-The resulting portable layout is:
+These repositories do not form a complete H3 checkpoint. Obtain the remaining MiniMax H3
+components under their applicable licenses. The Component Loader still requires a partition root
+with `model_index.json`, plus the processor, tokenizer, and audio VAE.
 
-```text
-models/
-└── MiniMax-H3/
-    ├── FL2VA/
-    ├── text_encoders/q8-paged/
-    ├── transformers/q8_extended_paged/
-    └── vae/q8/video_vae_affine_q8.safetensors
-```
-
-The gated artifacts do not form a complete H3 checkpoint. Supply the processor, tokenizer, audio
-VAE, and other required base components separately under their applicable licenses. Set the
-Component Loader's `video_vae` override to
-`MiniMax-H3/vae/q8/video_vae_affine_q8.safetensors` to use the Q8 video decoder.
-
-The workflow is preconfigured for 640 by 384, five seconds, seed zero, five schedule points, and
-four transformer evaluations. It enables `low_memory_bf16`, automatic 512-row attention chunks,
-AdaLN release, paged Qwen, four-block transformer paging, staged unloading, and direct latent
-publication. The graph does not enable a cache or LoRA because those allocations increase the
-minimum memory requirement. The supplied prompt is the exact prompt used for the measured
-dual-paged smoke test.
-
-Run Component Preflight before generation. The preflight report must identify both paging formats
-and the selected q8-extended checkpoint. The graph selects the distributed affine-Q8 video VAE and
-uses the base checkpoint's audio VAE.
-
-## Current nodes
-
-- **WeeTodd H3 Component Loader** creates a lazy specification for the transformer, Qwen3-VL,
-  processor, tokenizer, video VAE, and audio VAE.
-- **WeeTodd H3 Quantized Transformer Loader** selects an exact `q8_conservative` or `q8_extended`
-  recipe, validates its JSON indexes without loading weights, and reports measured memory savings
-  and approximation warnings.
-- **WeeTodd H3 Component Preflight** validates the manifest, component files, task, configuration,
-  and quantization recipe. It estimates staged memory without loading tensor payloads.
-- **WeeTodd H3 LoRA Loader (MLX)** builds an ordered, lazy LoRA stack. It validates safetensors
-  headers immediately and loads adapter tensors only with the transformer.
-- **WeeTodd H3 Text Encode (Qwen3-VL)** produces text-only conditioning from the required
-  unnormalized layer-50 state. It omits the vision tower and can unload Qwen3-VL after encoding.
-- **WeeTodd H3 Unload Qwen3-VL** explicitly releases a warm process-local conditioner.
-- **WeeTodd H3 Sample Video + Audio Latents** runs the transformer over one synchronized packed
-  sequence and returns undecoded MLX video and audio latents.
-- **WeeTodd H3 EasyCache (MLX)** reuses complete joint video and audio prediction residuals with a
-  bounded manual or automatic policy.
-- **WeeTodd H3 BlockCache (MLX)** always runs block zero and the current output heads, then reuses
-  the cached video and audio residual of later blocks when both modality checks permit reuse.
-- **WeeTodd H3 Hierarchical BlockCache (MLX)** splits all 50 blocks into three contiguous segments.
-  It always runs each segment anchor and accepts each segment tail independently with joint video
-  and audio checks.
-- **WeeTodd H3 Trajectory Forecast (MLX)** predicts a bounded future joint video/audio transformer
-  result from recent real evaluations. It keeps current timestep output processing active and
-  falls back to a real evaluation when its safety checks reject a forecast.
-- **WeeTodd H3 Unload Transformer** releases the transformer-only sampler and MLX cache.
-- **WeeTodd H3 Decode Video VAE** converts normalized video latents to ComfyUI `IMAGE` frames. It
-  checks component provenance, accepts native affine-Q8 decoder checkpoints, reports their precision,
-  and can unload the final video VAE after decoding.
-- **WeeTodd H3 Unload Video VAE** explicitly releases a warm process-local video decoder.
-- **WeeTodd H3 Decode Audio VAE** converts normalized audio latents to ComfyUI `AUDIO` with one
-  batch, two channels, and a 32 kHz sample rate. It retains synchronized timing metadata.
-- **WeeTodd H3 Unload Audio VAE** explicitly releases a warm process-local audio decoder.
-- **WeeTodd H3 Publish Video + Audio** validates synchronized ComfyUI images and audio, writes a
-  collision-safe MP4 atomically, removes temporary files, and emits a JSON metadata sidecar.
-- **WeeTodd H3 Direct Publish Latents (MLX)** stages the video and audio VAEs, streams decoded RGB
-  chunks directly into FFmpeg, and publishes synchronized MP4 plus metadata without retaining a
-  complete ComfyUI `IMAGE` tensor.
-- **WeeTodd H3 Model Loader (MLX)** describes a full or quantized checkpoint and loads it lazily.
-- **WeeTodd H3 Generation Config** selects a resolution tier and aspect ratio, then validates the
-  resolved canvas, duration, steps, seed, AdaLN behavior, and projection backend. Exact custom
-  dimensions and the experimental MPP backend remain available as advanced options.
-- **WeeTodd H3 Generate Video + Audio** produces a synchronized MP4 and JSON sidecar.
-- **WeeTodd H3 Unload MLX Runtime** releases the warm pipeline and cached MLX allocations.
-
-The suite currently registers 22 composable nodes. The first release supports
-text-to-video-plus-audio. First/last-frame and multi-reference nodes are next; the engine already
-contains much of the keyframe machinery.
-
-## Acceleration and memory controls
-
-The sampler exposes four optional acceleration strategies. **EasyCache** reuses complete joint
-predictions, **BlockCache** keeps the first block and output heads live while reusing later-block
-residuals, **Hierarchical BlockCache** independently reuses three block tails, and **Trajectory
-Forecast** extrapolates a compact joint video/audio feature history.
-They are intentionally mutually exclusive so a workflow has one clear approximation policy.
-
-Each strategy offers explicit controls and automatic conservative, balanced, and speed-oriented
-policies where applicable. Cache hits and forecasts can change generated pixels or audio; they are
-performance/quality tradeoffs, not mathematically exact execution. Turbo LoRA can be combined with
-Trajectory Forecast. Turbo can also use either BlockCache node after explicit experimental opt-in.
-Every combined accelerator remains experimental.
-
-Trajectory Forecast also exposes an optional speed-mode bootstrap. The bootstrap holds the first
-actual compact feature for the second sampling evaluation, then requires an actual refresh. It
-changes the trajectory without increasing the forecast budget and remains disabled by default.
-
-For memory-constrained systems, select `low_memory_bf16`. This preserves BF16 model precision and
-uses staged component unloading, tile-serial VAE decoding, explicit MLX materialization boundaries,
-and chunked attention queries. `automatic` currently selects a 512-token query chunk. Manual 512,
-1024, and 2048-token choices are available for machine-specific tuning. Low-memory execution is
-intended to preserve the generation result; only scheduling and peak live allocations change.
-
-### Experimental paged transformer weights
-
-A block-aligned checkpoint can keep only the fixed transformer modules and four H3 blocks active
-at once. The sampler loads each window from safetensors, completes the hidden state, retires all
-window references, and clears the MLX cache before advancing. The normal resident loader remains
-the fallback and is unchanged.
-
-Convert a transformer into a separate destination directory. Conversion is atomic, validates page
-hashes by default, and never modifies the source checkpoint:
-
-```bash
-/path/to/ComfyUI/.venv/bin/python scripts/convert_paged_checkpoint.py \
-  /path/to/source/transformer \
-  /path/to/models/transformers/q8_extended_paged
-```
-
-Allow enough free disk space for a second copy of the transformer. Select the resulting directory
-as the transformer override in the Component Loader. The presence of `paged_manifest.json`
-activates direct paged loading automatically; generation metadata records the format, window size,
-page count, and largest materialized window.
-
-Paging preserves checkpoint precision and supports activation-space LoRAs, including the current
-Turbo adapter layout. Standard BlockCache is supported. Hierarchical BlockCache is rejected because
-its non-sequential jumps do not yet share page windows efficiently. The experimental MPP projection
-backend currently falls back to MLX for paged blocks. Tiny BF16 and affine-Q8 checkpoints, with and
-without a block LoRA, match the resident path bit-for-bit. The full smoke measurement below shows
-the memory and runtime trade; native-resolution and cold-storage results remain unmeasured.
-
-The text-only Qwen3-VL conditioner can use the same disk-backed policy with one decoder layer per
-window. The converter keeps the fixed token embeddings and the first 50 language layers. It omits
-the vision tower because T2VA does not execute it. Supply the full upstream Qwen architecture config
-so the converted directory remains standalone:
-
-```bash
-/path/to/ComfyUI/.venv/bin/python scripts/convert_paged_text_encoder.py \
-  /path/to/compact-q8-encoder \
-  /path/to/models/text_encoders/q8-paged \
-  --architecture-config /path/to/upstream/text_encoder/config.json
-```
-
-Select the converted directory as the Component Loader's text-encoder override. Continue to point
-the processor and tokenizer inputs at their asset directory. Paged Qwen is text-only; use the
-resident encoder when image conditioning needs its vision tower.
-
-On the measured Q8 encoder, fixed text tensors use 1.556 GB and one layer uses 518 MB. The displayed
-244-token H3 prompt reduced MLX peak allocation from 27.780 GB to 2.595 GB. Conditioning values and
-token tags were bit-identical, including an identical serialized safetensors SHA-256. Warm-cache
-encoding increased from 2.29 to 3.12 seconds; cold-storage behavior remains device-dependent.
-
-A clean 640 by 384 ComfyUI run combined paged Qwen, paged q8-extended H3, Turbo strength 1.0, five
-schedule points, no cache, low-memory BF16 staging, and direct Q8 VAE publication. Complete-process
-peak was 14.951 GB. The same graph with resident Qwen and only the transformer paged peaked at
-28.823 GB. The complete workflow took 150.4 seconds versus 152.3 seconds, and both final MP4 files
-were byte-identical. The paged transformer averaged 26.88 seconds for each of four evaluations and
-loaded 250 block pages, including the AdaLN-cache pass.
-
-### Exact BF16 MPP projection backend
-
-The advanced `projection_backend` control can select `mpp_experimental` for eligible BF16
-transformer projections. This backend executes Metal Performance Primitives (MPP) matrix
-multiplication inside MLX-owned custom Metal kernels. Checkpoint weights remain in the MLX model,
-LoRA updates remain in activation space, and staged unloading is unchanged.
-
-The backend checks macOS and MLX support before use. It wraps only direct BF16 projections without
-a bias. Quantized projections and unsupported layouts continue through standard MLX. The first
-call for each runtime shape computes both implementations and requires an exact `mx.array_equal`
-result. A failed capability check, kernel execution, or exact comparison permanently selects
-standard MLX for that signature.
-
-One Apple M3 Ultra with macOS 26.6 and MLX 0.32.0 completed a five-second 640 by 384 generation with
-the BF16 transformer, Q8 text encoder, Turbo LoRA, low-memory staging, and no cache node. Four
-transformer evaluations decreased from 101.53 seconds with standard MLX to 89.77 seconds with MPP.
-This is an 11.59 percent runtime reduction and a 13.10 percent throughput increase. All 200 eligible
-projections were wrapped, four runtime signatures passed exact verification, and no signature used
-the fallback.
-
-Decoded video frames matched the standard-MLX control exactly. The published AAC streams were not
-byte-identical, but decoded samples had 0.99999985 correlation and a root-mean-square difference of
-0.00000069. The MPP path did not reduce measured MLX peak allocation. Keep `mlx` selected when
-testing an unsupported Apple GPU or when maximum portability is more important than the measured
-speed improvement.
-
-An exact-layout classic Steel attention sweep tested 16-, 32-, and 64-row query tiles with 16-,
-32-, and 64-row key tiles at 9,477 and 25,138 packed rows. MLX's existing 32-by-16 selection remained
-the fastest viable tile. Exact alternatives were 1.4 to 38.4 percent slower at 9,477 rows and 0.3
-to 59.5 percent slower at 25,138 rows. Larger key tiles were slower and changed BF16 reduction
-results. A fresh-process probe found no attention-workspace saving. WeeTodd therefore retains MLX's
-default fused attention and does not expose a redundant attention backend.
-
-Raw MPP BF16-by-Int8 and BF16-by-packed-Int4 projection probes also ran at the four dominant H3
-shapes. They reduced stored weight bytes by 50 and 75 percent, respectively, but were about 2.2 and
-2.8 percent slower in aggregate than BF16 MPP. These primitives do not apply MLX group scales or biases,
-so they are research building blocks rather than compatible quantized loaders. No low-bit MPP
-backend is exposed.
-
-### Hierarchical BlockCache validation
-
-The three-segment speed policy completed q8-extended plus Turbo generations at 640 by 384 and 1344
-by 768. Each run reused all three segment tails on one sampling step and skipped 47 of 200 block
-executions while retaining all four scheduler evaluations.
-
-At 640 by 384, sampling took 70.85 seconds and the complete workflow took 96.58 seconds. At 1344 by
-768, sampling took 582.49 seconds, 13.2 percent less than the 670.80-second no-cache control. The
-native cache stored 1.216 GB and increased the complete ComfyUI process peak from 54.74 GB to 58.48
-GB. Both outputs contained 124 H.264 frames, stereo 32 kHz AAC, and 8.3 ms audio-video drift. Treat
-the speed policy as an explicit quality-memory tradeoff, not a default or low-memory mode.
-
-The first eight-point durability batch covered 20 different realistic stress prompts at 1344 by
-768. Every generation completed seven transformer evaluations, reused each segment tail three
-times, skipped 141 of 350 cumulative block executions, and retained 8.3 ms audio-video drift.
-Sampling averaged 735.12 seconds, with a range of 719.79 through 743.47 seconds. The batch validates
-execution and media contracts across diverse prompts; visual equivalence has not been established.
-
-## Generic LoRA and Turbo LoRA support
-
-Put MiniMax H3 LoRA files under `ComfyUI/models/loras/`, then connect **WeeTodd H3 LoRA Loader
-(MLX)** to the sampler. Chain loader nodes to apply multiple LoRAs in graph order. The loader
-supports standard `lora_A`/`lora_B` and `lora_down`/`lora_up` safetensors naming. Adapters run in
-activation space, so small updates are not rounded away by a BF16 or future quantized base model.
-
-The experimental [MiniMax H3 Turbo LoRA](https://huggingface.co/larryvrh/MiniMax-H3-Turbo-Lora)
-also targets the original full-width AdaLN timestep path. When the selected H3 transformer is a
-pruned curve checkpoint, place `h3_silu_temb_grid.safetensors` from the Apache-2.0
-[Turbo node repository](https://github.com/Larryvrh/ComfyUI-MiniMax-H3-Turbo) beside the LoRA, or
-select the grid explicitly in the loader. WeeTodd does not bundle or download either file.
-
-For four transformer evaluations, select five requested schedule points. For seven evaluations,
-select eight requested schedule points. Start with LoRA strength 1.0 and no accelerator. Enable a
-compatible accelerator only after a no-cache control succeeds. The current Turbo checkpoint is
-experimental and can produce over-sharp grain, plastic skin, softness, or audio defects.
-
-## Install for development
-
-Clone into `ComfyUI/custom_nodes/WeeTodd-Nodes`, then use the same Python environment as ComfyUI:
-
-```bash
-/path/to/ComfyUI/.venv/bin/python -m pip install -e .
-```
-
-Run the project-local Python environment preflight before replacing a virtual environment or
-changing ComfyUI dependencies.
-
-Restart ComfyUI and look under `WeeTodd/H3`.
-
-## Model locations
-
-Point **Component Loader** at a MiniMax H3 partition root that contains `model_index.json`. Use its
-optional inputs when the transformer, text encoder, processor, tokenizer, or either VAE is stored
-elsewhere. Paths may be absolute at runtime, but workflows intended for sharing should use portable
-locations below the ComfyUI model directory.
-
-The named quantized loader resolves profiles below its transformer root:
+Use this portable layout:
 
 ```text
 ComfyUI/models/
-├── MiniMax-H3/
-│   ├── FL2VA/
-│   │   └── model_index.json
-│   └── transformers/
-│       ├── q8_conservative/
-│       └── q8_extended/
-└── loras/
-    ├── <MiniMax-H3 adapter>.safetensors
-    └── h3_silu_temb_grid.safetensors
+└── MiniMax-H3/
+    ├── FL2VA/
+    │   ├── model_index.json
+    │   └── <remaining licensed H3 components>
+    ├── text_encoders/
+    │   └── q8-paged/
+    ├── transformers/
+    │   └── q8_extended_paged/
+    └── vae/
+        └── q8/
+            └── video_vae_affine_q8.safetensors
 ```
 
-Each named q8 directory must contain its configuration, quantization recipe, shard index, and all
-indexed safetensors shards. Preflight and the quantized loader inspect these files before payload
-weights load.
+Do not add a second directory level inside any downloaded repository. The paging manifests must
+be at the roots shown above.
 
-## Reality check
+## Run the low-memory ComfyUI smoke test
 
-H3 is a 33B joint audio/video diffusion transformer plus a large text encoder and two VAEs. MiniMax's initial open release uses dense attention. Native-resolution generation is extremely compute-intensive even on large Apple Silicon systems. Start with the `384P (fast smoke)` tier, 5 seconds, and a low step count to verify wiring before increasing quality.
+Load
+[`examples/t2va_low_memory_paged_workflow.json`](examples/t2va_low_memory_paged_workflow.json) in
+ComfyUI. The matching API prompt is
+[`examples/t2va_low_memory_paged_api.json`](examples/t2va_low_memory_paged_api.json).
 
-Resolution selection follows the hosted-node style while resolving to local H3 canvases. Choose a
-quality tier (`384P`, `512P`, `768P`, or experimental `2K`) and then choose an aspect ratio from
-`21:9` through `9:21`. The `768P (native quality)` and `16:9` selection resolves to H3's established
-1344 by 768 canvas. The experimental `2K` tier has a much larger attention and memory cost. Use
-Preflight before generation.
+The graph contains six nodes:
 
-The first T2VA baseline uses the unquantized reference precision policy. Most transformer weights
-use BF16. The small patch, timestep, and output modules remain FP32 because the audited reference
-keeps those stability-sensitive modules in FP32. Current generation testing remains focused on
-this BF16-class path; broader base-model quantization is planned for later optimization work.
+| Order | Node | Purpose |
+| ---: | --- | --- |
+| 1 | Component Loader | Select the base partition and three paged or Q8 overrides. |
+| 2 | Generation Config | Set the smoke-test geometry and low-memory policy. |
+| 3 | Component Preflight | Validate every component before allocating model weights. |
+| 4 | Text Encode | Run paged Qwen and unload it after encoding. |
+| 5 | Sample Video + Audio Latents | Run the paged transformer and unload it after sampling. |
+| 6 | Direct Publish Latents | Decode each VAE in sequence and publish synchronized media. |
 
-## Memory measurement guide
+Keep the supplied first-run settings:
 
-Use complete-process physical footprint when deciding whether a workflow fits a Mac. This macOS
-kernel measurement includes ComfyUI, Python, mapped checkpoint pages, MLX Metal allocations,
-allocator retention, cache state, and decode buffers. The peak is monotonic for the process
-lifetime, so each controlled comparison starts a fresh ComfyUI process.
+| Setting | Value |
+| --- | --- |
+| Task | `t2va` |
+| Resolution | `384P (fast smoke)`, `16:9` |
+| Canvas | 640 by 384 |
+| Duration | 5 seconds |
+| Requested schedule points | 5 |
+| Transformer evaluations | 4 |
+| Memory mode | `low_memory_bf16` |
+| Attention chunk size | `automatic` |
+| Drop AdaLN after cache build | Enabled |
+| Projection backend | `mlx` |
+| Qwen unload after encode | Enabled |
+| Transformer unload after sample | Enabled |
+| Cache, forecast, and LoRA nodes | Disabled |
 
-Use MLX peak allocation only to isolate an engine change. Do not compare an MLX-only peak directly
-with a complete-process peak.
+The workflow selects these portable overrides:
 
-| Workflow | Canvas | Complete-process peak | Interpretation |
-| --- | ---: | ---: | --- |
-| BF16, dense attention, no cache | 1280 by 768 | 61.83 GB | BF16 control |
-| BF16, 512-row attention chunks | 1280 by 768 | 61.36 GB | Saves 472 MB |
-| q8-extended plus Turbo, no cache | 1344 by 768 | 54.74 GB | Four evaluations |
-| q8-extended plus Turbo, hierarchical speed | 1344 by 768 | 58.48 GB | Four evaluations; 1.216 GB cache |
-| q8-extended paged plus Turbo, resident Qwen | 640 by 384 | 28.82 GB | Qwen remains the peak |
-| q8-extended and Qwen both paged, plus Turbo | 640 by 384 | 14.95 GB | Four evaluations; no cache |
+```text
+transformer: MiniMax-H3/transformers/q8_extended_paged
+text_encoder: MiniMax-H3/text_encoders/q8-paged
+video_vae: MiniMax-H3/vae/q8/video_vae_affine_q8.safetensors
+```
 
-The canvas and prompt differ between the BF16 and q8 rows. Use each row as a measured capacity
-point, not as a controlled cross-precision comparison. The controlled transformer-only comparison
-reduced MLX sample peak from 48.28 GB to 40.26 GB at 1344 by 768, an 8.02 GB reduction.
+Edit the prompt if desired, but keep the first test concrete and physically coherent. Describe the
+shot, subject motion, camera motion, environmental motion, sound effects, ambience, and dialogue in
+time order.
 
-## Low-memory BF16 results
+### Check preflight before queuing
 
-Endpoint sweeps measured the complete ComfyUI process, including resident model components and
-transient MLX allocations. At 640 by 384, 512-token query chunks reduced measured peak memory by
-about 204 MiB and increased sampling time by 4.1 percent. At 1280 by 768, the same setting reduced
-peak memory by about 472 MiB and increased sampling time by 2.8 percent. Larger chunks produced a
-similar memory reduction in these runs, with variable timing overhead.
+Run **Component Preflight** before generation. Do not queue the sampler if preflight reports a
+missing file, unsupported task, incompatible checkpoint, or negative memory headroom.
 
-| Canvas | Attention mode | Complete process peak | Sampling time | Peak saved |
-| --- | --- | ---: | ---: | ---: |
-| 640 by 384 | Dense | 48.26 GB | 97.49 s | Baseline |
-| 640 by 384 | 512-token chunks | 48.06 GB | 101.53 s | 204 MiB |
-| 1280 by 768 | Dense | 61.83 GB | 704.42 s | Baseline |
-| 1280 by 768 | 512-token chunks | 61.36 GB | 723.94 s | 472 MiB |
+For the published artifacts, preflight should report:
 
-These are endpoint measurements on one system, prompt, and seed. They show a modest attention
-workspace saving rather than a multi-gigabyte reduction because the complete-process figure also
-includes the large resident BF16 model. Strict unloading between the text encoder, transformer,
-and VAEs remains the larger memory-management mechanism.
+- Transformer paging format: `weetodd-h3-paged-v1`
+- Text-encoder paging format: `weetodd-h3-qwen-paged-v1`
+- Video VAE precision: `mlx-affine-8bit-group-64`
+- Partition: `fl2va`
+- Output frames: 124 for the five-second test
 
-## Affine-Q8 video VAE
+The header-based staged estimate for the verified workflow was 5.696 GB. This estimate excludes
+ComfyUI, Python, Metal workspace allocations, mapped pages, allocator retention, and operating
+system pressure. It is not a complete-process requirement.
 
-`scripts/quantize_video_vae.py` converts an existing released directory or self-describing video
-VAE into a directly loadable MLX affine-Q8 artifact. The output records its source hash, native
-tensor layout, group size, and exact 144-projection decoder scope. The component loader accepts the
-new file through its existing `video_vae` path; no additional graph node is required. Direct loading
-constructs quantized modules before reading tensors and does not reconstruct a full BF16 VAE.
+### Expected memory behavior
 
-On one Apple M3 Ultra, the complete video-VAE parameter residency fell from 5.208 GB to 2.943 GB,
-a 2.265 GB reduction. A real 640 by 384, 124-frame low-memory decode reduced MLX peak allocation
-from 7.660 GB to 5.382 GB. Decode time increased from 22.49 to 23.28 seconds. Against the BF16
-decode of the same latents, the q8 result measured 60.32 dB PSNR, 0.999943 cosine similarity, and
-0.059 mean absolute error on an 8-bit pixel scale. Q8 is therefore a memory option, not a speed
-optimization. Q4 remains unapproved pending a separate quality study.
+The low-memory path limits simultaneous residency across the pipeline:
 
-Example conversion:
+1. Paged Qwen retains its fixed tensors and loads one language layer at a time.
+2. Qwen unloads before transformer sampling begins.
+3. The transformer retains its fixed tensors and loads four H3 blocks at a time.
+4. AdaLN projection weights are released after the request-local cache is built.
+5. The transformer unloads before VAE decoding begins.
+6. Direct publication runs the video and audio VAEs in sequence and removes partial files after a
+   failure or cancellation.
+
+A clean 640 by 384 validation with dual paging, the Q8 video VAE, staged unloading, and Turbo LoRA
+reached a 14.951 GB complete ComfyUI process peak. The supplied smoke workflow omits Turbo and all
+caches. Treat 14.951 GB as one measured capacity point, not a guarantee for every Mac or prompt.
+A 16 GB system has little safety margin after macOS and other applications are included.
+
+## After the baseline succeeds
+
+Change one variable at a time and retain the same seed for comparisons.
+
+- Increase requested schedule points from 5 to 8 before testing higher values.
+- Test a larger resolution only after the 640 by 384 workflow completes.
+- Add one LoRA only after a no-LoRA control succeeds.
+- Add one acceleration node only after an uncached control succeeds.
+- Restart ComfyUI for clean complete-process memory comparisons.
+
+EasyCache, BlockCache, Hierarchical BlockCache, and Trajectory Forecast are mutually exclusive.
+They can change video and audio output. Turbo LoRA with a cache also requires the explicit
+experimental opt-in. None of these options belongs in the first low-memory smoke test.
+
+The optional MPP projection backend targets speed for eligible BF16 projections. It does not lower
+the measured MLX peak and is not part of the minimum-memory workflow. Q4 artifacts are not
+published or supported.
+
+## Troubleshooting
+
+### A model page is visible but downloads return 401
+
+Sign in to Hugging Face, accept the gate on that model page, and run `hf auth login` in the same
+user account that performs the download.
+
+### Preflight does not detect paging
+
+Check that `paged_manifest.json` or `paged_text_encoder_manifest.json` is directly inside the
+selected override directory. Remove accidental nested repository folders.
+
+### Preflight reports a missing processor, tokenizer, or audio VAE
+
+The three WeeTodd artifacts intentionally omit those components. Complete the licensed base
+`FL2VA` partition or set the corresponding Component Loader overrides.
+
+### ComfyUI runs out of memory
+
+Start a fresh ComfyUI process. Restore the supplied 640 by 384 settings. Disable every LoRA,
+cache, forecast, and preview. Confirm that both unload controls remain enabled and use Direct
+Publish Latents instead of retaining a complete ComfyUI image batch.
+
+### Publication fails
+
+Confirm that FFmpeg can encode H.264 video and AAC audio. Check the ComfyUI output directory for
+write permission. The publisher writes atomically and removes incomplete media after failure.
+
+## Development validation
+
+Run inexpensive validation with the project environment:
 
 ```bash
-python scripts/quantize_video_vae.py \
-  /path/to/video_vae.safetensors \
-  /path/to/video_vae_affine_q8.safetensors
+python -m compileall -q src __init__.py
+python -m pytest -q tests/test_nodes.py tests/test_runtime.py tests/test_workflows.py
+python -m ruff check src/wee_todd_nodes tests
+python scripts/lint_docs.py
 ```
 
-## Experimental mixed-precision checkpoints
+The published artifacts were also tested by a complete authenticated download into a clean
+ComfyUI 0.30.0 installation. All remote inventories and weight hashes matched, all 22 nodes
+registered, the supplied graph contracts validated, and header-only component preflight passed.
+No generation is started by preflight.
 
-`scripts/convert_mixed_checkpoint.py` converts selected transformer modules into standard MLX
-affine quantized tensors one source tensor at a time. The output is a directly loadable sharded
-checkpoint with a versioned recipe, source SHA-256 identity, tensor inventory, and bounded failure
-cleanup. Conversion does not instantiate a second complete transformer in memory.
+## License and status
 
-Choose `--profile q8_conservative` for the 48-module, approximately 4.34 GB recipe. Choose
-`--profile q8_extended` for the validated 82-module, approximately 8.02 GB recipe. The quantized
-transformer loader rejects a directory whose recorded module overrides do not exactly match the
-selected profile.
+The code in this repository is licensed under Apache-2.0. Model repositories carry their own
+license files and access conditions. WeeTodd Nodes does not bundle or automatically download model
+weights.
 
-The real extended conversion produced 37 directly loadable shards and 33.38 GB of tensor storage.
-Its maximum conversion buffer was 1.07 GB. Direct loading reconstructed all 82 selected modules
-and released their MLX allocation after unload.
-
-A fresh ComfyUI process also completed the native 1344 by 768 Turbo workflow from the sharded
-`q8_extended` checkpoint. Four transformer evaluations took 670.80 seconds, or 167.68 seconds per
-evaluation. The complete ComfyUI process reached a 54.74 GB physical-footprint peak. Direct
-publication produced 124 H.264 frames and stereo 32 kHz AAC with 8.3 ms audio-video drift. The
-measurement includes ComfyUI, Python, file mappings, Metal allocations, and transient decode state.
-
-The accepted experimental recipe stores the four core projections in blocks 38 through 49 as
-8-bit weights with group size 64. On a harder-motion 640 by 384 validation, it reduced transformer
-sample peak from 42.78 GB to 38.45 GB. Runtime remained within run variance. The result preserved
-the requested action and composition, but it is not numerically equivalent to BF16.
-
-BlockCache composes with this checkpoint. Balanced used five full evaluations and two cache hits,
-reducing transformer time by 27.2 percent; speed used four full evaluations and three hits,
-reducing it by 42.5 percent. Both cache policies introduced larger visible changes than q8 alone,
-so they remain explicit quality/speed choices.
-
-A projection-specific recipe extends 8-bit precision to both MLP projections in blocks 21 through
-37. It saved 8.02 GB of transformer sample peak in a full seven-evaluation 640 by 384 trajectory
-and a three-evaluation 1344 by 768 probe. Decoded video reached 22.50 dB and 31.64 dB PSNR,
-respectively, while preserving the requested action and final state in both contact sheets.
-
-The extended recipe is an optional experimental low-memory choice, not a published default or a
-BF16-equivalent checkpoint. The smaller blocks-38-through-49 recipe remains the conservative q8
-choice. Neither recipe demonstrated a repeatable speed improvement.
-
-## Direct MLX publication result
-
-The direct publisher decoded saved 640 by 384 latents into 124 H.264 frames and synchronized 32 kHz
-stereo AAC in 23.6 seconds. MLX peak allocation was 7.27 GB, the largest host RGB chunk was 12.5 MB,
-and measured pre-encode audio/video drift was 8.3 ms. The path atomically publishes the MP4 and JSON
-sidecar, checks interruption between stages, unloads both VAEs, and removes partial files after a
-failure.
-
-## EasyCache benchmark results
-
-WeeTodd tested no cache, conservative auto, balanced auto, and speed auto at 8, 12, 16, and 20
-requested steps. Every run used the same five-second prompt, seed, model components, and staged
-unloading policy. The first matrix used a 640 by 384 smoke-test canvas. The second matrix used the
-native-quality 1344 by 768 canvas.
-
-At 20 steps and 1344 by 768, conservative reduced sampling time by 20.6 percent, balanced reduced
-sampling time by 30.7 percent, and speed reduced sampling time by 46.9 percent. Speed reduced the
-complete workflow from 54.3 minutes to 29.6 minutes. Balanced remained a distinct middle policy at
-38.0 minutes.
-
-![H3 EasyCache scaling at native 768P](benchmarks/artifacts/charts/h3_easycache_policy_step_scaling_768p.svg)
-
-A complete transformer evaluation stabilized near 165 through 167 seconds at 1344 by 768, compared
-with approximately 23 through 26 seconds at 640 by 384. The native canvas has 4.2 times as many
-pixels, but an evaluation cost approximately 6.8 times as much. H3's dense attention therefore
-makes resolution substantially more expensive than pixel count alone suggests.
-
-These are single-seed performance measurements. Endpoint inspection found the requested robot and
-final-wave state in all native-resolution outputs, but the benchmark does not prove motion, detail,
-or audio equivalence. See the [local artifact bundle](benchmarks/artifacts/README.md).
-
-## BlockCache benchmark results
-
-The independent MLX BlockCache implementation was tested at 640 by 384 with the same prompt, seed,
-components, duration, requested steps, and staged unloading policy as the EasyCache matrix. Every
-BlockCache hit still evaluated block zero and the current output heads. A hit took approximately
-0.5 seconds, compared with approximately 23 through 24 seconds for a full transformer evaluation.
-
-At 20 requested steps, conservative reduced sampling time by 21.8 percent, balanced reduced
-sampling time by 30.2 percent, and speed reduced sampling time by 45.9 percent against the shared
-no-cache baseline. The request-local video and audio cache used approximately 95.3 MiB.
-
-![H3 BlockCache scaling at 640 by 384](benchmarks/artifacts/charts/h3_blockcache_policy_step_scaling_384p.svg)
-
-All 12 BlockCache outputs contained synchronized video and audio streams. These single-prompt,
-single-seed measurements do not prove perceptual equivalence. Generated media remains local under
-`benchmarks/artifacts/media/blockcache-384p/`.
-
-## Trajectory Forecast benchmark results
-
-A five-second 640 by 384 Turbo LoRA smoke test compared four real transformer evaluations with the
-balanced forecast policy. The forecast run performed three real evaluations and one forecast,
-reducing sampling time from 97.49 seconds to 75.43 seconds and complete workflow time from 134.31
-seconds to 120.54 seconds. It produced 124 video frames and synchronized 32 kHz stereo audio.
-
-| Mode | Real evaluations | Forecasts | Sampling | Workflow | Complete process peak |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| No forecast | 4 | 0 | 97.49 s | 134.31 s | 48.26 GB |
-| Balanced forecast | 3 | 1 | 75.43 s | 120.54 s | 49.07 GB |
-
-The approximately 772 MiB higher process peak includes forecast history and allocator behavior;
-the measured two-snapshot request history itself was about 191 MiB. This single smoke test shows a
-useful speed signal, but it does not establish perceptual equivalence or a general quality claim.
-
-A second exact-seed 640 by 384 test used q8-extended, Turbo, and four scheduled evaluations. Moving
-the single forecast from the third evaluation to an experimental second-evaluation bootstrap did
-not change runtime or memory materially. Both schedules changed the video and audio trajectory.
-The MPP backend wrapped 118 remaining BF16 projections and skipped 82 ineligible projections. It
-produced a byte-identical bootstrap MP4 while reducing sampling time by another 4.6 percent.
-
-| Mode | Schedule | Sampling | Workflow | Complete process peak |
-| --- | --- | ---: | ---: | ---: |
-| Dense MLX | `A A A A` | 91.72 s | 133.56 s | 40.24 GB |
-| Current speed | `A A F A` | 68.86 s | 94.52 s | 41.04 GB |
-| Bootstrap speed | `A F A A` | 68.84 s | 94.51 s | 41.04 GB |
-| Bootstrap plus MPP | `A F A A` | 65.67 s | 91.35 s | 41.05 GB |
-
-The bootstrap remains opt-in because equal runtime does not imply equal quality. Use an exact-seed
-dense comparison for each checkpoint, resolution, prompt class, and conditioning mode.
-
-Models are never bundled. Detailed project documentation and the OKF knowledge bundle are kept
-local and are intentionally excluded from Git.
-
-## Status
-
-Experimental and pre-release. APIs, node names, and workflow compatibility may change.
+The project is experimental and pre-release. Node interfaces and workflow compatibility may
+change.
