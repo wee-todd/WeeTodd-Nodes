@@ -74,8 +74,8 @@ transformer evaluations.
   complete ComfyUI `IMAGE` tensor.
 - **WeeTodd H3 Model Loader (MLX)** describes a full or quantized checkpoint and loads it lazily.
 - **WeeTodd H3 Generation Config** selects a resolution tier and aspect ratio, then validates the
-  resolved canvas, duration, steps, seed, and AdaLN behavior. Exact custom dimensions remain
-  available as an advanced option.
+  resolved canvas, duration, steps, seed, AdaLN behavior, and projection backend. Exact custom
+  dimensions and the experimental MPP backend remain available as advanced options.
 - **WeeTodd H3 Generate Video + Audio** produces a synchronized MP4 and JSON sidecar.
 - **WeeTodd H3 Unload MLX Runtime** releases the warm pipeline and cached MLX allocations.
 
@@ -102,6 +102,32 @@ uses staged component unloading, tile-serial VAE decoding, explicit MLX material
 and chunked attention queries. `automatic` currently selects a 512-token query chunk. Manual 512,
 1024, and 2048-token choices are available for machine-specific tuning. Low-memory execution is
 intended to preserve the generation result; only scheduling and peak live allocations change.
+
+### Exact BF16 MPP projection backend
+
+The advanced `projection_backend` control can select `mpp_experimental` for eligible BF16
+transformer projections. This backend executes Metal Performance Primitives (MPP) matrix
+multiplication inside MLX-owned custom Metal kernels. Checkpoint weights remain in the MLX model,
+LoRA updates remain in activation space, and staged unloading is unchanged.
+
+The backend checks macOS and MLX support before use. It wraps only direct BF16 projections without
+a bias. Quantized projections and unsupported layouts continue through standard MLX. The first
+call for each runtime shape computes both implementations and requires an exact `mx.array_equal`
+result. A failed capability check, kernel execution, or exact comparison permanently selects
+standard MLX for that signature.
+
+One Apple M3 Ultra with macOS 26.6 and MLX 0.32.0 completed a five-second 640 by 384 generation with
+the BF16 transformer, Q8 text encoder, Turbo LoRA, low-memory staging, and no cache node. Four
+transformer evaluations decreased from 101.53 seconds with standard MLX to 89.77 seconds with MPP.
+This is an 11.59 percent runtime reduction and a 13.10 percent throughput increase. All 200 eligible
+projections were wrapped, four runtime signatures passed exact verification, and no signature used
+the fallback.
+
+Decoded video frames matched the standard-MLX control exactly. The published AAC streams were not
+byte-identical, but decoded samples had 0.99999985 correlation and a root-mean-square difference of
+0.00000069. The MPP path did not reduce measured MLX peak allocation. Keep `mlx` selected when
+testing an unsupported Apple GPU or when maximum portability is more important than the measured
+speed improvement.
 
 ### Hierarchical BlockCache validation
 

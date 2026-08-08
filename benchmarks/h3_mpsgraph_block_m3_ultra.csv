@@ -1,0 +1,3 @@
+rows,mpsgraph_median_s,mlx_compiled_median_s,mlx_eager_median_s,speedup_vs_compiled,runtime_reduction_percent,projected_saving_per_50_blocks_s,mpsgraph_output_sample,mlx_output_sample,mpsgraph_explicit_buffer_bytes,mpsgraph_current_allocated_bytes,mlx_active_bytes,mlx_peak_bytes
+7689,0.319582959,0.349440208,0.358216916,1.09343,8.5443,1.49286,1.0703125,1.078125,939246500,2267611136,939152910,3309164046
+25138,1.630682084,1.717235709,,1.05308,5.0403,4.32768,1.0703125,1.078125,1321240008,5650628608,1321145870,7639225870

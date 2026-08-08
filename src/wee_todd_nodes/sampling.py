@@ -96,6 +96,8 @@ class H3Latents:
     trajectory_fallbacks: int = 0
     trajectory_history_bytes: int = 0
     lora_report: tuple[dict[str, Any], ...] = ()
+    projection_backend_report: dict[str, Any] | None = None
+    projection_backend_runtime: dict[str, Any] | None = None
 
 
 SamplerFactory = Callable[[H3TransformerSpec], Any]
@@ -118,9 +120,10 @@ class H3TransformerCache:
         self._lock = RLock()
         self._factory = factory or _default_sampler_factory
         self._spec: H3TransformerSpec | None = None
-        self._schedule_key: tuple[int, bool, str] | None = None
+        self._schedule_key: tuple[int, bool, str, str] | None = None
         self._lora_key = None
         self._lora_report: tuple[dict[str, Any], ...] = ()
+        self._projection_backend_report: dict[str, Any] | None = None
         self._sampler: Any = None
 
     @property
@@ -157,7 +160,12 @@ class H3TransformerCache:
             raise ValueError(
                 "Conditioning was produced by a different Qwen3-VL component specification."
             )
-        schedule_key = (config.steps, config.drop_adaln, config.memory_mode)
+        schedule_key = (
+            config.steps,
+            config.drop_adaln,
+            config.memory_mode,
+            config.projection_backend,
+        )
         loras = loras or H3LoRAStack()
         loras.validate_for_steps(config.steps)
         if loras.has_turbo and easycache is not None:
@@ -197,6 +205,12 @@ class H3TransformerCache:
                     self._spec = spec
                     self._schedule_key = schedule_key
                     self._lora_key = lora_key
+                    from minimax_h3_mlx.projection import configure_projection_backend
+
+                    backend_report = configure_projection_backend(
+                        self._sampler.dit, config.projection_backend
+                    )
+                    self._projection_backend_report = backend_report.to_dict()
                     if loras.adapters:
                         from minimax_h3_mlx.lora import apply_lora_stack
 
@@ -228,6 +242,8 @@ class H3TransformerCache:
                     blockcache_config=blockcache,
                     trajectory_forecast_config=trajectory_forecast,
                 )
+                from minimax_h3_mlx.projection import mpp_runtime_status
+
                 latents = H3Latents(
                     video=result.video_latents,
                     audio=result.audio_latents,
@@ -264,6 +280,8 @@ class H3TransformerCache:
                         result, "trajectory_history_bytes", 0
                     ),
                     lora_report=self._lora_report,
+                    projection_backend_report=self._projection_backend_report,
+                    projection_backend_runtime=mpp_runtime_status(),
                     seconds_per_evaluation=result.seconds_per_evaluation,
                     total_seconds=result.total_seconds,
                     transformer_spec=spec,
@@ -293,6 +311,13 @@ class H3TransformerCache:
         self._schedule_key = None
         self._lora_key = None
         self._lora_report = ()
+        self._projection_backend_report = None
+        try:
+            from minimax_h3_mlx.projection import reset_mpp_runtime_status
+
+            reset_mpp_runtime_status()
+        except ImportError:
+            pass
         gc.collect()
         try:
             import mlx.core as mx

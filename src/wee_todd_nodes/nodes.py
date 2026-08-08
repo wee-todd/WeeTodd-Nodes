@@ -471,6 +471,10 @@ class WeeToddH3Sample:
             "memory_mode": config.memory_mode,
             "attention_query_chunk_size": config.attention_query_chunk_size,
             "compute_dtype": "bfloat16",
+            "projection_backend": getattr(latents, "projection_backend_report", None),
+            "projection_backend_runtime": getattr(
+                latents, "projection_backend_runtime", None
+            ),
             "preview_policy": "none",
             "staged_releases": list(staged_releases),
         }
@@ -1341,6 +1345,17 @@ class WeeToddH3GenerationConfig:
                         ),
                     },
                 ),
+                "projection_backend": (
+                    ["mlx", "mpp_experimental"],
+                    {
+                        "default": "mlx",
+                        "advanced": True,
+                        "tooltip": (
+                            "Experimental Metal Performance Primitives acceleration for eligible "
+                            "BF16 transformer projections. Unsupported projections use MLX."
+                        ),
+                    },
+                ),
             }
         }
 
@@ -1367,6 +1382,7 @@ class WeeToddH3GenerationConfig:
         drop_adaln,
         memory_mode="normal",
         attention_chunk_size="automatic",
+        projection_backend="mlx",
     ):
         width, height = _resolve_h3_resolution(
             resolution_mode,
@@ -1387,6 +1403,7 @@ class WeeToddH3GenerationConfig:
             aspect_ratio=aspect_ratio if resolution_mode == "preset" else "custom",
             memory_mode=memory_mode,
             attention_chunk_size=attention_chunk_size,
+            projection_backend=projection_backend,
         )
         config.validate()
         return config, f"{width} x {height} pixels"
@@ -1431,7 +1448,7 @@ class WeeToddH3Generate:
             if progress is not None:
                 progress.update_absolute(completed, total)
 
-        result = RUNTIME.get(model)(
+        result = RUNTIME.get(model, config.projection_backend)(
             prompt,
             duration_seconds=config.duration_seconds,
             num_inference_steps=config.steps,
@@ -1452,6 +1469,7 @@ class WeeToddH3Generate:
             "video_path": str(target),
             "seconds_per_step": result.seconds_per_step,
             "total_seconds": result.total_seconds,
+            "projection_backend": RUNTIME.projection_backend_report,
         }
         target.with_suffix(".json").write_text(json.dumps(info, indent=2) + "\n")
         return (str(target), json.dumps(info, indent=2))

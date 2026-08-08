@@ -35,6 +35,15 @@ def test_config_rejects_unknown_memory_mode():
         H3GenerationConfig(memory_mode="tiny").validate()
 
 
+def test_config_accepts_experimental_mpp_projection_backend():
+    H3GenerationConfig(projection_backend="mpp_experimental").validate()
+
+
+def test_config_rejects_unknown_projection_backend():
+    with pytest.raises(ValueError, match="projection_backend"):
+        H3GenerationConfig(projection_backend="unknown").validate()
+
+
 @pytest.mark.parametrize("width,height", [(641, 384), (640, 385)])
 def test_config_rejects_unaligned_canvas(width, height):
     with pytest.raises(ValueError, match="divisible by 32"):

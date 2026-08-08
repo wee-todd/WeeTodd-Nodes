@@ -151,6 +151,7 @@ def test_generation_config_node_returns_validated_value():
     assert config.aspect_ratio == "16:9"
     assert config.memory_mode == "low_memory_bf16"
     assert config.attention_query_chunk_size == 1024
+    assert config.projection_backend == "mlx"
     assert resolved == "1344 x 768 pixels"
 
 
