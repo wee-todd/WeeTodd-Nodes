@@ -129,6 +129,13 @@ byte-identical, but decoded samples had 0.99999985 correlation and a root-mean-s
 testing an unsupported Apple GPU or when maximum portability is more important than the measured
 speed improvement.
 
+An exact-layout classic Steel attention sweep tested 16-, 32-, and 64-row query tiles with 16-,
+32-, and 64-row key tiles at 9,477 and 25,138 packed rows. MLX's existing 32-by-16 selection remained
+the fastest viable tile. Exact alternatives were 1.4 to 38.4 percent slower at 9,477 rows and 0.3
+to 59.5 percent slower at 25,138 rows. Larger key tiles were slower and changed BF16 reduction
+results. A fresh-process probe found no attention-workspace saving. WeeTodd therefore retains MLX's
+default fused attention and does not expose a redundant attention backend.
+
 ### Hierarchical BlockCache validation
 
 The three-segment speed policy completed q8-extended plus Turbo generations at 640 by 384 and 1344
