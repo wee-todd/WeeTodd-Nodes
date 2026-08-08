@@ -18,6 +18,7 @@ class H3TrajectoryForecastConfig:
     max_forecast_fraction: float = 0.35
     max_delta_ratio: float = 1.75
     guard_subsample_factor: int = 16
+    bootstrap_first_forecast: bool = False
 
     def validate(self) -> None:
         modes = {
@@ -44,6 +45,12 @@ class H3TrajectoryForecastConfig:
             raise ValueError("Trajectory Forecast delta ratio must be zero or positive.")
         if self.guard_subsample_factor < 1:
             raise ValueError("Trajectory Forecast guard subsample factor must be positive.")
+        if not isinstance(self.bootstrap_first_forecast, bool):
+            raise TypeError("Trajectory Forecast bootstrap control must be a boolean.")
+        if self.bootstrap_first_forecast and self.mode != "automatic_speed":
+            raise ValueError(
+                "Trajectory Forecast bootstrap requires automatic_speed mode."
+            )
 
 
 class H3TrajectoryForecastState:
@@ -54,6 +61,7 @@ class H3TrajectoryForecastState:
         self.config = config
         self._history: list[tuple[float, object, object]] = []
         self.forecasts = 0
+        self.bootstrap_forecasts = 0
         self.fallbacks = 0
         self.consecutive_forecasts = 0
         self.last_was_forecast = False
@@ -63,7 +71,8 @@ class H3TrajectoryForecastState:
         if self.config.mode == "automatic_conservative":
             return 0.5, max(3, self.config.warmup_steps), 1, 0.25, 1.25
         if self.config.mode == "automatic_speed":
-            return 1.0, 2, 1, 0.5, 2.5
+            warmup = 1 if self.config.bootstrap_first_forecast else 2
+            return 1.0, warmup, 1, 0.5, 2.5
         if self.config.mode == "automatic_balanced":
             return 0.75, 2, 1, 0.35, 1.75
         return (
@@ -94,10 +103,24 @@ class H3TrajectoryForecastState:
         if (
             index < warmup
             or index >= total_steps - tail
-            or len(self._history) < 2
             or self.consecutive_forecasts >= 1
             or self.forecasts >= self._forecast_limit(total_steps, fraction)
         ):
+            return None
+
+        if (
+            self.config.bootstrap_first_forecast
+            and index == 1
+            and len(self._history) == 1
+        ):
+            _, video, audio = self._history[-1]
+            self.forecasts += 1
+            self.bootstrap_forecasts += 1
+            self.consecutive_forecasts += 1
+            self.last_was_forecast = True
+            return video, audio
+
+        if len(self._history) < 2:
             return None
 
         previous_coordinate, previous_video, previous_audio = self._history[-2]

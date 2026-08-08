@@ -242,11 +242,17 @@ def load_video_vae(model_dir: str | Path, strict: bool = True):
 def load_compact_video_vae(path: str | Path, strict: bool = True):
     """Load a self-describing single-file video VAE export."""
     from .video_vae import VideoVAE, VideoVAEConfig
-    from .video_vae_checkpoint import prepare_video_vae_tensor, validate_video_vae_wrapper
+    from .video_vae_checkpoint import (
+        apply_video_vae_quantization_structure,
+        prepare_video_vae_tensor,
+        validate_video_vae_quantization,
+        validate_video_vae_wrapper,
+    )
 
     path = Path(path)
     wrapper = _metadata_json(safetensor_metadata(path), "minimax_h3_video_vae")
     stored_layout = validate_video_vae_wrapper(wrapper)
+    quantization = validate_video_vae_quantization(wrapper)
     source = wrapper["source_config"]
     ch = source["ch"]
     config = VideoVAEConfig(
@@ -268,6 +274,8 @@ def load_compact_video_vae(path: str | Path, strict: bool = True):
         latents_std=tuple(wrapper["latents_std"]),
     )
     model = VideoVAE(config)
+    if quantization is not None:
+        apply_video_vae_quantization_structure(model, quantization)
     expected = {key for key, _ in tree_flatten(model.parameters())}
     weights: dict[str, mx.array] = {}
     unexpected: list[str] = []

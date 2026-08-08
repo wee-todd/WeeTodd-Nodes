@@ -272,6 +272,7 @@ def publish_latents_direct(
             "video_decode_seconds": video.decode_seconds,
             "audio_decode_seconds": audio.decode_seconds,
             "peak_rgb8_chunk_bytes": video.peak_rgb8_chunk_bytes,
+            "video_vae_quantization": video.quantization,
             "tile_decode_batch": video.decode_batch,
             "publish_seconds": time.perf_counter() - started,
             "output_file": target.name,

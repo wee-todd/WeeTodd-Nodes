@@ -458,6 +458,9 @@ class WeeToddH3Sample:
             ),
             "blockcache": asdict(blockcache) if blockcache is not None else None,
             "trajectory_forecasts": getattr(latents, "trajectory_forecasts", 0),
+            "trajectory_bootstrap_forecasts": getattr(
+                latents, "trajectory_bootstrap_forecasts", 0
+            ),
             "trajectory_fallbacks": getattr(latents, "trajectory_fallbacks", 0),
             "trajectory_history_bytes": getattr(latents, "trajectory_history_bytes", 0),
             "trajectory_forecast": (
@@ -640,7 +643,19 @@ class WeeToddH3TrajectoryForecast:
                     "FLOAT",
                     {"default": 1.75, "min": 0.0, "max": 5.0, "step": 0.05},
                 ),
-            }
+            },
+            "optional": {
+                "bootstrap_first_forecast": (
+                    "BOOLEAN",
+                    {
+                        "default": False,
+                        "tooltip": (
+                            "Experimental speed-mode zero-order hold for the second sampling step. "
+                            "It changes output and does not increase the total forecast budget."
+                        ),
+                    },
+                )
+            },
         }
 
     RETURN_TYPES = ("WEETODD_H3_TRAJECTORY_FORECAST",)
@@ -661,6 +676,7 @@ class WeeToddH3TrajectoryForecast:
         max_history,
         max_forecast_fraction,
         max_delta_ratio,
+        bootstrap_first_forecast=False,
     ):
         from minimax_h3_mlx.trajectory_forecast import H3TrajectoryForecastConfig
 
@@ -672,6 +688,7 @@ class WeeToddH3TrajectoryForecast:
             max_history=max_history,
             max_forecast_fraction=max_forecast_fraction,
             max_delta_ratio=max_delta_ratio,
+            bootstrap_first_forecast=bootstrap_first_forecast,
         )
         config.validate()
         return (config,)
@@ -877,6 +894,7 @@ class WeeToddH3VideoVAEDecode:
             "fps": result.fps,
             "decode_seconds": result.decode_seconds,
             "video_vae_resident": VIDEO_VAE_RUNTIME.loaded,
+            "video_vae_quantization": result.quantization,
             "memory_mode": latents.generation_config.memory_mode,
             "tile_decode_batch": result.decode_batch,
             "staged_releases": list(staged_releases),

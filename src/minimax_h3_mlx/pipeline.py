@@ -132,6 +132,7 @@ class LatentResult:
     blockcache_executed_blocks: int = 0
     blockcache_skipped_blocks: int = 0
     trajectory_forecasts: int = 0
+    trajectory_bootstrap_forecasts: int = 0
     trajectory_fallbacks: int = 0
     trajectory_history_bytes: int = 0
     seconds_per_evaluation: float = 0.0
@@ -515,6 +516,11 @@ class MiniMaxH3Pipeline:
             ),
             trajectory_forecasts=(
                 trajectory_forecast.forecasts if trajectory_forecast is not None else 0
+            ),
+            trajectory_bootstrap_forecasts=(
+                trajectory_forecast.bootstrap_forecasts
+                if trajectory_forecast is not None
+                else 0
             ),
             trajectory_fallbacks=(
                 trajectory_forecast.fallbacks if trajectory_forecast is not None else 0

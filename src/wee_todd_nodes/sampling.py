@@ -93,6 +93,7 @@ class H3Latents:
     blockcache_executed_blocks: int = 0
     blockcache_skipped_blocks: int = 0
     trajectory_forecasts: int = 0
+    trajectory_bootstrap_forecasts: int = 0
     trajectory_fallbacks: int = 0
     trajectory_history_bytes: int = 0
     lora_report: tuple[dict[str, Any], ...] = ()
@@ -275,6 +276,9 @@ class H3TransformerCache:
                         result, "blockcache_skipped_blocks", 0
                     ),
                     trajectory_forecasts=getattr(result, "trajectory_forecasts", 0),
+                    trajectory_bootstrap_forecasts=getattr(
+                        result, "trajectory_bootstrap_forecasts", 0
+                    ),
                     trajectory_fallbacks=getattr(result, "trajectory_fallbacks", 0),
                     trajectory_history_bytes=getattr(
                         result, "trajectory_history_bytes", 0

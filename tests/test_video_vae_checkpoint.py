@@ -8,6 +8,7 @@ import mlx.core as mx
 import numpy as np
 import pytest
 from mlx import nn
+from mlx.utils import tree_flatten
 
 from minimax_h3_mlx.load import load_compact_video_vae, safetensor_metadata
 from minimax_h3_mlx.video_vae_checkpoint import (
@@ -15,9 +16,14 @@ from minimax_h3_mlx.video_vae_checkpoint import (
     VIDEO_VAE_MLX_LAYOUT,
     VIDEO_VAE_NATIVE_FORMAT,
     VIDEO_VAE_NATIVE_FORMAT_VERSION,
+    VIDEO_VAE_QUANTIZATION_FORMAT,
+    VIDEO_VAE_QUANTIZATION_SCOPE,
     VIDEO_VAE_SOURCE_LAYOUT,
+    apply_video_vae_quantization_structure,
     convert_video_vae_checkpoint,
     prepare_video_vae_tensor,
+    quantize_video_vae_checkpoint,
+    validate_video_vae_quantization,
     validate_video_vae_wrapper,
 )
 
@@ -64,6 +70,51 @@ def _write_compact(path: Path, tensors: dict[str, mx.array], wrapper: dict) -> N
         tensors,
         metadata={VIDEO_VAE_METADATA_KEY: json.dumps(wrapper)},
     )
+
+
+def _q8_recipe(layers: int = 4) -> dict:
+    return {
+        "format": VIDEO_VAE_QUANTIZATION_FORMAT,
+        "bits": 8,
+        "group_size": 64,
+        "scope": VIDEO_VAE_QUANTIZATION_SCOPE,
+        "quantized_layers": layers,
+    }
+
+
+class _FakeAttention(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.to_qkv = nn.Linear(64, 192)
+        self.to_out = nn.Linear(64, 64)
+
+
+class _FakeFeedForward(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.w1 = nn.Linear(64, 128)
+        self.w2 = nn.Linear(64, 64)
+
+
+class _FakeBlock(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.attn = _FakeAttention()
+        self.ff = _FakeFeedForward()
+
+
+class _FakeDecoder(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.transformer_blocks = [_FakeBlock()]
+        self.proj_out = nn.Linear(64, 64)
+
+
+class _FakeVideoVAE(nn.Module):
+    def __init__(self, config=None):
+        super().__init__()
+        self.config = config
+        self.decoder = _FakeDecoder()
 
 
 def test_source_layout_conversion_is_bit_exact() -> None:
@@ -183,6 +234,107 @@ def test_unknown_native_format_version_is_rejected() -> None:
 
     with pytest.raises(ValueError, match="format version"):
         validate_video_vae_wrapper(wrapper)
+
+
+def test_q8_recipe_rejects_unsupported_width() -> None:
+    recipe = _q8_recipe()
+    recipe["bits"] = 4
+
+    with pytest.raises(ValueError, match="quantization bits"):
+        validate_video_vae_quantization({"quantization": recipe})
+
+
+def test_q8_structure_quantizes_only_decoder_transformer_core() -> None:
+    model = _FakeVideoVAE()
+    before = sum(value.nbytes for _, value in tree_flatten(model.parameters()))
+
+    count = apply_video_vae_quantization_structure(model, _q8_recipe())
+    mx.eval(model.parameters())
+    after = sum(value.nbytes for _, value in tree_flatten(model.parameters()))
+
+    assert count == 4
+    assert isinstance(model.decoder.transformer_blocks[0].attn.to_qkv, nn.QuantizedLinear)
+    assert isinstance(model.decoder.transformer_blocks[0].ff.w2, nn.QuantizedLinear)
+    assert isinstance(model.decoder.proj_out, nn.Linear)
+    assert after < before
+
+
+def test_q8_converter_writes_direct_load_metadata(tmp_path: Path, monkeypatch) -> None:
+    import minimax_h3_mlx.load as load_module
+
+    source = tmp_path / "native.safetensors"
+    output = tmp_path / "q8.safetensors"
+    wrapper = _loadable_wrapper(
+        format=VIDEO_VAE_NATIVE_FORMAT,
+        format_version=VIDEO_VAE_NATIVE_FORMAT_VERSION,
+        tensor_layout=VIDEO_VAE_MLX_LAYOUT,
+    )
+    _write_compact(source, {"placeholder": mx.zeros((1,))}, wrapper)
+    model = _FakeVideoVAE()
+    monkeypatch.setattr(load_module, "load_compact_video_vae", lambda path: model)
+
+    report = quantize_video_vae_checkpoint(source, output)
+
+    saved_wrapper = json.loads(safetensor_metadata(output)[VIDEO_VAE_METADATA_KEY])
+    assert saved_wrapper["quantization"] == _q8_recipe()
+    assert report["quantized_layers"] == 4
+    assert report["resident_after_bytes"] < report["resident_before_bytes"]
+    assert any(key.endswith(".scales") for key in mx.load(str(output)))
+
+
+def test_q8_converter_cleans_temporary_file_after_writer_failure(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import minimax_h3_mlx.load as load_module
+
+    source = tmp_path / "native.safetensors"
+    output = tmp_path / "q8.safetensors"
+    wrapper = _loadable_wrapper(
+        format=VIDEO_VAE_NATIVE_FORMAT,
+        format_version=VIDEO_VAE_NATIVE_FORMAT_VERSION,
+        tensor_layout=VIDEO_VAE_MLX_LAYOUT,
+    )
+    _write_compact(source, {"placeholder": mx.zeros((1,))}, wrapper)
+    monkeypatch.setattr(load_module, "load_compact_video_vae", lambda path: _FakeVideoVAE())
+
+    def fail_writer(*args, **kwargs):
+        raise RuntimeError("simulated q8 writer failure")
+
+    monkeypatch.setattr(mx, "save_safetensors", fail_writer)
+
+    with pytest.raises(RuntimeError, match="simulated q8 writer failure"):
+        quantize_video_vae_checkpoint(source, output)
+
+    assert not output.exists()
+    assert list(tmp_path.glob(".*.tmp.safetensors")) == []
+
+
+def test_compact_q8_loader_builds_quantized_tree(tmp_path: Path, monkeypatch) -> None:
+    import minimax_h3_mlx.video_vae as video_vae_module
+
+    class FakeConfig:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    source_model = _FakeVideoVAE(FakeConfig())
+    apply_video_vae_quantization_structure(source_model, _q8_recipe())
+    mx.eval(source_model.parameters())
+    path = tmp_path / "q8.safetensors"
+    wrapper = _loadable_wrapper(
+        format=VIDEO_VAE_NATIVE_FORMAT,
+        format_version=VIDEO_VAE_NATIVE_FORMAT_VERSION,
+        tensor_layout=VIDEO_VAE_MLX_LAYOUT,
+        quantization=_q8_recipe(),
+    )
+    _write_compact(path, dict(tree_flatten(source_model.parameters())), wrapper)
+    monkeypatch.setattr(video_vae_module, "VideoVAEConfig", FakeConfig)
+    monkeypatch.setattr(video_vae_module, "VideoVAE", _FakeVideoVAE)
+
+    loaded = load_compact_video_vae(path)
+
+    assert isinstance(loaded.decoder.transformer_blocks[0].attn.to_qkv, nn.QuantizedLinear)
+    assert isinstance(loaded.decoder.transformer_blocks[0].ff.w2, nn.QuantizedLinear)
+    assert isinstance(loaded.decoder.proj_out, nn.Linear)
 
 
 def test_compact_loader_does_not_transpose_native_weights(tmp_path: Path, monkeypatch) -> None:

@@ -297,6 +297,16 @@ def _quantization(path: Path, headers: list[SafetensorsHeader], component: str) 
         suffix = f" ({profile})" if isinstance(profile, str) and profile else ""
         return f"mlx-affine-{bits}bit-group-{group_size}{suffix}"
     metadata = {key: value for header in headers for key, value in header.metadata.items()}
+    if component == "video_vae" and "minimax_h3_video_vae" in metadata:
+        from minimax_h3_mlx.video_vae_checkpoint import validate_video_vae_quantization
+
+        try:
+            wrapper = json.loads(metadata["minimax_h3_video_vae"])
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise ValueError("Single-file video_vae metadata is not valid JSON.") from exc
+        recipe = validate_video_vae_quantization(wrapper)
+        if recipe is not None:
+            return f"mlx-affine-{recipe['bits']}bit-group-{recipe['group_size']}"
     for key in ("quantization", "quant_config", "format"):
         if key in metadata:
             return metadata[key]

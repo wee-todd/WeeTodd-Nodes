@@ -9,6 +9,7 @@ from wee_todd_nodes.nodes import (
     WeeToddH3ComponentLoader,
     WeeToddH3GenerationConfig,
     WeeToddH3QuantizedTransformerLoader,
+    WeeToddH3TrajectoryForecast,
     _resolve_h3_resolution,
     _safe_output_target,
 )
@@ -76,6 +77,24 @@ def test_expected_nodes_are_registered():
     assert "WeeToddH3UnloadAudioVAE" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3PublishVideoAudio" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3DirectPublishLatents" in NODE_CLASS_MAPPINGS
+
+
+def test_trajectory_forecast_node_exposes_opt_in_bootstrap():
+    (config,) = WeeToddH3TrajectoryForecast().configure(
+        "automatic_speed",
+        1.0,
+        2,
+        1,
+        2,
+        0.5,
+        2.5,
+        True,
+    )
+
+    assert config.bootstrap_first_forecast is True
+    assert WeeToddH3TrajectoryForecast.INPUT_TYPES()["optional"][
+        "bootstrap_first_forecast"
+    ][1]["default"] is False
 
 
 def test_component_loader_returns_lazy_immutable_spec():

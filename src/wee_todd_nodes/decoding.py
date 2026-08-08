@@ -39,6 +39,28 @@ class H3VideoVAESpec:
         if not weights.is_file():
             raise FileNotFoundError(f"MiniMax H3 video VAE weights not found: {weights}")
 
+    def quantization(self) -> str:
+        """Return header-derived precision metadata without loading VAE tensors."""
+        path = Path(self.video_vae).expanduser()
+        if not path.is_file():
+            return "unquantized-or-directory-managed"
+        import json
+
+        from minimax_h3_mlx.load import safetensor_metadata
+        from minimax_h3_mlx.video_vae_checkpoint import (
+            VIDEO_VAE_METADATA_KEY,
+            validate_video_vae_quantization,
+        )
+
+        metadata = safetensor_metadata(path)
+        value = metadata.get(VIDEO_VAE_METADATA_KEY)
+        if value is None:
+            return "unquantized-or-self-describing"
+        recipe = validate_video_vae_quantization(json.loads(value))
+        if recipe is None:
+            return "unquantized"
+        return f"mlx-affine-{recipe['bits']}bit-group-{recipe['group_size']}"
+
 
 @dataclass(frozen=True)
 class H3VideoFrames:
@@ -51,6 +73,7 @@ class H3VideoFrames:
     fps: int
     decode_seconds: float
     decode_batch: int
+    quantization: str = "unquantized-or-self-describing"
 
 
 @dataclass(frozen=True)
@@ -64,6 +87,7 @@ class H3VideoStream:
     decode_seconds: float
     decode_batch: int
     peak_rgb8_chunk_bytes: int
+    quantization: str = "unquantized-or-self-describing"
 
 
 VideoVAEFactory = Callable[[H3VideoVAESpec], Any]
@@ -136,6 +160,7 @@ class H3VideoVAECache:
                     fps=latents.fps,
                     decode_seconds=elapsed,
                     decode_batch=int(self._vae.decode_batch),
+                    quantization=spec.quantization(),
                 )
             except BaseException:
                 self._release_locked()
@@ -223,6 +248,7 @@ class H3VideoVAECache:
                     decode_seconds=time.perf_counter() - started,
                     decode_batch=int(self._vae.decode_batch),
                     peak_rgb8_chunk_bytes=peak_rgb8_chunk_bytes,
+                    quantization=spec.quantization(),
                 )
             except BaseException:
                 self._release_locked()

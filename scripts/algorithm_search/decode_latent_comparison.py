@@ -112,6 +112,7 @@ def main() -> int:
     parser.add_argument("baseline", type=Path)
     parser.add_argument("candidate", type=Path)
     parser.add_argument("--video-vae", type=Path, required=True)
+    parser.add_argument("--candidate-video-vae", type=Path)
     parser.add_argument("--audio-vae", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--frames", type=int, required=True)
@@ -120,7 +121,10 @@ def main() -> int:
     parser.add_argument("--baseline-label", default="BF16 baseline")
     parser.add_argument("--candidate-label", default="Q8 blocks 38-49")
     args = parser.parse_args()
-    for path in (args.baseline, args.candidate, args.video_vae, args.audio_vae):
+    required_paths = [args.baseline, args.candidate, args.video_vae, args.audio_vae]
+    if args.candidate_video_vae is not None:
+        required_paths.append(args.candidate_video_vae)
+    for path in required_paths:
         if not path.is_file():
             raise FileNotFoundError(path)
     if min(args.frames, args.fps, args.video_decode_batch) < 1:
@@ -136,22 +140,26 @@ def main() -> int:
 
     timings: dict[str, float] = {}
     peaks: dict[str, int] = {}
-    video_model = load_compact_video_vae(args.video_vae)
-    video_model.decode_batch = args.video_decode_batch
     decoded_video = []
-    for label, values in (
-        ("baseline", baseline_latents),
-        ("candidate", candidate_latents),
+    for label, values, video_vae in (
+        ("baseline", baseline_latents, args.video_vae),
+        (
+            "candidate",
+            candidate_latents,
+            args.candidate_video_vae or args.video_vae,
+        ),
     ):
         mx.clear_cache()
         mx.reset_peak_memory()
+        video_model = load_compact_video_vae(video_vae)
+        video_model.decode_batch = args.video_decode_batch
         started = time.perf_counter()
         decoded_video.append(_decode_video(video_model, values["video_latents"], args.frames))
         timings[f"{label}_video_decode_seconds"] = time.perf_counter() - started
         peaks[f"{label}_video_decode_peak_bytes"] = int(mx.get_peak_memory())
-    video_model = None
-    gc.collect()
-    mx.clear_cache()
+        video_model = None
+        gc.collect()
+        mx.clear_cache()
 
     audio_model = load_compact_audio_vae(args.audio_vae)
     decoded_audio = []
@@ -182,7 +190,7 @@ def main() -> int:
         args.output / "bf16_baseline.mp4", baseline_video, args.fps, baseline_audio, 32000
     )
     candidate_mp4 = save_mp4(
-        args.output / "q8_blocks_38_49.mp4", candidate_video, args.fps, candidate_audio, 32000
+        args.output / "q8_candidate.mp4", candidate_video, args.fps, candidate_audio, 32000
     )
     comparison = np.concatenate(
         [
@@ -206,6 +214,10 @@ def main() -> int:
         32000,
     )
     payload = {
+        "video_vae": {
+            "baseline": args.video_vae.name,
+            "candidate": (args.candidate_video_vae or args.video_vae).name,
+        },
         "geometry": {
             "frames": int(baseline_video.shape[0]),
             "height": int(baseline_video.shape[1]),

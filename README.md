@@ -62,7 +62,8 @@ transformer evaluations.
   falls back to a real evaluation when its safety checks reject a forecast.
 - **WeeTodd H3 Unload Transformer** releases the transformer-only sampler and MLX cache.
 - **WeeTodd H3 Decode Video VAE** converts normalized video latents to ComfyUI `IMAGE` frames. It
-  checks component provenance and can unload the final video VAE after decoding.
+  checks component provenance, accepts native affine-Q8 decoder checkpoints, reports their precision,
+  and can unload the final video VAE after decoding.
 - **WeeTodd H3 Unload Video VAE** explicitly releases a warm process-local video decoder.
 - **WeeTodd H3 Decode Audio VAE** converts normalized audio latents to ComfyUI `AUDIO` with one
   batch, two channels, and a 32 kHz sample rate. It retains synchronized timing metadata.
@@ -96,6 +97,10 @@ policies where applicable. Cache hits and forecasts can change generated pixels 
 performance/quality tradeoffs, not mathematically exact execution. Turbo LoRA can be combined with
 Trajectory Forecast. Turbo can also use either BlockCache node after explicit experimental opt-in.
 Every combined accelerator remains experimental.
+
+Trajectory Forecast also exposes an optional speed-mode bootstrap. The bootstrap holds the first
+actual compact feature for the second sampling evaluation, then requires an actual refresh. It
+changes the trajectory without increasing the forecast budget and remains disabled by default.
 
 For memory-constrained systems, select `low_memory_bf16`. This preserves BF16 model precision and
 uses staged component unloading, tile-serial VAE decoding, explicit MLX materialization boundaries,
@@ -275,6 +280,29 @@ workspace saving rather than a multi-gigabyte reduction because the complete-pro
 includes the large resident BF16 model. Strict unloading between the text encoder, transformer,
 and VAEs remains the larger memory-management mechanism.
 
+## Affine-Q8 video VAE
+
+`scripts/quantize_video_vae.py` converts an existing released directory or self-describing video
+VAE into a directly loadable MLX affine-Q8 artifact. The output records its source hash, native
+tensor layout, group size, and exact 144-projection decoder scope. The component loader accepts the
+new file through its existing `video_vae` path; no additional graph node is required. Direct loading
+constructs quantized modules before reading tensors and does not reconstruct a full BF16 VAE.
+
+On one Apple M3 Ultra, the complete video-VAE parameter residency fell from 5.208 GB to 2.943 GB,
+a 2.265 GB reduction. A real 640 by 384, 124-frame low-memory decode reduced MLX peak allocation
+from 7.660 GB to 5.382 GB. Decode time increased from 22.49 to 23.28 seconds. Against the BF16
+decode of the same latents, the q8 result measured 60.32 dB PSNR, 0.999943 cosine similarity, and
+0.059 mean absolute error on an 8-bit pixel scale. Q8 is therefore a memory option, not a speed
+optimization. Q4 remains unapproved pending a separate quality study.
+
+Example conversion:
+
+```bash
+python scripts/quantize_video_vae.py \
+  /path/to/video_vae.safetensors \
+  /path/to/video_vae_affine_q8.safetensors
+```
+
 ## Experimental mixed-precision checkpoints
 
 `scripts/convert_mixed_checkpoint.py` converts selected transformer modules into standard MLX
@@ -364,7 +392,7 @@ All 12 BlockCache outputs contained synchronized video and audio streams. These 
 single-seed measurements do not prove perceptual equivalence. Generated media remains local under
 `benchmarks/artifacts/media/blockcache-384p/`.
 
-## Trajectory Forecast benchmark result
+## Trajectory Forecast benchmark results
 
 A five-second 640 by 384 Turbo LoRA smoke test compared four real transformer evaluations with the
 balanced forecast policy. The forecast run performed three real evaluations and one forecast,
@@ -379,6 +407,22 @@ seconds to 120.54 seconds. It produced 124 video frames and synchronized 32 kHz 
 The approximately 772 MiB higher process peak includes forecast history and allocator behavior;
 the measured two-snapshot request history itself was about 191 MiB. This single smoke test shows a
 useful speed signal, but it does not establish perceptual equivalence or a general quality claim.
+
+A second exact-seed 640 by 384 test used q8-extended, Turbo, and four scheduled evaluations. Moving
+the single forecast from the third evaluation to an experimental second-evaluation bootstrap did
+not change runtime or memory materially. Both schedules changed the video and audio trajectory.
+The MPP backend wrapped 118 remaining BF16 projections and skipped 82 ineligible projections. It
+produced a byte-identical bootstrap MP4 while reducing sampling time by another 4.6 percent.
+
+| Mode | Schedule | Sampling | Workflow | Complete process peak |
+| --- | --- | ---: | ---: | ---: |
+| Dense MLX | `A A A A` | 91.72 s | 133.56 s | 40.24 GB |
+| Current speed | `A A F A` | 68.86 s | 94.52 s | 41.04 GB |
+| Bootstrap speed | `A F A A` | 68.84 s | 94.51 s | 41.04 GB |
+| Bootstrap plus MPP | `A F A A` | 65.67 s | 91.35 s | 41.05 GB |
+
+The bootstrap remains opt-in because equal runtime does not imply equal quality. Use an exact-seed
+dense comparison for each checkpoint, resolution, prompt class, and conditioning mode.
 
 Models are never bundled. Detailed project documentation and the OKF knowledge bundle are kept
 local and are intentionally excluded from Git.

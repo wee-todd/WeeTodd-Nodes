@@ -1,0 +1,5 @@
+policy,width,height,video_frames,requested_steps,scheduled_evaluations,full_transformer_evaluations,trajectory_forecasts,bootstrap_forecasts,trajectory_fallbacks,sampling_seconds,workflow_seconds,comfy_peak_footprint_bytes,trajectory_history_bytes,av_drift_seconds,video_psnr_vs_dense_db,video_ssim_vs_dense,audio_correlation_vs_dense,audio_rmse_vs_dense,projection_backend,wrapped_projections,skipped_projections
+dense_control,640,384,124,5,4,4,0,0,0,91.720403,133.56,40240522656,0,0.008333,,,,,mlx,0,0
+automatic_speed,640,384,124,5,4,3,1,0,0,68.856477,94.52,41043191176,199858176,0.008333,16.707614,0.606734,0.057842,0.00817944,mlx,0,0
+bootstrap_speed,640,384,124,5,4,3,1,1,0,68.841138,94.51,41041929632,199858176,0.008333,17.554958,0.537625,0.316107,0.00150076,mlx,0,0
+bootstrap_speed_mpp,640,384,124,5,4,3,1,1,0,65.668313,91.35,41046353240,199858176,0.008333,17.554958,0.537625,0.316107,0.00150076,mpp_experimental,118,82

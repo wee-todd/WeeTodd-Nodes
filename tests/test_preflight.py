@@ -221,6 +221,36 @@ def test_preflight_rejects_unknown_native_video_vae_version(tmp_path: Path):
         )
 
 
+def test_preflight_reports_native_q8_video_vae(tmp_path: Path):
+    root = _component_tree(tmp_path)
+    native_video_vae = tmp_path / "video_vae_q8.safetensors"
+    wrapper = {
+        "format": "minimax-h3-mlx-video-vae",
+        "format_version": 1,
+        "tensor_layout": "ODHWI",
+        "quantization": {
+            "format": "mlx-affine",
+            "bits": 8,
+            "group_size": 64,
+            "scope": "decoder-transformer-core",
+            "quantized_layers": 144,
+        },
+    }
+    _safetensors(
+        native_video_vae,
+        {"decoder.transformer_blocks.0.attn.to_qkv.weight": ("U32", [4, 4], 64)},
+        metadata={"minimax_h3_video_vae": json.dumps(wrapper)},
+    )
+
+    report = preflight_components(
+        H3ComponentSetSpec(str(root), video_vae=str(native_video_vae)),
+        H3PreflightRequest(),
+    )
+
+    video_vae = next(component for component in report.components if component.name == "video_vae")
+    assert video_vae.quantization == "mlx-affine-8bit-group-64"
+
+
 def test_compact_text_encoder_report_excludes_colocated_vae_weights(tmp_path: Path):
     root = _component_tree(tmp_path)
     compact = tmp_path / "compact"

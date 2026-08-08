@@ -257,6 +257,32 @@ def test_h3_trajectory_forecast_runs_current_heads_on_turbo_length_schedule():
     assert result.audio_latents.shape == (2, cfg.audio_latents_dim, 207)
 
 
+def test_h3_trajectory_bootstrap_runs_current_heads_on_second_step():
+    cfg = tiny_config()
+    mx.random.seed(9)
+    result = MiniMaxH3Pipeline(MiniMaxH3DiT(cfg), None, None, None).sample_latents(
+        mx.random.normal((1, 3, cfg.text_dim)),
+        np.full((3,), TAG_TEXT, dtype=np.int32),
+        duration_seconds=5.0,
+        num_inference_steps=5,
+        height=32,
+        width=32,
+        drop_adaln=False,
+        verbose=False,
+        trajectory_forecast_config=H3TrajectoryForecastConfig(
+            mode="automatic_speed",
+            bootstrap_first_forecast=True,
+            max_delta_ratio=100.0,
+        ),
+    )
+
+    assert result.trajectory_forecasts == 1
+    assert result.trajectory_bootstrap_forecasts == 1
+    assert result.transformer_evaluations == 3
+    assert result.video_latents.shape == (1, cfg.latents_dim, 37, 2, 2)
+    assert result.audio_latents.shape == (2, cfg.audio_latents_dim, 207)
+
+
 def test_h3_easycache_conservative_auto_calibrates_and_caps_short_schedule():
     cfg = tiny_config()
     mx.random.seed(5)
