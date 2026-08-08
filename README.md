@@ -136,6 +136,12 @@ to 59.5 percent slower at 25,138 rows. Larger key tiles were slower and changed 
 results. A fresh-process probe found no attention-workspace saving. WeeTodd therefore retains MLX's
 default fused attention and does not expose a redundant attention backend.
 
+Raw MPP BF16-by-Int8 and BF16-by-packed-Int4 projection probes also ran at the four dominant H3
+shapes. They reduced stored weight bytes by 50 and 75 percent, respectively, but were about 2.2 and
+2.8 percent slower in aggregate than BF16 MPP. These primitives do not apply MLX group scales or biases,
+so they are research building blocks rather than compatible quantized loaders. No low-bit MPP
+backend is exposed.
+
 ### Hierarchical BlockCache validation
 
 The three-segment speed policy completed q8-extended plus Turbo generations at 640 by 384 and 1344
