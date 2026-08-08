@@ -2,7 +2,37 @@
 
 Experimental ComfyUI nodes for running MiniMax H3 natively through MLX on Apple Silicon.
 
-WeeTodd Nodes is an independent MLX-native MiniMax H3 engine and composable ComfyUI node suite. It provides explicit loaders, reusable model state, generation controls, conditioning tools, memory controls, previews, quantization, and workflow examples for Apple Silicon.
+WeeTodd Nodes is an independent MLX-native MiniMax H3 engine and composable ComfyUI node suite. It
+provides explicit loaders, reusable model state, generation controls, conditioning tools, memory
+controls, quantization, synchronized output, and workflow examples for Apple Silicon.
+
+## Requirements and current scope
+
+- Use an Apple Silicon Mac and macOS.
+- Use Python 3.11 or later in the same environment as ComfyUI.
+- Install FFmpeg with H.264 video and Advanced Audio Coding (AAC) support.
+- Supply the MiniMax H3 transformer, Qwen3-VL text encoder, processor, tokenizer, video variational
+  autoencoder (VAE), and audio VAE. The project does not bundle or download models.
+- Start with text-to-video-plus-audio (T2VA). First-frame, last-frame, first/last-frame, and
+  reference-conditioning nodes are not registered yet.
+- Expect no live latent preview in the current sampler. Generated metadata records
+  `preview_policy: none`.
+
+## Minimal composable workflow
+
+Build the first graph in this order:
+
+1. Connect **Component Loader** to **Quantized Transformer Loader** when using a named q8 profile.
+2. Connect the selected components and **Generation Config** to **Component Preflight**.
+3. Connect preflight components to **Text Encode** and enable unloading after encoding.
+4. Connect the conditioning, components, and configuration to **Sample Video + Audio Latents**.
+5. Optionally connect one LoRA stack and one acceleration node to the sampler.
+6. Connect the synchronized latents to **Direct Publish Latents** for staged VAE decode and muxing.
+
+EasyCache, BlockCache, Hierarchical BlockCache, and Trajectory Forecast are mutually exclusive.
+Turbo with either BlockCache node requires the explicit experimental opt-in. Use five requested
+schedule points for four transformer evaluations. Eight requested schedule points produce seven
+transformer evaluations.
 
 ## Current nodes
 
@@ -55,7 +85,7 @@ contains much of the keyframe machinery.
 
 ## Acceleration and memory controls
 
-The sampler exposes three optional acceleration strategies. **EasyCache** reuses complete joint
+The sampler exposes four optional acceleration strategies. **EasyCache** reuses complete joint
 predictions, **BlockCache** keeps the first block and output heads live while reusing later-block
 residuals, **Hierarchical BlockCache** independently reuses three block tails, and **Trajectory
 Forecast** extrapolates a compact joint video/audio feature history.
@@ -64,7 +94,8 @@ They are intentionally mutually exclusive so a workflow has one clear approximat
 Each strategy offers explicit controls and automatic conservative, balanced, and speed-oriented
 policies where applicable. Cache hits and forecasts can change generated pixels or audio; they are
 performance/quality tradeoffs, not mathematically exact execution. Turbo LoRA can be combined with
-Trajectory Forecast, although the combined result remains experimental.
+Trajectory Forecast. Turbo can also use either BlockCache node after explicit experimental opt-in.
+Every combined accelerator remains experimental.
 
 For memory-constrained systems, select `low_memory_bf16`. This preserves BF16 model precision and
 uses staged component unloading, tile-serial VAE decoding, explicit MLX materialization boundaries,
@@ -84,6 +115,12 @@ native cache stored 1.216 GB and increased the complete ComfyUI process peak fro
 GB. Both outputs contained 124 H.264 frames, stereo 32 kHz AAC, and 8.3 ms audio-video drift. Treat
 the speed policy as an explicit quality-memory tradeoff, not a default or low-memory mode.
 
+The first eight-point durability batch covered 20 different realistic stress prompts at 1344 by
+768. Every generation completed seven transformer evaluations, reused each segment tail three
+times, skipped 141 of 350 cumulative block executions, and retained 8.3 ms audio-video drift.
+Sampling averaged 735.12 seconds, with a range of 719.79 through 743.47 seconds. The batch validates
+execution and media contracts across diverse prompts; visual equivalence has not been established.
+
 ## Generic LoRA and Turbo LoRA support
 
 Put MiniMax H3 LoRA files under `ComfyUI/models/loras/`, then connect **WeeTodd H3 LoRA Loader
@@ -97,9 +134,10 @@ pruned curve checkpoint, place `h3_silu_temb_grid.safetensors` from the Apache-2
 [Turbo node repository](https://github.com/Larryvrh/ComfyUI-MiniMax-H3-Turbo) beside the LoRA, or
 select the grid explicitly in the loader. WeeTodd does not bundle or download either file.
 
-For four transformer evaluations, select five requested schedule points. Start with LoRA strength
-1.0 and no EasyCache or BlockCache. The current Turbo checkpoint is experimental and can produce
-over-sharp grain, plastic skin, softness, or audio defects.
+For four transformer evaluations, select five requested schedule points. For seven evaluations,
+select eight requested schedule points. Start with LoRA strength 1.0 and no accelerator. Enable a
+compatible accelerator only after a no-cache control succeeds. The current Turbo checkpoint is
+experimental and can produce over-sharp grain, plastic skin, softness, or audio defects.
 
 ## Install for development
 
@@ -116,6 +154,32 @@ changing ComfyUI dependencies.
 
 Restart ComfyUI and look under `WeeTodd/H3`.
 
+## Model locations
+
+Point **Component Loader** at a MiniMax H3 partition root that contains `model_index.json`. Use its
+optional inputs when the transformer, text encoder, processor, tokenizer, or either VAE is stored
+elsewhere. Paths may be absolute at runtime, but workflows intended for sharing should use portable
+locations below the ComfyUI model directory.
+
+The named quantized loader resolves profiles below its transformer root:
+
+```text
+ComfyUI/models/
+├── MiniMax-H3/
+│   ├── FL2VA/
+│   │   └── model_index.json
+│   └── transformers/
+│       ├── q8_conservative/
+│       └── q8_extended/
+└── loras/
+    ├── <MiniMax-H3 adapter>.safetensors
+    └── h3_silu_temb_grid.safetensors
+```
+
+Each named q8 directory must contain its configuration, quantization recipe, shard index, and all
+indexed safetensors shards. Preflight and the quantized loader inspect these files before payload
+weights load.
+
 ## Reality check
 
 H3 is a 33B joint audio/video diffusion transformer plus a large text encoder and two VAEs. MiniMax's initial open release uses dense attention. Native-resolution generation is extremely compute-intensive even on large Apple Silicon systems. Start with the `384P (fast smoke)` tier, 5 seconds, and a low step count to verify wiring before increasing quality.
@@ -131,11 +195,32 @@ use BF16. The small patch, timestep, and output modules remain FP32 because the 
 keeps those stability-sensitive modules in FP32. Current generation testing remains focused on
 this BF16-class path; broader base-model quantization is planned for later optimization work.
 
+## Memory measurement guide
+
+Use complete-process physical footprint when deciding whether a workflow fits a Mac. This macOS
+kernel measurement includes ComfyUI, Python, mapped checkpoint pages, MLX Metal allocations,
+allocator retention, cache state, and decode buffers. The peak is monotonic for the process
+lifetime, so each controlled comparison starts a fresh ComfyUI process.
+
+Use MLX peak allocation only to isolate an engine change. Do not compare an MLX-only peak directly
+with a complete-process peak.
+
+| Workflow | Canvas | Complete-process peak | Interpretation |
+| --- | ---: | ---: | --- |
+| BF16, dense attention, no cache | 1280 by 768 | 61.83 GB | BF16 control |
+| BF16, 512-row attention chunks | 1280 by 768 | 61.36 GB | Saves 472 MB |
+| q8-extended plus Turbo, no cache | 1344 by 768 | 54.74 GB | Four evaluations |
+| q8-extended plus Turbo, hierarchical speed | 1344 by 768 | 58.48 GB | Four evaluations; 1.216 GB cache |
+
+The canvas and prompt differ between the BF16 and q8 rows. Use each row as a measured capacity
+point, not as a controlled cross-precision comparison. The controlled transformer-only comparison
+reduced MLX sample peak from 48.28 GB to 40.26 GB at 1344 by 768, an 8.02 GB reduction.
+
 ## Low-memory BF16 results
 
 Endpoint sweeps measured the complete ComfyUI process, including resident model components and
 transient MLX allocations. At 640 by 384, 512-token query chunks reduced measured peak memory by
-about 204 MiB and increased sampling time by 4.1 percent. At 1344 by 768, the same setting reduced
+about 204 MiB and increased sampling time by 4.1 percent. At 1280 by 768, the same setting reduced
 peak memory by about 472 MiB and increased sampling time by 2.8 percent. Larger chunks produced a
 similar memory reduction in these runs, with variable timing overhead.
 
@@ -143,8 +228,8 @@ similar memory reduction in these runs, with variable timing overhead.
 | --- | --- | ---: | ---: | ---: |
 | 640 by 384 | Dense | 48.26 GB | 97.49 s | Baseline |
 | 640 by 384 | 512-token chunks | 48.06 GB | 101.53 s | 204 MiB |
-| 1344 by 768 | Dense | 61.83 GB | 704.42 s | Baseline |
-| 1344 by 768 | 512-token chunks | 61.36 GB | 723.94 s | 472 MiB |
+| 1280 by 768 | Dense | 61.83 GB | 704.42 s | Baseline |
+| 1280 by 768 | 512-token chunks | 61.36 GB | 723.94 s | 472 MiB |
 
 These are endpoint measurements on one system, prompt, and seed. They show a modest attention
 workspace saving rather than a multi-gigabyte reduction because the complete-process figure also
