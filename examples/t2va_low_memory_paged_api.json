@@ -9,7 +9,7 @@
       "text_encoder": "MiniMax-H3/text_encoders/q8-paged",
       "tokenizer": "",
       "transformer": "MiniMax-H3/transformers/q8_extended_paged",
-      "video_vae": ""
+      "video_vae": "MiniMax-H3/vae/q8/video_vae_affine_q8.safetensors"
     },
     "_meta": {"title": "H3 Component Loader"}
   },

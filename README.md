@@ -40,15 +40,48 @@ Load [`examples/t2va_low_memory_paged_workflow.json`](examples/t2va_low_memory_p
 in ComfyUI after preparing both paged checkpoints. The matching API prompt is
 [`examples/t2va_low_memory_paged_api.json`](examples/t2va_low_memory_paged_api.json).
 
-Place the converted checkpoints at these portable paths below the ComfyUI model directory:
+The following public, gated MLX artifacts are available on Hugging Face:
+
+- [H3 q8-extended paged transformer](https://huggingface.co/Vayden/MiniMax-H3-MLX-q8-extended-paged)
+- [Qwen3-VL Q8 paged conditioner](https://huggingface.co/Vayden/Qwen3-VL-32B-H3-MLX-q8-paged)
+- [MiniMax H3 video VAE MLX Q8](https://huggingface.co/Vayden/MiniMax-H3-Video-VAE-MLX-Q8)
+
+Browse all three artifacts in the
+[WeeTodd MiniMax H3 MLX collection](https://huggingface.co/collections/Vayden/weetodd-minimax-h3-mlx-for-comfyui-6a7765772401cdd54a992af0).
+
+Review and acknowledge the license terms on each model page. Then authenticate with the Hugging
+Face CLI and download the repositories into the ComfyUI model directory:
+
+```bash
+COMFYUI_ROOT=/path/to/ComfyUI
+
+hf auth login
+
+hf download Vayden/MiniMax-H3-MLX-q8-extended-paged \
+  --local-dir "$COMFYUI_ROOT/models/MiniMax-H3/transformers/q8_extended_paged"
+
+hf download Vayden/Qwen3-VL-32B-H3-MLX-q8-paged \
+  --local-dir "$COMFYUI_ROOT/models/MiniMax-H3/text_encoders/q8-paged"
+
+hf download Vayden/MiniMax-H3-Video-VAE-MLX-Q8 \
+  --local-dir "$COMFYUI_ROOT/models/MiniMax-H3/vae/q8"
+```
+
+The resulting portable layout is:
 
 ```text
 models/
 └── MiniMax-H3/
     ├── FL2VA/
     ├── text_encoders/q8-paged/
-    └── transformers/q8_extended_paged/
+    ├── transformers/q8_extended_paged/
+    └── vae/q8/video_vae_affine_q8.safetensors
 ```
+
+The gated artifacts do not form a complete H3 checkpoint. Supply the processor, tokenizer, audio
+VAE, and other required base components separately under their applicable licenses. Set the
+Component Loader's `video_vae` override to
+`MiniMax-H3/vae/q8/video_vae_affine_q8.safetensors` to use the Q8 video decoder.
 
 The workflow is preconfigured for 640 by 384, five seconds, seed zero, five schedule points, and
 four transformer evaluations. It enables `low_memory_bf16`, automatic 512-row attention chunks,
@@ -58,9 +91,8 @@ minimum memory requirement. The supplied prompt is the exact prompt used for the
 dual-paged smoke test.
 
 Run Component Preflight before generation. The preflight report must identify both paging formats
-and the selected q8-extended checkpoint. The graph uses the base video and audio VAE paths. Set the
-Component Loader's `video_vae` override to a validated affine-Q8 VAE when lower VAE residency is
-required.
+and the selected q8-extended checkpoint. The graph selects the distributed affine-Q8 video VAE and
+uses the base checkpoint's audio VAE.
 
 ## Current nodes
 

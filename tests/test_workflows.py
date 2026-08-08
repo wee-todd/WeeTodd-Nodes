@@ -69,6 +69,9 @@ def test_low_memory_paged_api_uses_dual_paging_and_direct_publication():
     assert {node["class_type"] for node in prompt.values()} <= set(NODE_CLASS_MAPPINGS)
     assert prompt["1"]["inputs"]["transformer"].endswith("q8_extended_paged")
     assert prompt["1"]["inputs"]["text_encoder"].endswith("q8-paged")
+    assert prompt["1"]["inputs"]["video_vae"].endswith(
+        "q8/video_vae_affine_q8.safetensors"
+    )
     assert prompt["3"]["inputs"] == {
         "aspect_ratio": "16:9",
         "attention_chunk_size": "automatic",
@@ -106,6 +109,9 @@ def test_low_memory_paged_ui_workflow_links_are_consistent():
         "MiniMax-H3/transformers/q8_extended_paged",
         "MiniMax-H3/text_encoders/q8-paged",
     ]
+    assert nodes[1]["widgets_values"][6] == (
+        "MiniMax-H3/vae/q8/video_vae_affine_q8.safetensors"
+    )
     assert nodes[3]["widgets_values"] == [
         5.0,
         5,

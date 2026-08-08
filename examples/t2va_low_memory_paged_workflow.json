@@ -22,7 +22,7 @@
         "MiniMax-H3/text_encoders/q8-paged",
         "",
         "",
-        "",
+        "MiniMax-H3/vae/q8/video_vae_affine_q8.safetensors",
         ""
       ]
     },
