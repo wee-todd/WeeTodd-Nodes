@@ -13,7 +13,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: python -m pip install numpy pytest ruff PyYAML
+      - run: python -m pip install mlx numpy pytest ruff safetensors PyYAML
       - run: python -m compileall -q src __init__.py
       - run: python -m pytest -q tests/test_nodes.py tests/test_runtime.py
       - run: ruff check src/wee_todd_nodes tests
