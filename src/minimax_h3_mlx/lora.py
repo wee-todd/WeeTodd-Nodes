@@ -169,6 +169,8 @@ def _load_input_grid(path: str | Path, expected_width: int) -> mx.array:
 
 def apply_lora(dit, request: LoRARequest) -> LoRAApplyReport:
     """Apply a generic LoRA safetensors file to a loaded H3 transformer."""
+    if getattr(dit, "paged_blocks", None) is not None:
+        return _apply_paged_lora(dit, request)
     path = Path(request.path).expanduser()
     if not path.is_file():
         raise FileNotFoundError(f"MiniMax H3 LoRA file not found: {path}")
@@ -249,6 +251,9 @@ def apply_lora_stack(dit, requests) -> tuple[LoRAApplyReport, ...]:
 
 def prepare_lora_timesteps(dit, timesteps: mx.array) -> None:
     """Prepare pruned-AdaLN adapter inputs for the current global timestep table."""
+    paged = getattr(dit, "paged_blocks", None)
+    if paged is not None:
+        paged.lora_timesteps = timesteps
     for block in dit.blocks:
         linear = block.adaln_proj.linear
         if isinstance(linear, LoRALinear):
@@ -256,3 +261,140 @@ def prepare_lora_timesteps(dit, timesteps: mx.array) -> None:
     linear = dit.final_layer.adaln_proj.linear
     if isinstance(linear, LoRALinear):
         linear.prepare(timesteps)
+
+
+def _apply_paged_lora(dit, request: LoRARequest) -> LoRAApplyReport:
+    """Validate one adapter without retaining block weights, then register it with the pager."""
+    from .dit import TransformerBlock
+
+    path = Path(request.path).expanduser()
+    if not path.is_file():
+        raise FileNotFoundError(f"MiniMax H3 LoRA file not found: {path}")
+    tensors = dict(mx.load(str(path)))
+    grouped: dict[str, dict[str, mx.array]] = {}
+    for key, value in tensors.items():
+        parsed = _split_lora_key(key)
+        if parsed is not None:
+            target, kind = parsed
+            grouped.setdefault(target, {})[kind] = value
+    if not grouped:
+        raise ValueError(f"The LoRA file contains no supported adapter pairs: {path}")
+
+    representative = TransformerBlock(dit.config)
+    fixed: list[tuple[str, _LoRAProjection]] = []
+    source_grid = None
+    adaln_targets = 0
+    for target, values in sorted(grouped.items()):
+        if "a" not in values or "b" not in values:
+            raise ValueError(f"LoRA target {target!r} does not contain both A and B tensors.")
+        parts = target.split(".")
+        if len(parts) > 2 and parts[0] == "blocks" and parts[1].isdigit():
+            index = int(parts[1])
+            if not 0 <= index < dit.paged_blocks.num_blocks:
+                raise ValueError(f"LoRA target {target!r} addresses a missing H3 block.")
+            layer = _get_target(representative, ".".join(parts[2:]))
+            is_block = True
+        else:
+            layer = _get_target(dit, target)
+            is_block = False
+        a, b = values["a"], values["b"]
+        if a.ndim != 2 or b.ndim != 2 or a.shape[0] != b.shape[1]:
+            raise ValueError(
+                f"LoRA target {target!r} has incompatible A/B shapes {a.shape}/{b.shape}."
+            )
+        output_width, input_width = _logical_shape(layer)
+        is_adaln = ".adaln_proj.linear" in f".{target}"
+        grid = None
+        if a.shape[1] != input_width:
+            if not is_adaln or dit.config.adaln_curve_grid is None:
+                raise ValueError(
+                    f"LoRA target {target!r} expects input width {a.shape[1]}, "
+                    f"but the base layer uses {input_width}."
+                )
+            if request.adaln_input_grid is None:
+                raise ValueError(
+                    "This LoRA targets the original H3 AdaLN timestep embedding, but the selected "
+                    "transformer is a pruned curve checkpoint. Supply an AdaLN input-grid "
+                    "safetensors file."
+                )
+            if source_grid is None:
+                source_grid = _load_input_grid(request.adaln_input_grid, int(a.shape[1]))
+            grid = source_grid
+        if b.shape[0] != output_width:
+            raise ValueError(
+                f"LoRA target {target!r} expects output width {b.shape[0]}, "
+                f"but the base layer uses {output_width}."
+            )
+        alpha = float(values.get("alpha", mx.array(a.shape[0])).item())
+        adapter = _LoRAProjection(
+            a,
+            b,
+            request.strength * alpha / max(int(a.shape[0]), 1),
+            grid,
+        )
+        if not is_block:
+            fixed.append((target, adapter))
+        adaln_targets += int(is_adaln)
+
+    for target, adapter in fixed:
+        current = _get_target(dit, target)
+        replacement = (
+            LoRALinear(current.base, [*current.adapters, adapter])
+            if isinstance(current, LoRALinear)
+            else LoRALinear(current, [adapter])
+        )
+        _set_target(dit, target, replacement)
+    dit.paged_blocks.lora_requests.append((request, source_grid))
+    mx.eval(dit.parameters())
+    tensor_bytes = sum(value.nbytes for value in tensors.values())
+    tensors.clear()
+    mx.clear_cache()
+    return LoRAApplyReport(
+        path=str(path),
+        strength=request.strength,
+        targets=len(grouped),
+        adaln_targets=adaln_targets,
+        tensor_bytes=tensor_bytes,
+    )
+
+
+def apply_paged_loras_to_block(
+    block,
+    index: int,
+    requests: list[tuple[LoRARequest, mx.array | None]],
+    timesteps: mx.array | None,
+) -> None:
+    """Attach only one materialized block's adapter tensors for its bounded lifetime."""
+    prefix = f"blocks.{index}."
+    for request, source_grid in requests:
+        tensors = mx.load(str(Path(request.path).expanduser()))
+        grouped: dict[str, dict[str, mx.array]] = {}
+        for key, value in tensors.items():
+            parsed = _split_lora_key(key)
+            if parsed is None or not parsed[0].startswith(prefix):
+                continue
+            target, kind = parsed
+            grouped.setdefault(target[len(prefix) :], {})[kind] = value
+        for target, values in grouped.items():
+            a, b = values["a"], values["b"]
+            alpha = float(values.get("alpha", mx.array(a.shape[0])).item())
+            grid = source_grid if ".adaln_proj.linear" in f".{target}" else None
+            adapter = _LoRAProjection(
+                a,
+                b,
+                request.strength * alpha / max(int(a.shape[0]), 1),
+                grid,
+            )
+            if grid is not None:
+                if timesteps is None:
+                    raise RuntimeError(
+                        "Paged H3 AdaLN LoRA inputs were not prepared for the sampling schedule."
+                    )
+                adapter.prepare(timesteps)
+            current = _get_target(block, target)
+            replacement = (
+                LoRALinear(current.base, [*current.adapters, adapter])
+                if isinstance(current, LoRALinear)
+                else LoRALinear(current, [adapter])
+            )
+            _set_target(block, target, replacement)

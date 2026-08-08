@@ -28,6 +28,7 @@ def test_sampling_metadata_preserves_exact_prompt(monkeypatch):
         prompt=prompt,
         load_vision=False,
         encoder_spec="encoder-spec",
+        paging_report={"format": "weetodd-h3-qwen-paged-v1"},
     )
     latents = SimpleNamespace(
         num_frames=124,
@@ -40,6 +41,8 @@ def test_sampling_metadata_preserves_exact_prompt(monkeypatch):
         easycache_resolved_threshold=None,
         seconds_per_evaluation=1.0,
         total_seconds=2.0,
+        paging_report={"format": "weetodd-h3-paged-v1"},
+        text_encoder_paging_report={"format": "weetodd-h3-qwen-paged-v1"},
     )
     monkeypatch.setattr(
         "wee_todd_nodes.nodes.H3TransformerSpec.from_components",
@@ -54,7 +57,12 @@ def test_sampling_metadata_preserves_exact_prompt(monkeypatch):
         "components", conditioning, H3GenerationConfig(steps=3), True
     )
 
-    assert json.loads(metadata)["prompt"] == prompt
+    parsed = json.loads(metadata)
+    assert parsed["prompt"] == prompt
+    assert parsed["paged_weights"] == {
+        "transformer": {"format": "weetodd-h3-paged-v1"},
+        "text_encoder": {"format": "weetodd-h3-qwen-paged-v1"},
+    }
 
 
 def test_expected_nodes_are_registered():
@@ -107,9 +115,18 @@ def test_component_loader_returns_lazy_immutable_spec():
 def test_component_loader_resolves_relative_root_below_comfy_models(monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, "folder_paths", SimpleNamespace(models_dir=str(tmp_path)))
 
-    (spec,) = WeeToddH3ComponentLoader().specify("MiniMax-H3/FL2VA", "t2va")
+    (spec,) = WeeToddH3ComponentLoader().specify(
+        "MiniMax-H3/FL2VA",
+        "t2va",
+        transformer="MiniMax-H3/transformers/q8_extended_paged",
+        text_encoder="MiniMax-H3/text_encoders/q8-paged",
+    )
 
     assert spec.checkpoint == str(tmp_path / "MiniMax-H3" / "FL2VA")
+    assert spec.transformer == str(
+        tmp_path / "MiniMax-H3" / "transformers" / "q8_extended_paged"
+    )
+    assert spec.text_encoder == str(tmp_path / "MiniMax-H3" / "text_encoders" / "q8-paged")
 
 
 def test_quantized_loader_selects_validated_named_profile(tmp_path):

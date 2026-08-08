@@ -31,11 +31,14 @@ class H3TextEncoderSpec:
         paths = components.resolved_paths()
         config_path = None
         encoder_config = paths["text_encoder"] / "config.json"
+        packaged_architecture = paths["text_encoder"] / "architecture_config.json"
+        if packaged_architecture.is_file():
+            config_path = str(packaged_architecture)
         if encoder_config.is_file():
             import json
 
             raw = json.loads(encoder_config.read_text())
-            if "text_config" not in raw:
+            if "text_config" not in raw and config_path is None:
                 upstream_config = Path(components.checkpoint) / "text_encoder" / "config.json"
                 if upstream_config.is_file():
                     config_path = str(upstream_config)
@@ -72,6 +75,7 @@ class H3Conditioning:
     prompt: str
     load_vision: bool
     encoder_spec: H3TextEncoderSpec
+    paging_report: dict[str, Any] | None = None
 
 
 EncoderFactory = Callable[[H3TextEncoderSpec], Any]
@@ -138,6 +142,7 @@ class H3TextEncoderCache:
                 except ImportError:
                     pass
                 token_count = int(token_tags.shape[0])
+                pager = getattr(self._encoder, "paged_layers", None)
                 conditioning = H3Conditioning(
                     embeddings=embeddings,
                     token_tags=token_tags,
@@ -145,6 +150,7 @@ class H3TextEncoderCache:
                     prompt=prompt,
                     load_vision=spec.load_vision,
                     encoder_spec=spec,
+                    paging_report=pager.report() if pager is not None else None,
                 )
             except BaseException:
                 self._release_locked()

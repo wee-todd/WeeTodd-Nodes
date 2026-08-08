@@ -181,12 +181,12 @@ class WeeToddH3ComponentLoader:
             H3ComponentSetSpec(
                 checkpoint=_resolve_component_root(checkpoint),
                 task=task,
-                transformer=transformer or None,
-                text_encoder=text_encoder or None,
-                processor=processor or None,
-                tokenizer=tokenizer or None,
-                video_vae=video_vae or None,
-                audio_vae=audio_vae or None,
+                transformer=_resolve_component_root(transformer) if transformer else None,
+                text_encoder=_resolve_component_root(text_encoder) if text_encoder else None,
+                processor=_resolve_component_root(processor) if processor else None,
+                tokenizer=_resolve_component_root(tokenizer) if tokenizer else None,
+                video_vae=_resolve_component_root(video_vae) if video_vae else None,
+                audio_vae=_resolve_component_root(audio_vae) if audio_vae else None,
             ),
         )
 
@@ -331,6 +331,7 @@ class WeeToddH3TextEncode:
             "encoder_resident": TEXT_ENCODER_RUNTIME.loaded,
             "memory_mode": memory_mode,
             "staged_releases": list(staged_releases),
+            "paged_weights": getattr(conditioning, "paging_report", None),
         }
         return conditioning, json.dumps(info, indent=2, sort_keys=True)
 
@@ -478,6 +479,10 @@ class WeeToddH3Sample:
             "projection_backend_runtime": getattr(
                 latents, "projection_backend_runtime", None
             ),
+            "paged_weights": {
+                "transformer": getattr(latents, "paging_report", None),
+                "text_encoder": getattr(latents, "text_encoder_paging_report", None),
+            },
             "preview_policy": "none",
             "staged_releases": list(staged_releases),
         }

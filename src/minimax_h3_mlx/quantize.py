@@ -137,6 +137,25 @@ def apply_quantization_structure(model, config: QuantConfig) -> None:
     )
 
 
+def apply_block_quantization_structure(block, index: int, config: QuantConfig) -> None:
+    """Replay a full-checkpoint quantization recipe on one detached transformer block."""
+
+    def predicate(path: str, module: nn.Module) -> bool | dict:
+        if not isinstance(module, nn.Linear):
+            return False
+        bits = config.bits_for(f"blocks.{index}.{path}")
+        if bits is None or module.weight.shape[-1] % config.group_size:
+            return False
+        return {"group_size": config.group_size, "bits": bits}
+
+    nn.quantize(
+        block,
+        group_size=config.group_size,
+        bits=config.bits,
+        class_predicate=predicate,
+    )
+
+
 def quantize_dit(
     model,
     config: QuantConfig | None = None,

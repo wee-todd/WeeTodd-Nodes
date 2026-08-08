@@ -165,6 +165,106 @@ def test_preflight_accepts_experimental_native_quantization_widths(tmp_path: Pat
     assert transformer.quantization == f"mlx-affine-{bits}bit-group-64"
 
 
+def test_preflight_uses_bounded_paged_transformer_window(tmp_path: Path):
+    root = _component_tree(tmp_path)
+    transformer_path = root / "transformer"
+    (transformer_path / "model.safetensors").unlink()
+    _safetensors(
+        transformer_path / "pages" / "fixed.safetensors",
+        {"video_patch_proj.weight": ("F16", [4, 4], 32)},
+    )
+    blocks = []
+    for index in range(8):
+        relative = f"pages/block-{index:03d}.safetensors"
+        _safetensors(
+            transformer_path / relative,
+            {f"blocks.{index}.attn.weight": ("F16", [4, 4], 32)},
+        )
+        blocks.append(
+            {
+                "file": relative,
+                "tensor_count": 1,
+                "tensor_bytes": 32,
+                "sha256": "0" * 64,
+            }
+        )
+    _json(
+        transformer_path / "paged_manifest.json",
+        {
+            "format": "weetodd-h3-paged-v1",
+            "num_blocks": 8,
+            "source_tensor_bytes": 288,
+            "fixed": {
+                "file": "pages/fixed.safetensors",
+                "tensor_count": 1,
+                "tensor_bytes": 32,
+                "sha256": "0" * 64,
+            },
+            "blocks": blocks,
+        },
+    )
+
+    report = preflight_components(H3ComponentSetSpec(str(root)), H3PreflightRequest())
+    transformer = next(item for item in report.components if item.name == "transformer")
+
+    assert transformer.tensor_bytes == 288
+    assert transformer.paging_format == "weetodd-h3-paged-v1"
+    assert transformer.paging_fixed_bytes == 32
+    assert transformer.paging_window_bytes == 128
+    assert report.transformer_load_stage_bytes == (
+        160 + report.adaln_cache_bytes + report.packed_workspace_bytes
+    )
+
+
+def test_preflight_uses_one_paged_qwen_layer(tmp_path: Path):
+    root = _component_tree(tmp_path)
+    encoder = root / "text_encoder"
+    (encoder / "model.safetensors").unlink()
+    _safetensors(
+        encoder / "pages" / "fixed.safetensors",
+        {"model.embed_tokens.weight": ("F16", [4, 4], 32)},
+    )
+    layers = []
+    for index, size in enumerate((32, 64)):
+        relative = f"pages/layer-{index:03d}.safetensors"
+        _safetensors(
+            encoder / relative,
+            {f"model.layers.{index}.weight": ("F16", [size // 2], size)},
+        )
+        layers.append(
+            {
+                "file": relative,
+                "tensor_count": 1,
+                "tensor_bytes": size,
+                "sha256": "0" * 64,
+            }
+        )
+    _json(
+        encoder / "paged_text_encoder_manifest.json",
+        {
+            "format": "weetodd-h3-qwen-paged-v1",
+            "num_layers": 2,
+            "source_tensor_bytes": 128,
+            "fixed": {
+                "file": "pages/fixed.safetensors",
+                "tensor_count": 1,
+                "tensor_bytes": 32,
+                "sha256": "0" * 64,
+            },
+            "layers": layers,
+        },
+    )
+
+    request = H3PreflightRequest(prompt_tokens=10)
+    report = preflight_components(H3ComponentSetSpec(str(root)), request)
+    text_encoder = next(item for item in report.components if item.name == "text_encoder")
+
+    assert text_encoder.paging_format == "weetodd-h3-qwen-paged-v1"
+    assert text_encoder.paging_fixed_bytes == 32
+    assert text_encoder.paging_window_bytes == 64
+    assert report.qwen_stage_bytes == 96 + 10 * 5120 * 2 * 4
+
+
 def test_preflight_rejects_incompatible_transformer_config(tmp_path: Path):
     root = _component_tree(tmp_path)
     _json(

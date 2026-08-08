@@ -104,6 +104,9 @@ class ComponentReport:
     dtypes: tuple[str, ...]
     quantization: str
     adaln_bytes: int = 0
+    paging_format: str | None = None
+    paging_fixed_bytes: int = 0
+    paging_window_bytes: int = 0
 
 
 @dataclass(frozen=True)
@@ -416,6 +419,30 @@ def _component_report(
             except (TypeError, json.JSONDecodeError) as exc:
                 raise ValueError("Single-file video_vae metadata is not valid JSON.") from exc
             validate_video_vae_wrapper(wrapper)
+    paging_format = None
+    paging_fixed_bytes = 0
+    paging_window_bytes = 0
+    if name == "transformer" and path.is_dir() and (path / "paged_manifest.json").is_file():
+        from minimax_h3_mlx.paged_checkpoint import PagedCheckpointManifest
+
+        paged = PagedCheckpointManifest.load(path)
+        paging_format = "weetodd-h3-paged-v1"
+        paging_fixed_bytes = paged.fixed.tensor_bytes
+        paging_window_bytes = max(
+            sum(record.tensor_bytes for record in paged.blocks[start : start + 4])
+            for start in range(0, paged.num_blocks, 4)
+        )
+    elif (
+        name == "text_encoder"
+        and path.is_dir()
+        and (path / "paged_text_encoder_manifest.json").is_file()
+    ):
+        from minimax_h3_mlx.paged_text_encoder import PagedTextEncoderManifest
+
+        paged = PagedTextEncoderManifest.load(path)
+        paging_format = "weetodd-h3-qwen-paged-v1"
+        paging_fixed_bytes = paged.fixed.tensor_bytes
+        paging_window_bytes = max(record.tensor_bytes for record in paged.layers)
     return ComponentReport(
         name=name,
         path=str(path),
@@ -426,6 +453,9 @@ def _component_report(
         dtypes=tuple(sorted({dtype for header in headers for dtype in header.dtypes})),
         quantization=_quantization(path, headers, name),
         adaln_bytes=sum(header.adaln_bytes for header in headers),
+        paging_format=paging_format,
+        paging_fixed_bytes=paging_fixed_bytes,
+        paging_window_bytes=paging_window_bytes,
     )
 
 
@@ -503,10 +533,21 @@ def preflight_components(
         + video_latent_frames * (request.width // 16) * (request.height // 16) * 24 * 2
     )
 
-    qwen_stage = by_name["text_encoder"].tensor_bytes + request.prompt_tokens * 5120 * 2 * 4
+    text_encoder = by_name["text_encoder"]
+    qwen_weights = (
+        text_encoder.paging_fixed_bytes + text_encoder.paging_window_bytes
+        if text_encoder.paging_format is not None
+        else text_encoder.tensor_bytes
+    )
+    qwen_stage = qwen_weights + request.prompt_tokens * 5120 * 2 * 4
     transformer = by_name["transformer"]
-    transformer_load_stage = transformer.tensor_bytes + adaln_cache_bytes + packed_workspace_bytes
-    sample_resident = max(0, transformer.tensor_bytes - transformer.adaln_bytes)
+    if transformer.paging_format is not None:
+        transformer_weights = transformer.paging_fixed_bytes + transformer.paging_window_bytes
+        sample_resident = transformer_weights
+    else:
+        transformer_weights = transformer.tensor_bytes
+        sample_resident = max(0, transformer.tensor_bytes - transformer.adaln_bytes)
+    transformer_load_stage = transformer_weights + adaln_cache_bytes + packed_workspace_bytes
     transformer_sample_stage = sample_resident + adaln_cache_bytes + packed_workspace_bytes
     video_decode_stage = by_name["video_vae"].tensor_bytes + video_decode_workspace_bytes
     audio_seconds = frames / 24
@@ -538,6 +579,16 @@ def preflight_components(
         warnings.append(
             "The transformer header exposes no removable AdaLN projection bytes; verify whether "
             "it is already pruned."
+        )
+    if text_encoder.paging_format is not None:
+        warnings.append(
+            "Paged text-encoder memory uses fixed tensors plus the largest Qwen layer; "
+            "the text-only pager does not load the vision tower."
+        )
+    if transformer.paging_format is not None:
+        warnings.append(
+            "Paged transformer memory uses the fixed page plus the largest four-block window; "
+            "storage traffic and allocator behavior remain unmeasured."
         )
     processor_path = paths["processor"]
     if not any(

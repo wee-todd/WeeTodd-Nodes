@@ -1,0 +1,76 @@
+{
+  "1": {
+    "class_type": "WeeToddH3ComponentLoader",
+    "inputs": {
+      "audio_vae": "",
+      "checkpoint": "MiniMax-H3/FL2VA",
+      "processor": "",
+      "task": "t2va",
+      "text_encoder": "MiniMax-H3/text_encoders/q8-paged",
+      "tokenizer": "",
+      "transformer": "MiniMax-H3/transformers/q8_extended_paged",
+      "video_vae": ""
+    },
+    "_meta": {"title": "H3 Component Loader"}
+  },
+  "2": {
+    "class_type": "WeeToddH3Preflight",
+    "inputs": {
+      "available_memory_gb": 0.0,
+      "components": ["1", 0],
+      "config": ["3", 0],
+      "prompt_tokens": 512
+    },
+    "_meta": {"title": "H3 Component Preflight"}
+  },
+  "3": {
+    "class_type": "WeeToddH3GenerationConfig",
+    "inputs": {
+      "aspect_ratio": "16:9",
+      "attention_chunk_size": "automatic",
+      "custom_height": 384,
+      "custom_width": 640,
+      "drop_adaln": true,
+      "duration_seconds": 5.0,
+      "memory_mode": "low_memory_bf16",
+      "projection_backend": "mlx",
+      "resolution_mode": "preset",
+      "resolution_tier": "384P (fast smoke)",
+      "seed": 0,
+      "steps": 5
+    },
+    "_meta": {"title": "H3 Generation Config"}
+  },
+  "4": {
+    "class_type": "WeeToddH3TextEncode",
+    "inputs": {
+      "components": ["2", 0],
+      "prompt": "integrated_multimodal_description: [Shot 1] Live-action cinematic realism, a low medium-wide tracking shot follows an athletic woman in a bright red raincoat sprinting from left to right through a rain-soaked city alley at night. She plants her left foot beside a deep puddle, swings both arms, leaps across it, rotates her torso halfway toward the camera in midair, and lands on her right foot. Water sprays outward beneath her boots and the loose raincoat twists behind her. She immediately drops into a short controlled slide, steadies herself with one hand near the pavement, then rises into a balanced final stance facing the camera. The camera trucks quickly beside her, arcs inward during the leap, and settles without a cut as she stops. Reflected amber and blue shop lights ripple across the wet pavement.\n\noverall_soundscape: Steady rainfall and distant city traffic continue throughout. Rapid boot strikes slap against wet pavement, the takeoff produces one heavy splash, airborne fabric snaps in the wind, the landing makes a sharp wet impact, and the slide pushes a diminishing spray across the ground. Her breathing is forceful and synchronized with the sprint and landing.\n\nnon_diegetic_music: N/A",
+      "unload_after_encode": true
+    },
+    "_meta": {"title": "H3 Text Encode"}
+  },
+  "5": {
+    "class_type": "WeeToddH3Sample",
+    "inputs": {
+      "components": ["2", 0],
+      "conditioning": ["4", 0],
+      "config": ["3", 0],
+      "unload_after_sample": true
+    },
+    "_meta": {"title": "H3 Sample"}
+  },
+  "6": {
+    "class_type": "WeeToddH3DirectPublishLatents",
+    "inputs": {
+      "components": ["2", 0],
+      "crf": 18,
+      "filename_prefix": "WeeTodd/H3_Dual_Paged_Low_Memory",
+      "generation_metadata": "{\"workflow\": \"t2va_low_memory_paged\", \"quality_label\": \"off-distribution 384P smoke test\"}",
+      "latents": ["5", 0],
+      "max_av_drift_seconds": 0.025,
+      "sampling_info": ["5", 1]
+    },
+    "_meta": {"title": "H3 Direct Publish Latents"}
+  }
+}

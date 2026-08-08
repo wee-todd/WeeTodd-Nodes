@@ -61,3 +61,68 @@ def test_t2va_ui_workflow_links_are_consistent():
         target_input = nodes[target_id]["inputs"][target_slot]
         assert target_input["link"] == link_id
         assert target_input["type"] == link_type
+
+
+def test_low_memory_paged_api_uses_dual_paging_and_direct_publication():
+    prompt = json.loads((ROOT / "examples" / "t2va_low_memory_paged_api.json").read_text())
+
+    assert {node["class_type"] for node in prompt.values()} <= set(NODE_CLASS_MAPPINGS)
+    assert prompt["1"]["inputs"]["transformer"].endswith("q8_extended_paged")
+    assert prompt["1"]["inputs"]["text_encoder"].endswith("q8-paged")
+    assert prompt["3"]["inputs"] == {
+        "aspect_ratio": "16:9",
+        "attention_chunk_size": "automatic",
+        "custom_height": 384,
+        "custom_width": 640,
+        "drop_adaln": True,
+        "duration_seconds": 5.0,
+        "memory_mode": "low_memory_bf16",
+        "projection_backend": "mlx",
+        "resolution_mode": "preset",
+        "resolution_tier": "384P (fast smoke)",
+        "seed": 0,
+        "steps": 5,
+    }
+    assert prompt["4"]["inputs"]["unload_after_encode"] is True
+    assert prompt["5"]["inputs"]["unload_after_sample"] is True
+    assert "easycache" not in prompt["5"]["inputs"]
+    assert "blockcache" not in prompt["5"]["inputs"]
+    assert prompt["6"]["class_type"] == "WeeToddH3DirectPublishLatents"
+    assert prompt["6"]["inputs"]["latents"] == ["5", 0]
+    assert prompt["6"]["inputs"]["sampling_info"] == ["5", 1]
+
+
+def test_low_memory_paged_ui_workflow_links_are_consistent():
+    workflow = json.loads(
+        (ROOT / "examples" / "t2va_low_memory_paged_workflow.json").read_text()
+    )
+    nodes = {node["id"]: node for node in workflow["nodes"]}
+    links = {link[0]: link for link in workflow["links"]}
+
+    assert len(nodes) == 6
+    assert set(links) == set(range(1, 10))
+    assert {node["type"] for node in nodes.values()} <= set(NODE_CLASS_MAPPINGS)
+    assert nodes[1]["widgets_values"][2:4] == [
+        "MiniMax-H3/transformers/q8_extended_paged",
+        "MiniMax-H3/text_encoders/q8-paged",
+    ]
+    assert nodes[3]["widgets_values"] == [
+        5.0,
+        5,
+        0,
+        "preset",
+        "384P (fast smoke)",
+        "16:9",
+        640,
+        384,
+        True,
+        "low_memory_bf16",
+        "automatic",
+        "mlx",
+    ]
+    assert nodes[6]["type"] == "WeeToddH3DirectPublishLatents"
+    for link_id, origin_id, origin_slot, target_id, target_slot, link_type in links.values():
+        assert link_id in nodes[origin_id]["outputs"][origin_slot]["links"]
+        target_input = nodes[target_id]["inputs"][target_slot]
+        assert target_input["link"] == link_id
+        assert target_input["type"] == link_type

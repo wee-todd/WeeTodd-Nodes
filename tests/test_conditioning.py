@@ -2,6 +2,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -55,6 +56,24 @@ def test_conditioning_cache_can_unload_after_encode(tmp_path: Path):
     assert conditioning.embeddings == "live-mlx-embeddings"
     assert cache.loaded is False
     assert len(created) == 1
+
+
+def test_conditioning_retains_paged_encoder_report_after_unload(tmp_path: Path):
+    def factory(spec):
+        encoder = FakeEncoder(spec)
+        encoder.paged_layers = SimpleNamespace(
+            report=lambda: {"format": "weetodd-h3-qwen-paged-v1", "layers_loaded": 50}
+        )
+        return encoder
+
+    conditioning = H3TextEncoderCache(factory).encode(
+        _spec(tmp_path), "A test prompt", unload_after=True
+    )
+
+    assert conditioning.paging_report == {
+        "format": "weetodd-h3-qwen-paged-v1",
+        "layers_loaded": 50,
+    }
 
 
 def test_conditioning_cache_reuses_compatible_encoder(tmp_path: Path):
@@ -150,6 +169,30 @@ def test_compact_encoder_uses_checkpoint_architecture_config(tmp_path: Path):
     )
 
     assert spec.config_path == str(root / "text_encoder" / "config.json")
+
+
+def test_paged_encoder_prefers_packaged_architecture_config(tmp_path: Path):
+    root = tmp_path / "FL2VA"
+    paged = tmp_path / "paged"
+    processor = tmp_path / "processor"
+    tokenizer = tmp_path / "tokenizer"
+    for directory in (root / "text_encoder", paged, processor, tokenizer):
+        directory.mkdir(parents=True)
+    (root / "text_encoder" / "config.json").write_text('{"text_config": {}}\n')
+    (paged / "config.json").write_text('{"model_type": "minimax_h3"}\n')
+    packaged = paged / "architecture_config.json"
+    packaged.write_text('{"text_config": {}}\n')
+
+    spec = H3TextEncoderSpec.from_components(
+        H3ComponentSetSpec(
+            checkpoint=str(root),
+            text_encoder=str(paged),
+            processor=str(processor),
+            tokenizer=str(tokenizer),
+        )
+    )
+
+    assert spec.config_path == str(packaged)
 
 
 def test_node_import_does_not_import_mlx():

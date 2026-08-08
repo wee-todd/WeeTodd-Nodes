@@ -26,9 +26,13 @@ from the two input patch projections, the per-row AdaLN modality tag, and the tw
 from __future__ import annotations
 
 import math
+from typing import TYPE_CHECKING
 
 import mlx.core as mx
 import mlx.nn as nn
+
+if TYPE_CHECKING:
+    from .adaln import ModulationCache
 
 from .config import MODALITY_NUM, DiTConfig
 
@@ -584,6 +588,9 @@ class MiniMaxH3DiT(nn.Module):
             block.attn.query_chunk_size = chunk_size
         for block in self.blocks:
             block.attn.query_chunk_size = chunk_size
+        paged = getattr(self, "paged_blocks", None)
+        if paged is not None:
+            paged.query_chunk_size = chunk_size
 
     def embed_timesteps(self, timesteps: mx.array) -> mx.array:
         """Return original MLP embeddings or linearly interpolated pruned AdaLN coordinates."""
@@ -623,7 +630,8 @@ class MiniMaxH3DiT(nn.Module):
             raise ValueError(f"`position_ids` must be (seq_len, 3), got {position_ids.shape}.")
         if token_tags.shape != (seq_len,) or timestep_indices.shape != (seq_len,):
             raise ValueError(
-                "`token_tags` and `timestep_indices` must be (seq_len,) matching `position_ids`, got "
+                "`token_tags` and `timestep_indices` must be (seq_len,) matching "
+                "`position_ids`, got "
                 f"{token_tags.shape} and {timestep_indices.shape} for seq_len={seq_len}."
             )
 
@@ -678,7 +686,7 @@ class MiniMaxH3DiT(nn.Module):
         video_indices: mx.array,
         audio_indices: mx.array,
         text_indices: mx.array,
-        modulation_cache: "ModulationCache | None" = None,
+        modulation_cache: ModulationCache | None = None,
         mask: mx.array | None = None,
         blockcache=None,
         trajectory_forecast=None,
@@ -692,7 +700,8 @@ class MiniMaxH3DiT(nn.Module):
         Args:
             video_latents: ``(B, num_video_tokens, video_patch_dim)`` patchified rows, ordered to
                 match ``video_indices`` (conditioning rows included).
-            audio_latents: ``(B, num_audio_tokens, audio_latents_dim)`` ordered as ``audio_indices``.
+            audio_latents: ``(B, num_audio_tokens, audio_latents_dim)`` ordered as
+                ``audio_indices``.
             text_embeds: ``(B, num_text_tokens, text_dim)`` ordered as ``text_indices``.
             timestep: ``(num_timesteps,)`` the *distinct* noise levels present, unscaled in [0, 1].
             timestep_indices: ``(seq_len,)`` index into ``timestep`` for every row.
@@ -733,7 +742,28 @@ class MiniMaxH3DiT(nn.Module):
             diagnostics,
         )
 
-        if blockcache is not None and hasattr(blockcache, "segment_start"):
+        paged = getattr(self, "paged_blocks", None)
+        if paged is not None:
+            if blockcache is not None and hasattr(blockcache, "segment_start"):
+                raise ValueError(
+                    "Hierarchical BlockCache is not yet compatible with paged H3 weights. "
+                    "Use standard BlockCache or disconnect the cache node."
+                )
+            x, before_block_zero, after_block_zero = self._run_paged_blocks(
+                x,
+                temb,
+                adaln_indices,
+                rotary,
+                video_indices,
+                audio_indices,
+                modulation_cache,
+                mask,
+                blockcache,
+                step_index,
+                total_steps,
+                diagnostics,
+            )
+        elif blockcache is not None and hasattr(blockcache, "segment_start"):
             blockcache.begin_step()
             i = 0
             current_segment = None
@@ -855,6 +885,70 @@ class MiniMaxH3DiT(nn.Module):
             diagnostics.capture("video_output", video_result)
             diagnostics.capture("audio_output", audio_result)
         return video_result, audio_result
+
+    def _run_paged_blocks(
+        self,
+        x,
+        temb,
+        adaln_indices,
+        rotary,
+        video_indices,
+        audio_indices,
+        modulation_cache,
+        mask,
+        blockcache,
+        step_index,
+        total_steps,
+        diagnostics,
+    ):
+        """Run bounded weight windows and complete activations before retiring each window."""
+        paged = self.paged_blocks
+        before_block_zero = x
+        after_block_zero = None
+        cache_hit = False
+        for start in range(0, paged.num_blocks, paged.window_size):
+            with paged.window(start) as blocks:
+                for offset, block in enumerate(blocks):
+                    index = start + offset
+                    if diagnostics is not None:
+                        diagnostics.prepare_block(x, index)
+                    modulation = (
+                        modulation_cache.get(index)
+                        if modulation_cache is not None
+                        else block.adaln_proj(temb)
+                    )
+                    x = block(
+                        x,
+                        modulation,
+                        adaln_indices,
+                        rotary,
+                        mask,
+                        diagnostics=diagnostics,
+                        block_index=index,
+                    )
+                    if index == 0:
+                        after_block_zero = x
+                        if blockcache is not None:
+                            reused = blockcache.try_reuse(
+                                before_block_zero,
+                                after_block_zero,
+                                video_indices,
+                                audio_indices,
+                                step_index,
+                                total_steps,
+                            )
+                            if reused is not None:
+                                x = reused
+                                cache_hit = True
+                                break
+                # MLX is lazy: this is the lifetime boundary that prevents retired page weights
+                # from remaining captured by the hidden-state graph.
+                mx.eval(x)
+            if cache_hit:
+                break
+        if after_block_zero is None:
+            raise RuntimeError("Paged H3 execution did not evaluate transformer block zero.")
+        return x, before_block_zero, after_block_zero
 
     def _project_target_features(
         self,

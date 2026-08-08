@@ -99,6 +99,8 @@ class H3Latents:
     lora_report: tuple[dict[str, Any], ...] = ()
     projection_backend_report: dict[str, Any] | None = None
     projection_backend_runtime: dict[str, Any] | None = None
+    paging_report: dict[str, Any] | None = None
+    text_encoder_paging_report: dict[str, Any] | None = None
 
 
 SamplerFactory = Callable[[H3TransformerSpec], Any]
@@ -109,7 +111,13 @@ def _default_sampler_factory(spec: H3TransformerSpec):
     from minimax_h3_mlx.load import load_dit
     from minimax_h3_mlx.pipeline import MiniMaxH3Pipeline
 
-    dit = load_dit(spec.transformer)
+    transformer = Path(spec.transformer)
+    if (transformer / "paged_manifest.json").is_file():
+        from minimax_h3_mlx.paged_checkpoint import load_paged_dit
+
+        dit = load_paged_dit(transformer)
+    else:
+        dit = load_dit(transformer)
     pipeline_config = PipelineConfig.from_model_index(Path(spec.checkpoint) / "model_index.json")
     return MiniMaxH3Pipeline(dit, None, None, None, pipeline_config)
 
@@ -245,6 +253,8 @@ class H3TransformerCache:
                 )
                 from minimax_h3_mlx.projection import mpp_runtime_status
 
+                paged = getattr(self._sampler.dit, "paged_blocks", None)
+
                 latents = H3Latents(
                     video=result.video_latents,
                     audio=result.audio_latents,
@@ -286,6 +296,8 @@ class H3TransformerCache:
                     lora_report=self._lora_report,
                     projection_backend_report=self._projection_backend_report,
                     projection_backend_runtime=mpp_runtime_status(),
+                    paging_report=paged.report() if paged is not None else None,
+                    text_encoder_paging_report=conditioning.paging_report,
                     seconds_per_evaluation=result.seconds_per_evaluation,
                     total_seconds=result.total_seconds,
                     transformer_spec=spec,

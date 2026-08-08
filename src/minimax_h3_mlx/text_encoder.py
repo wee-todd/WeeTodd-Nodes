@@ -53,15 +53,21 @@ class MiniMaxH3TextEncoder:
         from mlx_vlm.models.qwen3_vl.vision import VisionModel
 
         model_dir = Path(model_dir)
-        with open(config_path or (model_dir / "config.json")) as fh:
+        default_config = model_dir / "config.json"
+        architecture_config = model_dir / "architecture_config.json"
+        if config_path is None and architecture_config.is_file():
+            config_path = architecture_config
+        with open(config_path or default_config) as fh:
             raw = json.load(fh)
 
         full_layers = raw["text_config"]["num_hidden_layers"]
         if full_layers <= num_layers:
             raise ValueError(
-                f"MiniMax-H3 conditions on hidden_states[{num_layers}] of its Qwen3-VL conditioner, "
+                f"MiniMax-H3 conditions on hidden_states[{num_layers}] of its Qwen3-VL "
+                "conditioner, "
                 f"which needs more than {num_layers} decoder layers, but the checkpoint has "
-                f"{full_layers}. The last hidden state of a stack truncated to exactly {num_layers} "
+                f"{full_layers}. The last hidden state of a stack truncated to exactly "
+                f"{num_layers} "
                 "layers is post-norm and is not the conditioning MiniMax-H3 expects."
             )
 
@@ -86,7 +92,15 @@ class MiniMaxH3TextEncoder:
 
         self.language = Qwen3VLModel(self.text_config)
         self.vision = VisionModel(self.vision_config) if load_vision else None
-        self._load_weights(model_dir, dtype, verbose)
+        if (model_dir / "paged_text_encoder_manifest.json").is_file():
+            if load_vision:
+                raise ValueError(
+                    "The paged H3 text encoder is text-only. Use the compact resident encoder "
+                    "when image conditioning requires Qwen3-VL vision."
+                )
+            self._load_paged_weights(model_dir)
+        else:
+            self._load_weights(model_dir, dtype, verbose)
 
         self.image_token_id = raw["image_token_id"]
         self.vision_start_token_id = raw["vision_start_token_id"]
@@ -137,7 +151,11 @@ class MiniMaxH3TextEncoder:
         from mlx.utils import tree_flatten, tree_unflatten
 
         compact = model_dir / "text_encoder.safetensors"
-        shards = [str(compact)] if compact.exists() else sorted(glob.glob(str(model_dir / "*.safetensors")))
+        shards = (
+            [str(compact)]
+            if compact.exists()
+            else sorted(glob.glob(str(model_dir / "*.safetensors")))
+        )
         if not shards:
             raise FileNotFoundError(f"No safetensors in {model_dir}.")
 
@@ -168,7 +186,11 @@ class MiniMaxH3TextEncoder:
         buckets: dict[str, dict[str, mx.array]] = {"language": {}, "vision": {}}
         expected = {
             "language": {k for k, _ in tree_flatten(self.language.parameters())},
-            "vision": set() if self.vision is None else {k for k, _ in tree_flatten(self.vision.parameters())},
+            "vision": (
+                set()
+                if self.vision is None
+                else {k for k, _ in tree_flatten(self.vision.parameters())}
+            ),
         }
         # Compact H3 exports omit the final language norm because conditioning is read before it.
         # The module retains its tiny initialized norm for mlx-vlm structural compatibility.
@@ -186,9 +208,12 @@ class MiniMaxH3TextEncoder:
                     continue
                 # Packed MLX weights are uint32 storage. Casting those would silently destroy the
                 # checkpoint; floating weights and quantization metadata follow the requested dtype.
-                buckets[bucket][path] = tensor if tensor.dtype == mx.uint32 else tensor.astype(dtype)
+                buckets[bucket][path] = (
+                    tensor if tensor.dtype == mx.uint32 else tensor.astype(dtype)
+                )
             if verbose:
-                print(f"  {Path(shard).name}: kept {len(buckets['language']) + len(buckets['vision'])}")
+                kept = len(buckets["language"]) + len(buckets["vision"])
+                print(f"  {Path(shard).name}: kept {kept}")
 
         for bucket, module in (("language", self.language), ("vision", self.vision)):
             if module is None:
@@ -211,6 +236,51 @@ class MiniMaxH3TextEncoder:
         if self.vision is not None:
             mx.eval(self.vision.parameters())
         self.skipped_tensors = skipped
+
+    def _load_paged_weights(self, model_dir: Path) -> None:
+        """Load only fixed text tensors and attach a one-layer sequential executor."""
+        from mlx.utils import tree_flatten, tree_unflatten
+
+        from .paged_checkpoint import PagedTensorStore
+        from .paged_text_encoder import PagedTextEncoderManifest, PagedTextLayerExecutor
+
+        manifest = PagedTextEncoderManifest.load(model_dir)
+        if manifest.num_blocks != self.num_layers:
+            raise ValueError(
+                f"Paged H3 text encoder has {manifest.num_blocks} layers; "
+                f"conditioning requires {self.num_layers}."
+            )
+        store = PagedTensorStore(manifest)
+        source = store.load_fixed()
+        fixed: dict[str, mx.array] = {}
+        try:
+            for key, tensor in source.items():
+                target = self._wanted(key)
+                if target is None or target[0] != "language":
+                    continue
+                fixed[target[1]] = tensor
+            expected = {
+                key
+                for key, _ in tree_flatten(self.language.parameters())
+                if not key.startswith("layers.") and key != "norm.weight"
+            }
+            missing = sorted(expected - fixed.keys())
+            unexpected = sorted(fixed.keys() - expected)
+            if missing or unexpected:
+                raise KeyError(
+                    f"Paged H3 text fixed tensors mismatch: {len(missing)} missing "
+                    f"(e.g. {missing[:4]}), {len(unexpected)} unexpected "
+                    f"(e.g. {unexpected[:4]})."
+                )
+            self.language.update(tree_unflatten(list(fixed.items())))
+            self.language.layers = []
+            mx.eval(self.language.parameters())
+        finally:
+            fixed.clear()
+            source.clear()
+            store.release()
+        self.paged_layers = PagedTextLayerExecutor(manifest, self.text_config)
+        self.skipped_tensors = 0
 
     # -- tokenizer / processor -------------------------------------------------------------
 
@@ -296,7 +366,9 @@ class MiniMaxH3TextEncoder:
 
             for index in range(len(images)):
                 num_image_tokens = int(grid_thw[index].prod()) // merge
-                label_ids = self.tokenizer(f"<Picture {index + 1}>: ", add_special_tokens=False)["input_ids"]
+                label_ids = self.tokenizer(
+                    f"<Picture {index + 1}>: ", add_special_tokens=False
+                )["input_ids"]
                 vision_ids = [start] + [pad] * num_image_tokens + [end]
                 token_ids += label_ids + vision_ids
                 # The whole vision block is tagged *video*; only the label stays text.
@@ -331,13 +403,38 @@ class MiniMaxH3TextEncoder:
         mask = create_attention_mask(h, None)
 
         position_embeddings = None
-        if position_ids is not None and not model.layers[0].self_attn.rotary_emb.fused_apply:
-            position_embeddings = model.layers[0].self_attn.rotary_emb(h, position_ids)
+        paged = getattr(self, "paged_layers", None)
+        if paged is None:
+            if position_ids is not None and not model.layers[0].self_attn.rotary_emb.fused_apply:
+                position_embeddings = model.layers[0].self_attn.rotary_emb(h, position_ids)
 
-        for layer_idx, layer in enumerate(model.layers):
-            h = layer(h, mask, None, position_ids, position_embeddings)
-            if deepstack_visual_embeds is not None and layer_idx < len(deepstack_visual_embeds):
-                h = model._deepstack_process(h, visual_pos_masks, deepstack_visual_embeds[layer_idx])
+            for layer_idx, layer in enumerate(model.layers):
+                h = layer(h, mask, None, position_ids, position_embeddings)
+                if deepstack_visual_embeds is not None and layer_idx < len(
+                    deepstack_visual_embeds
+                ):
+                    h = model._deepstack_process(
+                        h, visual_pos_masks, deepstack_visual_embeds[layer_idx]
+                    )
+        else:
+            for layer_idx in range(paged.num_layers):
+                with paged.layer(layer_idx) as layer:
+                    if (
+                        layer_idx == 0
+                        and position_ids is not None
+                        and not layer.self_attn.rotary_emb.fused_apply
+                    ):
+                        position_embeddings = layer.self_attn.rotary_emb(h, position_ids)
+                        mx.eval(position_embeddings)
+                    h = layer(h, mask, None, position_ids, position_embeddings)
+                    if deepstack_visual_embeds is not None and layer_idx < len(
+                        deepstack_visual_embeds
+                    ):
+                        h = model._deepstack_process(
+                            h, visual_pos_masks, deepstack_visual_embeds[layer_idx]
+                        )
+                    # Complete the sequential state before the layer's mapped weights are retired.
+                    mx.eval(h)
         # No `model.norm(h)`: H3 conditions on the unnormalized state.
         return h
 
@@ -354,7 +451,9 @@ class MiniMaxH3TextEncoder:
 
         if vision_inputs is not None:
             if self.vision is None:
-                raise ValueError("This encoder was built with `load_vision=False`; it cannot take images.")
+                raise ValueError(
+                    "This encoder was built with `load_vision=False`; it cannot take images."
+                )
             pixel_values, grid_np = vision_inputs
             grid_thw = mx.array(grid_np.astype(np.int32))
             hidden, deepstack_embeds = self.vision(

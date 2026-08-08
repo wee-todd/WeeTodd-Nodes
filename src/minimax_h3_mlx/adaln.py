@@ -57,7 +57,7 @@ class ModulationCache:
         dit,
         timesteps: mx.array,
         dtype: mx.Dtype = mx.bfloat16,
-    ) -> "ModulationCache":
+    ) -> ModulationCache:
         """Precompute the modulation table for every block.
 
         Args:
@@ -70,10 +70,19 @@ class ModulationCache:
         mx.eval(temb)
 
         tables: list[tuple[mx.array, ...]] = []
-        for block in dit.blocks:
-            table = tuple(t.astype(dtype) for t in block.adaln_proj(temb))
-            mx.eval(table)
-            tables.append(table)
+        paged = getattr(dit, "paged_blocks", None)
+        if paged is None:
+            for block in dit.blocks:
+                table = tuple(t.astype(dtype) for t in block.adaln_proj(temb))
+                mx.eval(table)
+                tables.append(table)
+        else:
+            for start in range(0, paged.num_blocks, paged.window_size):
+                with paged.window(start) as blocks:
+                    for block in blocks:
+                        table = tuple(t.astype(dtype) for t in block.adaln_proj(temb))
+                        mx.eval(table)
+                        tables.append(table)
         return cls(tables, timesteps)
 
 

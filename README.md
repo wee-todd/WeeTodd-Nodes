@@ -34,6 +34,34 @@ Turbo with either BlockCache node requires the explicit experimental opt-in. Use
 schedule points for four transformer evaluations. Eight requested schedule points produce seven
 transformer evaluations.
 
+### Ready-to-run low-memory workflow
+
+Load [`examples/t2va_low_memory_paged_workflow.json`](examples/t2va_low_memory_paged_workflow.json)
+in ComfyUI after preparing both paged checkpoints. The matching API prompt is
+[`examples/t2va_low_memory_paged_api.json`](examples/t2va_low_memory_paged_api.json).
+
+Place the converted checkpoints at these portable paths below the ComfyUI model directory:
+
+```text
+models/
+└── MiniMax-H3/
+    ├── FL2VA/
+    ├── text_encoders/q8-paged/
+    └── transformers/q8_extended_paged/
+```
+
+The workflow is preconfigured for 640 by 384, five seconds, seed zero, five schedule points, and
+four transformer evaluations. It enables `low_memory_bf16`, automatic 512-row attention chunks,
+AdaLN release, paged Qwen, four-block transformer paging, staged unloading, and direct latent
+publication. The graph does not enable a cache or LoRA because those allocations increase the
+minimum memory requirement. The supplied prompt is the exact prompt used for the measured
+dual-paged smoke test.
+
+Run Component Preflight before generation. The preflight report must identify both paging formats
+and the selected q8-extended checkpoint. The graph uses the base video and audio VAE paths. Set the
+Component Loader's `video_vae` override to a validated affine-Q8 VAE when lower VAE residency is
+required.
+
 ## Current nodes
 
 - **WeeTodd H3 Component Loader** creates a lazy specification for the transformer, Qwen3-VL,
@@ -107,6 +135,62 @@ uses staged component unloading, tile-serial VAE decoding, explicit MLX material
 and chunked attention queries. `automatic` currently selects a 512-token query chunk. Manual 512,
 1024, and 2048-token choices are available for machine-specific tuning. Low-memory execution is
 intended to preserve the generation result; only scheduling and peak live allocations change.
+
+### Experimental paged transformer weights
+
+A block-aligned checkpoint can keep only the fixed transformer modules and four H3 blocks active
+at once. The sampler loads each window from safetensors, completes the hidden state, retires all
+window references, and clears the MLX cache before advancing. The normal resident loader remains
+the fallback and is unchanged.
+
+Convert a transformer into a separate destination directory. Conversion is atomic, validates page
+hashes by default, and never modifies the source checkpoint:
+
+```bash
+/path/to/ComfyUI/.venv/bin/python scripts/convert_paged_checkpoint.py \
+  /path/to/source/transformer \
+  /path/to/models/transformers/q8_extended_paged
+```
+
+Allow enough free disk space for a second copy of the transformer. Select the resulting directory
+as the transformer override in the Component Loader. The presence of `paged_manifest.json`
+activates direct paged loading automatically; generation metadata records the format, window size,
+page count, and largest materialized window.
+
+Paging preserves checkpoint precision and supports activation-space LoRAs, including the current
+Turbo adapter layout. Standard BlockCache is supported. Hierarchical BlockCache is rejected because
+its non-sequential jumps do not yet share page windows efficiently. The experimental MPP projection
+backend currently falls back to MLX for paged blocks. Tiny BF16 and affine-Q8 checkpoints, with and
+without a block LoRA, match the resident path bit-for-bit. The full smoke measurement below shows
+the memory and runtime trade; native-resolution and cold-storage results remain unmeasured.
+
+The text-only Qwen3-VL conditioner can use the same disk-backed policy with one decoder layer per
+window. The converter keeps the fixed token embeddings and the first 50 language layers. It omits
+the vision tower because T2VA does not execute it. Supply the full upstream Qwen architecture config
+so the converted directory remains standalone:
+
+```bash
+/path/to/ComfyUI/.venv/bin/python scripts/convert_paged_text_encoder.py \
+  /path/to/compact-q8-encoder \
+  /path/to/models/text_encoders/q8-paged \
+  --architecture-config /path/to/upstream/text_encoder/config.json
+```
+
+Select the converted directory as the Component Loader's text-encoder override. Continue to point
+the processor and tokenizer inputs at their asset directory. Paged Qwen is text-only; use the
+resident encoder when image conditioning needs its vision tower.
+
+On the measured Q8 encoder, fixed text tensors use 1.556 GB and one layer uses 518 MB. The displayed
+244-token H3 prompt reduced MLX peak allocation from 27.780 GB to 2.595 GB. Conditioning values and
+token tags were bit-identical, including an identical serialized safetensors SHA-256. Warm-cache
+encoding increased from 2.29 to 3.12 seconds; cold-storage behavior remains device-dependent.
+
+A clean 640 by 384 ComfyUI run combined paged Qwen, paged q8-extended H3, Turbo strength 1.0, five
+schedule points, no cache, low-memory BF16 staging, and direct Q8 VAE publication. Complete-process
+peak was 14.951 GB. The same graph with resident Qwen and only the transformer paged peaked at
+28.823 GB. The complete workflow took 150.4 seconds versus 152.3 seconds, and both final MP4 files
+were byte-identical. The paged transformer averaged 26.88 seconds for each of four evaluations and
+loaded 250 block pages, including the AdaLN-cache pass.
 
 ### Exact BF16 MPP projection backend
 
@@ -188,9 +272,7 @@ experimental and can produce over-sharp grain, plastic skin, softness, or audio 
 Clone into `ComfyUI/custom_nodes/WeeTodd-Nodes`, then use the same Python environment as ComfyUI:
 
 ```bash
-python .agents/skills/python-environment-preflight/scripts/preflight.py \
-  --project . --python python --require-architecture arm64
-python -m pip install -e .
+/path/to/ComfyUI/.venv/bin/python -m pip install -e .
 ```
 
 Run the project-local Python environment preflight before replacing a virtual environment or
@@ -255,6 +337,8 @@ with a complete-process peak.
 | BF16, 512-row attention chunks | 1280 by 768 | 61.36 GB | Saves 472 MB |
 | q8-extended plus Turbo, no cache | 1344 by 768 | 54.74 GB | Four evaluations |
 | q8-extended plus Turbo, hierarchical speed | 1344 by 768 | 58.48 GB | Four evaluations; 1.216 GB cache |
+| q8-extended paged plus Turbo, resident Qwen | 640 by 384 | 28.82 GB | Qwen remains the peak |
+| q8-extended and Qwen both paged, plus Turbo | 640 by 384 | 14.95 GB | Four evaluations; no cache |
 
 The canvas and prompt differ between the BF16 and q8 rows. Use each row as a measured capacity
 point, not as a controlled cross-precision comparison. The controlled transformer-only comparison
