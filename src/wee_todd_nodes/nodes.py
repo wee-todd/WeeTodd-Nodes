@@ -55,6 +55,16 @@ def _output_directory() -> Path:
         return Path.cwd() / "output"
 
 
+def _publication_environment(ffmpeg_path: str = "") -> dict[str, object]:
+    """Describe the output and encoder state seen by this ComfyUI process."""
+    from minimax_h3_mlx.media import ffmpeg_status
+
+    return {
+        "output_directory": str(_output_directory().resolve()),
+        "ffmpeg": ffmpeg_status(ffmpeg_path or None),
+    }
+
+
 def _safe_output_target(output_directory: Path, filename_prefix: str, seed: int) -> Path:
     """Resolve a user prefix below ComfyUI's output directory."""
     prefix = Path(filename_prefix.replace("\\", "/"))
@@ -130,26 +140,62 @@ def _resolve_component_root(checkpoint: str, component: str = "checkpoint") -> s
         return str(path)
 
 
-_H3_RESOLUTION_SHORT_EDGES = {
+_H3_RESOLUTION_MODES = ("ratio + size", "exact dimensions")
+_H3_RESOLUTION_PRESETS = {
+    "Use size slider — 32 px steps": 768,
+    "384 px short edge — fast smoke": 384,
+    "480 px short edge — fast preview": 480,
+    "512 px short edge — balanced preview": 512,
+    "576 px short edge — detailed preview": 576,
+    "640 px short edge — quality preview": 640,
+    "672 px short edge — quality preview+": 672,
+    "704 px short edge — high quality": 704,
+    "736 px short edge — near-native": 736,
+    "768 px short edge — native": 768,
+    "896 px short edge — high detail / high memory": 896,
+    "1024 px short edge — very high memory": 1024,
+    "1088 px short edge — maximum slider size": 1088,
+}
+_H3_LEGACY_RESOLUTION_PRESETS = {
+    "384P (fast mode)": 384,
     "384P (fast smoke)": 384,
     "512P (balanced)": 512,
     "640P (quality preview)": 640,
     "768P (native quality)": 768,
-    "2K (experimental, very high memory)": 1152,
+    "2K (experimental, very high memory)": 1088,
+}
+_H3_RESOLUTION_SHORT_EDGES = {
+    **_H3_RESOLUTION_PRESETS,
+    **_H3_LEGACY_RESOLUTION_PRESETS,
 }
 _H3_ASPECT_RATIOS = {
-    "21:9": (21, 9),
-    "16:9": (16, 9),
-    "5:3": (5, 3),
-    "3:2": (3, 2),
-    "4:3": (4, 3),
-    "1:1": (1, 1),
-    "3:4": (3, 4),
-    "2:3": (2, 3),
-    "3:5": (3, 5),
-    "9:16": (9, 16),
-    "9:21": (9, 21),
+    "21:9 — ultrawide landscape": (21, 9),
+    "16:9 — widescreen landscape": (16, 9),
+    "5:3 — wide landscape": (5, 3),
+    "3:2 — classic landscape": (3, 2),
+    "4:3 — standard landscape": (4, 3),
+    "5:4 — near-square landscape": (5, 4),
+    "1:1 — square": (1, 1),
+    "4:5 — near-square portrait": (4, 5),
+    "3:4 — standard portrait": (3, 4),
+    "2:3 — classic portrait": (2, 3),
+    "3:5 — tall portrait": (3, 5),
+    "9:16 — vertical portrait": (9, 16),
+    "9:21 — ultratall portrait": (9, 21),
 }
+_H3_LEGACY_ASPECT_RATIOS = {
+    label.split(" — ", 1)[0]: value for label, value in _H3_ASPECT_RATIOS.items()
+}
+
+
+def _h3_aspect_ratio_key(aspect_ratio: str) -> str:
+    return aspect_ratio.split(" — ", 1)[0]
+
+
+def _bounded_h3_canvas(width: int, height: int) -> tuple[int, int]:
+    if width > 1920 or height > 1920:
+        raise ValueError("Resolved H3 width and height must not exceed 1920 pixels.")
+    return width, height
 
 
 def _resolve_h3_resolution(
@@ -158,35 +204,42 @@ def _resolve_h3_resolution(
     aspect_ratio: str,
     custom_width: int,
     custom_height: int,
+    short_edge: int | None = None,
 ) -> tuple[int, int]:
-    """Resolve an intuitive tier and ratio selection to the H3 32-pixel grid."""
-    if mode == "custom":
-        return custom_width, custom_height
-    if mode != "preset":
-        raise ValueError("Resolution mode must be 'preset' or 'custom'.")
-    try:
-        short_edge = _H3_RESOLUTION_SHORT_EDGES[resolution_tier]
-    except KeyError as exc:
-        raise ValueError(f"Unknown H3 resolution tier: {resolution_tier!r}.") from exc
+    """Resolve ratio-and-size or exact dimensions to the H3 32-pixel grid."""
+    if mode in {"custom", "exact dimensions"}:
+        return _bounded_h3_canvas(custom_width, custom_height)
+    if mode not in {"preset", "ratio + size"}:
+        raise ValueError("Resolution mode must be 'ratio + size' or 'exact dimensions'.")
+    if short_edge is None:
+        try:
+            short_edge = _H3_RESOLUTION_SHORT_EDGES[resolution_tier]
+        except KeyError as exc:
+            raise ValueError(f"Unknown H3 resolution preset: {resolution_tier!r}.") from exc
+    if not 32 <= short_edge <= 1088 or short_edge % 32:
+        raise ValueError("H3 short edge must be 32 through 1088 in 32-pixel steps.")
     try:
         ratio_width, ratio_height = _H3_ASPECT_RATIOS[aspect_ratio]
     except KeyError as exc:
-        raise ValueError(f"Unknown H3 aspect ratio: {aspect_ratio!r}.") from exc
-    if aspect_ratio == "16:9":
-        if short_edge == 1152:
-            return 2048, 1152
-        return short_edge * 7 // 4, short_edge
-    if aspect_ratio == "9:16":
-        if short_edge == 1152:
-            return 1152, 2048
-        return short_edge, short_edge * 7 // 4
+        try:
+            ratio_width, ratio_height = _H3_LEGACY_ASPECT_RATIOS[aspect_ratio]
+        except KeyError:
+            raise ValueError(f"Unknown H3 aspect ratio: {aspect_ratio!r}.") from exc
+    ratio_key = _h3_aspect_ratio_key(aspect_ratio)
+    # Preserve the established 1344x768 and 1120x640 H3 widescreen canvases. Values
+    # between named presets are snapped again because a 32-pixel short-edge increment can
+    # otherwise produce a long edge that falls between grid points.
+    if ratio_key in {"16:9", "9:16"}:
+        long_edge = round(short_edge * 7 / 4 / 32) * 32
+        canvas = (long_edge, short_edge) if ratio_key == "16:9" else (short_edge, long_edge)
+        return _bounded_h3_canvas(*canvas)
     if ratio_width >= ratio_height:
         height = short_edge
         width = round(short_edge * ratio_width / ratio_height / 32) * 32
     else:
         width = short_edge
         height = round(short_edge * ratio_height / ratio_width / 32) * 32
-    return width, height
+    return _bounded_h3_canvas(width, height)
 
 
 class WeeToddH3ComponentLoader:
@@ -296,7 +349,20 @@ class WeeToddH3Preflight:
                     "FLOAT",
                     {"default": 0.0, "min": 0.0, "max": 1024.0, "step": 0.25},
                 ),
-            }
+            },
+            "optional": {
+                "ffmpeg_path": (
+                    "STRING",
+                    {
+                        "default": "",
+                        "advanced": True,
+                        "tooltip": (
+                            "Optional executable override. Leave empty to use WEETODD_FFMPEG, "
+                            "the ComfyUI process PATH, or a compatible packaged encoder."
+                        ),
+                    },
+                )
+            },
         }
 
     RETURN_TYPES = ("WEETODD_H3_COMPONENTS", "STRING")
@@ -314,6 +380,7 @@ class WeeToddH3Preflight:
         config,
         prompt_tokens,
         available_memory_gb,
+        ffmpeg_path="",
     ):
         config.validate()
         report = preflight_components(
@@ -327,7 +394,9 @@ class WeeToddH3Preflight:
                 available_memory_gb=available_memory_gb,
             ),
         )
-        return components, report.to_json()
+        payload = report.to_dict()
+        payload["publication"] = _publication_environment(ffmpeg_path)
+        return components, json.dumps(payload, indent=2, sort_keys=True)
 
 
 class WeeToddH3TextEncode:
@@ -457,7 +526,12 @@ class WeeToddH3Sample:
             import comfy.model_management
             import comfy.utils
 
-            progress = comfy.utils.ProgressBar(config.steps - 1)
+            progress_steps = config.steps - 1
+            if trajectory_forecast is not None and getattr(
+                trajectory_forecast, "offline_smoothing_replay", False
+            ):
+                progress_steps *= 2
+            progress = comfy.utils.ProgressBar(progress_steps)
             check_interrupted = comfy.model_management.throw_exception_if_processing_interrupted
         except ImportError:
             pass
@@ -496,25 +570,28 @@ class WeeToddH3Sample:
                 latents, "blockcache_resolved_threshold", None
             ),
             "blockcache_cache_bytes": getattr(latents, "blockcache_cache_bytes", 0),
-            "blockcache_segment_hits": list(
-                getattr(latents, "blockcache_segment_hits", ())
-            ),
+            "blockcache_segment_hits": list(getattr(latents, "blockcache_segment_hits", ())),
             "blockcache_segment_thresholds": list(
                 getattr(latents, "blockcache_segment_thresholds", ())
             ),
-            "blockcache_executed_blocks": getattr(
-                latents, "blockcache_executed_blocks", 0
-            ),
-            "blockcache_skipped_blocks": getattr(
-                latents, "blockcache_skipped_blocks", 0
-            ),
+            "blockcache_executed_blocks": getattr(latents, "blockcache_executed_blocks", 0),
+            "blockcache_skipped_blocks": getattr(latents, "blockcache_skipped_blocks", 0),
             "blockcache": asdict(blockcache) if blockcache is not None else None,
             "trajectory_forecasts": getattr(latents, "trajectory_forecasts", 0),
-            "trajectory_bootstrap_forecasts": getattr(
-                latents, "trajectory_bootstrap_forecasts", 0
-            ),
+            "trajectory_bootstrap_forecasts": getattr(latents, "trajectory_bootstrap_forecasts", 0),
             "trajectory_fallbacks": getattr(latents, "trajectory_fallbacks", 0),
             "trajectory_history_bytes": getattr(latents, "trajectory_history_bytes", 0),
+            "trajectory_offline_replay": getattr(latents, "trajectory_offline_replay", False),
+            "trajectory_replay_steps": getattr(latents, "trajectory_replay_steps", 0),
+            "trajectory_replay_anchor_steps": getattr(latents, "trajectory_replay_anchor_steps", 0),
+            "trajectory_replay_smoothed_steps": getattr(
+                latents, "trajectory_replay_smoothed_steps", 0
+            ),
+            "trajectory_capture_seconds": getattr(latents, "trajectory_capture_seconds", 0.0),
+            "trajectory_replay_seconds": getattr(latents, "trajectory_replay_seconds", 0.0),
+            "trajectory_replay_fallback_reason": getattr(
+                latents, "trajectory_replay_fallback_reason", None
+            ),
             "trajectory_forecast": (
                 asdict(trajectory_forecast) if trajectory_forecast is not None else None
             ),
@@ -527,9 +604,7 @@ class WeeToddH3Sample:
             "attention_query_chunk_size": config.attention_query_chunk_size,
             "compute_dtype": "bfloat16",
             "projection_backend": getattr(latents, "projection_backend_report", None),
-            "projection_backend_runtime": getattr(
-                latents, "projection_backend_runtime", None
-            ),
+            "projection_backend_runtime": getattr(latents, "projection_backend_runtime", None),
             "paged_weights": {
                 "transformer": getattr(latents, "paging_report", None),
                 "text_encoder": getattr(latents, "text_encoder_paging_report", None),
@@ -710,7 +785,44 @@ class WeeToddH3TrajectoryForecast:
                             "It changes output and does not increase the total forecast budget."
                         ),
                     },
-                )
+                ),
+                "offline_smoothing_replay": (
+                    "BOOLEAN",
+                    {
+                        "default": False,
+                        "tooltip": (
+                            "Run a transformer-free second pass from archived actual anchors. "
+                            "This can protect audio from later joint-transformer forecast error "
+                            "but uses more memory."
+                        ),
+                    },
+                ),
+                "offline_video_blend": (
+                    "FLOAT",
+                    {
+                        "default": 0.5,
+                        "min": 0.0,
+                        "max": 1.0,
+                        "step": 0.05,
+                        "tooltip": (
+                            "Blend global affine smoothing into local video interpolation during "
+                            "offline replay."
+                        ),
+                    },
+                ),
+                "offline_audio_blend": (
+                    "FLOAT",
+                    {
+                        "default": 0.0,
+                        "min": 0.0,
+                        "max": 1.0,
+                        "step": 0.05,
+                        "tooltip": (
+                            "Blend global affine smoothing into local audio interpolation during "
+                            "offline replay. Keep zero for the audio-isolation default."
+                        ),
+                    },
+                ),
             },
         }
 
@@ -733,6 +845,9 @@ class WeeToddH3TrajectoryForecast:
         max_forecast_fraction,
         max_delta_ratio,
         bootstrap_first_forecast=False,
+        offline_smoothing_replay=False,
+        offline_video_blend=0.5,
+        offline_audio_blend=0.0,
     ):
         from minimax_h3_mlx.trajectory_forecast import H3TrajectoryForecastConfig
 
@@ -745,6 +860,9 @@ class WeeToddH3TrajectoryForecast:
             max_forecast_fraction=max_forecast_fraction,
             max_delta_ratio=max_delta_ratio,
             bootstrap_first_forecast=bootstrap_first_forecast,
+            offline_smoothing_replay=offline_smoothing_replay,
+            offline_video_blend=offline_video_blend,
+            offline_audio_blend=offline_audio_blend,
         )
         config.validate()
         return (config,)
@@ -1080,6 +1198,14 @@ class WeeToddH3PublishVideoAudio:
                     {"default": "{}", "multiline": True},
                 ),
                 "sampling_info": ("STRING", {"default": ""}),
+                "ffmpeg_path": (
+                    "STRING",
+                    {
+                        "default": "",
+                        "advanced": True,
+                        "tooltip": "Optional ffmpeg executable override for this publication.",
+                    },
+                ),
             },
         }
 
@@ -1104,6 +1230,7 @@ class WeeToddH3PublishVideoAudio:
         max_av_drift_seconds,
         generation_metadata="{}",
         sampling_info="",
+        ffmpeg_path="",
     ):
         config.validate()
         if not isinstance(audio, dict) or "waveform" not in audio or "sample_rate" not in audio:
@@ -1178,6 +1305,7 @@ class WeeToddH3PublishVideoAudio:
             mlx_version = version("mlx")
         except PackageNotFoundError:
             mlx_version = "uninstalled"
+        publication = _publication_environment(ffmpeg_path)
         metadata = {
             **supplied_metadata,
             "generation": asdict(config),
@@ -1194,8 +1322,10 @@ class WeeToddH3PublishVideoAudio:
                 "mlx": mlx_version,
                 "weetodd_nodes": package_version,
             },
+            "publication": publication,
         }
-        target = _safe_output_target(_output_directory(), filename_prefix, config.seed)
+        output_root = Path(publication["output_directory"])
+        target = _safe_output_target(output_root, filename_prefix, config.seed)
         result = publish_synchronized_media(
             target,
             video,
@@ -1206,9 +1336,9 @@ class WeeToddH3PublishVideoAudio:
             max_av_drift_seconds=max_av_drift_seconds,
             generation_metadata=json.dumps(metadata),
             check_interrupted=check_interrupted,
+            ffmpeg_path=ffmpeg_path or None,
         )
         info = json.dumps(result.metadata, indent=2, sort_keys=True)
-        output_root = _output_directory().resolve()
         relative = result.video_path.resolve().relative_to(output_root)
         preview = {
             "filename": relative.name,
@@ -1242,6 +1372,14 @@ class WeeToddH3DirectPublishLatents:
                     {"default": "{}", "multiline": True},
                 ),
                 "sampling_info": ("STRING", {"default": ""}),
+                "ffmpeg_path": (
+                    "STRING",
+                    {
+                        "default": "",
+                        "advanced": True,
+                        "tooltip": "Optional ffmpeg executable override for this publication.",
+                    },
+                ),
             },
         }
 
@@ -1264,6 +1402,7 @@ class WeeToddH3DirectPublishLatents:
         max_av_drift_seconds,
         generation_metadata="{}",
         sampling_info="",
+        ffmpeg_path="",
     ):
         config = latents.generation_config
         config.validate()
@@ -1288,6 +1427,7 @@ class WeeToddH3DirectPublishLatents:
             mlx_version = version("mlx")
         except PackageNotFoundError:
             mlx_version = "uninstalled"
+        publication = _publication_environment(ffmpeg_path)
         metadata = {
             **supplied_metadata,
             "generation": asdict(config),
@@ -1304,6 +1444,7 @@ class WeeToddH3DirectPublishLatents:
                 "mlx": mlx_version,
                 "weetodd_nodes": package_version,
             },
+            "publication": publication,
         }
         check_interrupted = None
         try:
@@ -1324,7 +1465,8 @@ class WeeToddH3DirectPublishLatents:
             nonlocal audio_releases
             audio_releases = prepare_low_memory_stage("audio_vae", config.memory_mode)
 
-        target = _safe_output_target(_output_directory(), filename_prefix, config.seed)
+        output_root = Path(publication["output_directory"])
+        target = _safe_output_target(output_root, filename_prefix, config.seed)
         result = publish_latents_direct(
             target,
             components,
@@ -1341,9 +1483,9 @@ class WeeToddH3DirectPublishLatents:
                     "audio": list(audio_releases),
                 }
             },
+            ffmpeg_path=ffmpeg_path or None,
         )
         info = json.dumps(result.metadata, indent=2, sort_keys=True)
-        output_root = _output_directory().resolve()
         relative = result.video_path.resolve().relative_to(output_root)
         preview = {
             "filename": relative.name,
@@ -1389,19 +1531,29 @@ class WeeToddH3GenerationConfig:
                 ),
                 "steps": ("INT", {"default": 16, "min": 2, "max": 100}),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xFFFFFFFFFFFFFFFF}),
-                "resolution_mode": (["preset", "custom"], {"default": "preset"}),
+                "resolution_mode": (
+                    [*_H3_RESOLUTION_MODES, "preset", "custom"],
+                    {"default": "ratio + size"},
+                ),
                 "resolution_tier": (
                     list(_H3_RESOLUTION_SHORT_EDGES),
-                    {"default": "768P (native quality)"},
+                    {"default": "768 px short edge — native"},
                 ),
-                "aspect_ratio": (list(_H3_ASPECT_RATIOS), {"default": "16:9"}),
+                "aspect_ratio": (
+                    [
+                        *_H3_ASPECT_RATIOS,
+                        "custom — exact dimensions",
+                        *_H3_LEGACY_ASPECT_RATIOS,
+                    ],
+                    {"default": "16:9 — widescreen landscape"},
+                ),
                 "custom_width": (
                     "INT",
-                    {"default": 1344, "min": 32, "max": 4096, "step": 32, "advanced": True},
+                    {"default": 1344, "min": 32, "max": 1920, "step": 32, "advanced": True},
                 ),
                 "custom_height": (
                     "INT",
-                    {"default": 768, "min": 32, "max": 4096, "step": 32, "advanced": True},
+                    {"default": 768, "min": 32, "max": 1920, "step": 32, "advanced": True},
                 ),
                 "drop_adaln": ("BOOLEAN", {"default": True}),
                 "memory_mode": (
@@ -1430,7 +1582,23 @@ class WeeToddH3GenerationConfig:
                         ),
                     },
                 ),
-            }
+            },
+            "optional": {
+                "short_edge": (
+                    "INT",
+                    {
+                        "default": 768,
+                        "min": 32,
+                        "max": 1088,
+                        "step": 32,
+                        "display": "slider",
+                        "tooltip": (
+                            "Move in 32-pixel steps. The selected aspect ratio resolves the "
+                            "compatible width and height live in the ComfyUI node."
+                        ),
+                    },
+                )
+            },
         }
 
     RETURN_TYPES = ("WEETODD_H3_CONFIG", "STRING")
@@ -1439,8 +1607,8 @@ class WeeToddH3GenerationConfig:
     CATEGORY = "WeeTodd/H3"
 
     DESCRIPTION = (
-        "Choose an H3 quality tier and aspect ratio, or use exact custom dimensions. "
-        "The node resolves the canvas to the required 32-pixel grid."
+        "Choose a clearly labeled aspect ratio and move the short-edge size slider, or use exact "
+        "dimensions. The live canvas remains on H3's required 32-pixel grid."
     )
 
     def configure(
@@ -1457,6 +1625,7 @@ class WeeToddH3GenerationConfig:
         memory_mode="normal",
         attention_chunk_size="automatic",
         projection_backend="mlx",
+        short_edge=None,
     ):
         width, height = _resolve_h3_resolution(
             resolution_mode,
@@ -1464,7 +1633,11 @@ class WeeToddH3GenerationConfig:
             aspect_ratio,
             custom_width,
             custom_height,
+            short_edge,
         )
+        ratio_mode = resolution_mode in {"preset", "ratio + size"}
+        normalized_ratio = _h3_aspect_ratio_key(aspect_ratio) if ratio_mode else "custom"
+        normalized_mode = "ratio + size" if ratio_mode else "exact dimensions"
         config = H3GenerationConfig(
             duration_seconds=duration_seconds,
             steps=steps,
@@ -1472,15 +1645,21 @@ class WeeToddH3GenerationConfig:
             width=width,
             height=height,
             drop_adaln=drop_adaln,
-            resolution_mode=resolution_mode,
-            resolution_tier=resolution_tier if resolution_mode == "preset" else "custom",
-            aspect_ratio=aspect_ratio if resolution_mode == "preset" else "custom",
+            resolution_mode=normalized_mode,
+            resolution_tier=resolution_tier if ratio_mode else "custom",
+            aspect_ratio=normalized_ratio,
             memory_mode=memory_mode,
             attention_chunk_size=attention_chunk_size,
             projection_backend=projection_backend,
         )
         config.validate()
-        return config, f"{width} x {height} pixels"
+        if ratio_mode:
+            short_edge_label = f"{min(width, height)} px short edge"
+            return (
+                config,
+                f"{width} × {height} pixels — {normalized_ratio} — {short_edge_label}",
+            )
+        return config, f"{width} × {height} pixels — custom"
 
 
 class WeeToddH3Generate:

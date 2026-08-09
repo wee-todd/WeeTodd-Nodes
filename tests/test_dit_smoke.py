@@ -8,6 +8,7 @@ from pathlib import Path
 
 import mlx.core as mx
 import numpy as np
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -281,6 +282,177 @@ def test_h3_trajectory_bootstrap_runs_current_heads_on_second_step():
     assert result.transformer_evaluations == 3
     assert result.video_latents.shape == (1, cfg.latents_dim, 37, 2, 2)
     assert result.audio_latents.shape == (2, cfg.audio_latents_dim, 207)
+
+
+def test_h3_offline_replay_restarts_and_runs_heads_without_transformer_blocks():
+    cfg = tiny_config()
+    mx.random.seed(9)
+    progress = []
+    result = MiniMaxH3Pipeline(MiniMaxH3DiT(cfg), None, None, None).sample_latents(
+        mx.random.normal((1, 3, cfg.text_dim)),
+        np.full((3,), TAG_TEXT, dtype=np.int32),
+        duration_seconds=5.0,
+        num_inference_steps=5,
+        height=32,
+        width=32,
+        drop_adaln=False,
+        verbose=False,
+        step_callback=lambda completed, total: progress.append((completed, total)),
+        trajectory_forecast_config=H3TrajectoryForecastConfig(
+            mode="automatic_balanced",
+            offline_smoothing_replay=True,
+        ),
+    )
+
+    assert result.transformer_evaluations == 3
+    assert result.trajectory_forecasts == 1
+    assert result.trajectory_offline_replay is True
+    assert result.trajectory_replay_steps == 4
+    assert result.trajectory_replay_anchor_steps == 3
+    assert result.trajectory_replay_smoothed_steps == 1
+    assert result.trajectory_history_bytes > 0
+    assert result.trajectory_capture_seconds > 0
+    assert result.trajectory_replay_seconds > 0
+    assert result.trajectory_replay_fallback_reason is None
+    assert progress == [(index, 8) for index in range(9)]
+    assert bool(mx.all(mx.isfinite(result.video_latents)).item())
+    assert bool(mx.all(mx.isfinite(result.audio_latents)).item())
+
+
+def test_h3_offline_replay_releases_archive_when_cancelled(monkeypatch):
+    import minimax_h3_mlx.trajectory_forecast as trajectory_module
+
+    original = trajectory_module.H3TrajectoryForecastState
+
+    class TrackingState(original):
+        instances = []
+
+        def __init__(self, config):
+            super().__init__(config)
+            self.instances.append(self)
+
+    monkeypatch.setattr(trajectory_module, "H3TrajectoryForecastState", TrackingState)
+    cfg = tiny_config()
+    mx.random.seed(9)
+
+    def cancel_during_replay(completed, _total):
+        if completed == 5:
+            raise RuntimeError("synthetic cancellation")
+
+    with pytest.raises(RuntimeError, match="synthetic cancellation"):
+        MiniMaxH3Pipeline(MiniMaxH3DiT(cfg), None, None, None).sample_latents(
+            mx.random.normal((1, 3, cfg.text_dim)),
+            np.full((3,), TAG_TEXT, dtype=np.int32),
+            duration_seconds=5.0,
+            num_inference_steps=5,
+            height=32,
+            width=32,
+            drop_adaln=False,
+            verbose=False,
+            step_callback=cancel_during_replay,
+            trajectory_forecast_config=H3TrajectoryForecastConfig(
+                mode="automatic_balanced",
+                offline_smoothing_replay=True,
+            ),
+        )
+
+    assert len(TrackingState.instances) == 1
+    assert TrackingState.instances[0].archive_bytes == 0
+    assert TrackingState.instances[0]._history == []
+
+
+def test_h3_offline_replay_failure_returns_valid_capture_result(monkeypatch):
+    import minimax_h3_mlx.trajectory_forecast as trajectory_module
+
+    original = trajectory_module.H3TrajectoryForecastState
+
+    class FailingReplayState(original):
+        def _replay_prediction(self, coordinate, index, total_steps):
+            if index == 2:
+                raise trajectory_module.H3OfflineReplayError("synthetic replay failure")
+            return super()._replay_prediction(coordinate, index, total_steps)
+
+    monkeypatch.setattr(trajectory_module, "H3TrajectoryForecastState", FailingReplayState)
+    cfg = tiny_config()
+    mx.random.seed(12)
+    failed_replay = MiniMaxH3Pipeline(MiniMaxH3DiT(cfg), None, None, None).sample_latents(
+        mx.random.normal((1, 3, cfg.text_dim)),
+        np.full((3,), TAG_TEXT, dtype=np.int32),
+        duration_seconds=5.0,
+        num_inference_steps=5,
+        height=32,
+        width=32,
+        drop_adaln=False,
+        verbose=False,
+        trajectory_forecast_config=H3TrajectoryForecastConfig(
+            mode="automatic_balanced",
+            offline_smoothing_replay=True,
+        ),
+    )
+
+    monkeypatch.setattr(trajectory_module, "H3TrajectoryForecastState", original)
+    mx.random.seed(12)
+    capture_control = MiniMaxH3Pipeline(MiniMaxH3DiT(cfg), None, None, None).sample_latents(
+        mx.random.normal((1, 3, cfg.text_dim)),
+        np.full((3,), TAG_TEXT, dtype=np.int32),
+        duration_seconds=5.0,
+        num_inference_steps=5,
+        height=32,
+        width=32,
+        drop_adaln=False,
+        verbose=False,
+        trajectory_forecast_config=H3TrajectoryForecastConfig(
+            mode="manual",
+            forecast_strength=0.0,
+            warmup_steps=2,
+            tail_actual_steps=1,
+            max_forecast_fraction=0.5,
+            max_delta_ratio=100.0,
+        ),
+    )
+
+    assert failed_replay.trajectory_replay_fallback_reason == "synthetic replay failure"
+    assert failed_replay.trajectory_fallbacks == 1
+    assert mx.array_equal(failed_replay.video_latents, capture_control.video_latents)
+    assert mx.array_equal(failed_replay.audio_latents, capture_control.audio_latents)
+
+
+def test_h3_offline_anchor_only_replay_matches_dense_sampling_exactly():
+    cfg = tiny_config()
+    mx.random.seed(21)
+    replayed = MiniMaxH3Pipeline(MiniMaxH3DiT(cfg), None, None, None).sample_latents(
+        mx.random.normal((1, 3, cfg.text_dim)),
+        np.full((3,), TAG_TEXT, dtype=np.int32),
+        duration_seconds=5.0,
+        num_inference_steps=5,
+        height=32,
+        width=32,
+        drop_adaln=False,
+        verbose=False,
+        trajectory_forecast_config=H3TrajectoryForecastConfig(
+            mode="manual",
+            max_forecast_fraction=0.0,
+            offline_smoothing_replay=True,
+        ),
+    )
+
+    mx.random.seed(21)
+    dense = MiniMaxH3Pipeline(MiniMaxH3DiT(cfg), None, None, None).sample_latents(
+        mx.random.normal((1, 3, cfg.text_dim)),
+        np.full((3,), TAG_TEXT, dtype=np.int32),
+        duration_seconds=5.0,
+        num_inference_steps=5,
+        height=32,
+        width=32,
+        drop_adaln=False,
+        verbose=False,
+    )
+
+    assert replayed.trajectory_forecasts == 0
+    assert replayed.trajectory_replay_anchor_steps == 4
+    assert replayed.trajectory_replay_smoothed_steps == 0
+    assert mx.array_equal(replayed.video_latents, dense.video_latents)
+    assert mx.array_equal(replayed.audio_latents, dense.audio_latents)
 
 
 def test_h3_easycache_conservative_auto_calibrates_and_caps_short_schedule():

@@ -64,6 +64,28 @@ def test_publication_uses_next_available_filename(tmp_path):
     assert result.video_path.name == "H3_42_00001.mp4"
 
 
+def test_publication_passes_explicit_ffmpeg_to_default_writer(monkeypatch, tmp_path):
+    video, audio = _media()
+    calls = {}
+
+    def save_mp4(path, video, fps, audio, sample_rate, crf, ffmpeg_path=None):
+        calls["ffmpeg_path"] = ffmpeg_path
+        Path(path).write_bytes(b"synthetic mp4")
+        Path(path).with_suffix(".wav").write_bytes(b"temporary wav")
+        return Path(path)
+
+    monkeypatch.setattr("minimax_h3_mlx.media.save_mp4", save_mp4)
+
+    publish_synchronized_media(
+        tmp_path / "explicit.mp4",
+        video,
+        audio,
+        ffmpeg_path="/portable/ffmpeg",
+    )
+
+    assert calls["ffmpeg_path"] == "/portable/ffmpeg"
+
+
 def test_publication_rejects_timing_before_writer(tmp_path):
     video, audio = _media()
     called = False
@@ -73,9 +95,7 @@ def test_publication_rejects_timing_before_writer(tmp_path):
         called = True
 
     with pytest.raises(ValueError, match="durations differ"):
-        publish_synchronized_media(
-            tmp_path / "bad.mp4", video, audio[:, :32000], writer=writer
-        )
+        publish_synchronized_media(tmp_path / "bad.mp4", video, audio[:, :32000], writer=writer)
 
     assert called is False
     assert not tmp_path.joinpath("bad.mp4").exists()

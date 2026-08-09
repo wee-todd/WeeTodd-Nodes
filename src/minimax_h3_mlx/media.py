@@ -8,12 +8,83 @@ sequence.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import wave
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+
+
+@dataclass(frozen=True)
+class FFmpegExecutable:
+    """Resolved ffmpeg executable and the portable mechanism that selected it."""
+
+    path: Path
+    source: str
+
+    def to_dict(self) -> dict[str, str]:
+        return {"path": str(self.path), "source": self.source}
+
+
+def _executable_path(value: str, search_path: str | None = None) -> Path | None:
+    candidate = Path(value).expanduser()
+    if candidate.parent != Path(".") or candidate.is_absolute():
+        resolved = candidate.resolve()
+        return resolved if resolved.is_file() and os.access(resolved, os.X_OK) else None
+    located = shutil.which(value, path=search_path)
+    return Path(located).resolve() if located else None
+
+
+def resolve_ffmpeg(
+    explicit_path: str | Path | None = None,
+    *,
+    environ: dict[str, str] | None = None,
+) -> FFmpegExecutable:
+    """Find ffmpeg without assuming that ComfyUI inherited an interactive shell PATH."""
+    environment = os.environ if environ is None else environ
+    configured = []
+    if explicit_path is not None and str(explicit_path).strip():
+        configured.append(("node override", str(explicit_path).strip()))
+    for variable in ("WEETODD_FFMPEG", "FFMPEG_BINARY", "IMAGEIO_FFMPEG_EXE"):
+        value = environment.get(variable, "").strip()
+        if value:
+            configured.append((f"environment variable {variable}", value))
+
+    for source, value in configured:
+        resolved = _executable_path(value, environment.get("PATH"))
+        if resolved is None:
+            raise RuntimeError(f"The {source} does not name an executable ffmpeg file.")
+        return FFmpegExecutable(resolved, source)
+
+    located = shutil.which("ffmpeg", path=environment.get("PATH"))
+    if located:
+        return FFmpegExecutable(Path(located).resolve(), "process PATH")
+
+    try:
+        import imageio_ffmpeg
+
+        packaged = _executable_path(imageio_ffmpeg.get_ffmpeg_exe())
+        if packaged is not None:
+            return FFmpegExecutable(packaged, "imageio-ffmpeg package")
+    except (ImportError, RuntimeError, OSError):
+        pass
+
+    raise RuntimeError(
+        "ffmpeg is unavailable to the ComfyUI Python process. Set the node's ffmpeg_path, "
+        "set WEETODD_FFMPEG, or install ffmpeg on the process PATH."
+    )
+
+
+def ffmpeg_status(explicit_path: str | Path | None = None) -> dict[str, str | bool]:
+    """Return safe preflight information without exposing the process PATH."""
+    try:
+        executable = resolve_ffmpeg(explicit_path)
+    except RuntimeError as exc:
+        return {"available": False, "error": str(exc)}
+    return {"available": True, **executable.to_dict()}
 
 
 def save_wav(path: str | Path, audio: np.ndarray, sample_rate: int) -> Path:
@@ -41,6 +112,7 @@ def save_mp4(
     sample_rate: int = 32000,
     crf: int = 18,
     audio_tempo: float = 1.0,
+    ffmpeg_path: str | Path | None = None,
 ) -> Path:
     """Encode ``(frames, height, width, 3)`` uint8 video, muxing audio when given.
 
@@ -49,11 +121,10 @@ def save_mp4(
     would drop it an octave — but it is a time-stretch artefact, not a model output, and long
     stretches audibly smear transients.
 
-    Raises if ``ffmpeg`` is not on PATH; use :func:`save_frames` in that case.
+    Resolves an explicit override, environment configuration, process PATH, or an optional
+    imageio-ffmpeg installation. Use :func:`save_frames` when no encoder is available.
     """
-    ffmpeg = shutil.which("ffmpeg")
-    if ffmpeg is None:
-        raise RuntimeError("ffmpeg not found on PATH; use save_frames() instead.")
+    ffmpeg = str(resolve_ffmpeg(ffmpeg_path).path)
 
     path = Path(path)
     video = np.ascontiguousarray(video, dtype=np.uint8)
@@ -65,9 +136,20 @@ def save_mp4(
         save_wav(audio_path, audio, sample_rate)
 
     cmd = [
-        ffmpeg, "-y", "-loglevel", "error",
-        "-f", "rawvideo", "-pix_fmt", "rgb24",
-        "-s", f"{width}x{height}", "-r", str(fps), "-i", "pipe:0",
+        ffmpeg,
+        "-y",
+        "-loglevel",
+        "error",
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "rgb24",
+        "-s",
+        f"{width}x{height}",
+        "-r",
+        str(fps),
+        "-i",
+        "pipe:0",
     ]
     if audio_path is not None:
         cmd += ["-i", str(audio_path)]

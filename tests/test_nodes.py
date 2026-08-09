@@ -10,6 +10,8 @@ from wee_todd_nodes.nodes import (
     WeeToddH3GenerationConfig,
     WeeToddH3QuantizedTransformerLoader,
     WeeToddH3TrajectoryForecast,
+    _output_directory,
+    _publication_environment,
     _resolve_h3_resolution,
     _safe_output_target,
 )
@@ -100,9 +102,37 @@ def test_trajectory_forecast_node_exposes_opt_in_bootstrap():
     )
 
     assert config.bootstrap_first_forecast is True
-    assert WeeToddH3TrajectoryForecast.INPUT_TYPES()["optional"][
-        "bootstrap_first_forecast"
-    ][1]["default"] is False
+    assert (
+        WeeToddH3TrajectoryForecast.INPUT_TYPES()["optional"]["bootstrap_first_forecast"][1][
+            "default"
+        ]
+        is False
+    )
+
+
+def test_trajectory_forecast_node_exposes_opt_in_offline_audio_isolation():
+    (config,) = WeeToddH3TrajectoryForecast().configure(
+        "automatic_balanced",
+        0.75,
+        2,
+        1,
+        2,
+        0.35,
+        1.75,
+        False,
+        True,
+        0.5,
+        0.0,
+    )
+
+    assert config.offline_smoothing_replay is True
+    assert config.offline_video_blend == 0.5
+    assert config.offline_audio_blend == 0.0
+    optional = WeeToddH3TrajectoryForecast.INPUT_TYPES()["optional"]
+    assert list(optional).index("bootstrap_first_forecast") < list(optional).index(
+        "offline_smoothing_replay"
+    )
+    assert optional["offline_smoothing_replay"][1]["default"] is False
 
 
 def test_component_loader_returns_lazy_immutable_spec():
@@ -123,9 +153,7 @@ def test_component_loader_resolves_relative_root_below_comfy_models(monkeypatch,
     )
 
     assert spec.checkpoint == str(tmp_path / "MiniMax-H3" / "FL2VA")
-    assert spec.transformer == str(
-        tmp_path / "MiniMax-H3" / "transformers" / "q8_extended_paged"
-    )
+    assert spec.transformer == str(tmp_path / "MiniMax-H3" / "transformers" / "q8_extended_paged")
     assert spec.text_encoder == str(tmp_path / "MiniMax-H3" / "text_encoders" / "q8-paged")
 
 
@@ -172,6 +200,25 @@ def test_component_loader_rejects_relative_parent_traversal():
         WeeToddH3ComponentLoader().specify("../outside", "t2va")
 
 
+def test_publication_environment_uses_registered_comfy_output_root(monkeypatch, tmp_path):
+    shared_output = tmp_path / "shared_output"
+    monkeypatch.setitem(
+        sys.modules,
+        "folder_paths",
+        SimpleNamespace(get_output_directory=lambda: str(shared_output)),
+    )
+    monkeypatch.setattr(
+        "minimax_h3_mlx.media.ffmpeg_status",
+        lambda path=None: {"available": True, "path": "/portable/ffmpeg", "source": "test"},
+    )
+
+    assert _output_directory() == shared_output
+    assert _publication_environment() == {
+        "output_directory": str(shared_output.resolve()),
+        "ffmpeg": {"available": True, "path": "/portable/ffmpeg", "source": "test"},
+    }
+
+
 def test_quantized_loader_selects_validated_named_profile(tmp_path):
     from minimax_h3_mlx.mixed_checkpoint import (
         MIXED_CHECKPOINT_FORMAT,
@@ -215,14 +262,15 @@ def test_generation_config_node_returns_validated_value():
         5.0,
         8,
         42,
-        "preset",
-        "768P (native quality)",
-        "16:9",
+        "ratio + size",
+        "768 px short edge — native",
+        "16:9 — widescreen landscape",
         1344,
         768,
         True,
         "low_memory_bf16",
         "1024",
+        short_edge=768,
     )
     assert config.seed == 42
     assert config.drop_adaln is True
@@ -231,25 +279,112 @@ def test_generation_config_node_returns_validated_value():
     assert config.memory_mode == "low_memory_bf16"
     assert config.attention_query_chunk_size == 1024
     assert config.projection_backend == "mlx"
-    assert resolved == "1344 x 768 pixels"
+    assert resolved == "1344 × 768 pixels — 16:9 — 768 px short edge"
+
+
+def test_generation_config_exposes_clear_ratio_size_controls():
+    inputs = WeeToddH3GenerationConfig.INPUT_TYPES()
+
+    assert inputs["required"]["resolution_mode"][0][:2] == [
+        "ratio + size",
+        "exact dimensions",
+    ]
+    assert "16:9 — widescreen landscape" in inputs["required"]["aspect_ratio"][0]
+    assert "1:1 — square" in inputs["required"]["aspect_ratio"][0]
+    assert "9:16 — vertical portrait" in inputs["required"]["aspect_ratio"][0]
+    slider = inputs["optional"]["short_edge"][1]
+    assert slider["default"] == 768
+    assert slider["min"] == 32
+    assert slider["max"] == 1088
+    assert slider["step"] == 32
+    assert slider["display"] == "slider"
+
+
+def test_manual_nonstandard_resolution_records_custom_aspect_ratio():
+    config, resolved = WeeToddH3GenerationConfig().configure(
+        5.0,
+        8,
+        42,
+        "exact dimensions",
+        "Use size slider — 32 px steps",
+        "custom — exact dimensions",
+        992,
+        608,
+        True,
+    )
+
+    assert (config.width, config.height) == (992, 608)
+    assert config.resolution_mode == "exact dimensions"
+    assert config.aspect_ratio == "custom"
+    assert resolved == "992 × 608 pixels — custom"
 
 
 @pytest.mark.parametrize(
     ("ratio", "expected"),
     [
-        ("21:9", (1792, 768)),
-        ("16:9", (1344, 768)),
-        ("4:3", (1024, 768)),
-        ("1:1", (768, 768)),
-        ("3:4", (768, 1024)),
-        ("9:16", (768, 1344)),
-        ("9:21", (768, 1792)),
+        ("21:9 — ultrawide landscape", (1792, 768)),
+        ("16:9 — widescreen landscape", (1344, 768)),
+        ("4:3 — standard landscape", (1024, 768)),
+        ("5:4 — near-square landscape", (960, 768)),
+        ("1:1 — square", (768, 768)),
+        ("4:5 — near-square portrait", (768, 960)),
+        ("3:4 — standard portrait", (768, 1024)),
+        ("9:16 — vertical portrait", (768, 1344)),
+        ("9:21 — ultratall portrait", (768, 1792)),
     ],
 )
 def test_resolution_presets_follow_ratio_and_h3_grid(ratio, expected):
-    resolved = _resolve_h3_resolution("preset", "768P (native quality)", ratio, 640, 384)
+    resolved = _resolve_h3_resolution(
+        "ratio + size", "768 px short edge — native", ratio, 640, 384, 768
+    )
     assert resolved == expected
     assert all(value % 32 == 0 for value in resolved)
+
+
+def test_ratio_slider_reaches_1920_by_1088_for_widescreen():
+    assert _resolve_h3_resolution(
+        "ratio + size",
+        "1088 px short edge — maximum slider size",
+        "16:9 — widescreen landscape",
+        640,
+        384,
+        1088,
+    ) == (1920, 1088)
+
+
+def test_ultrawide_slider_rejects_canvas_above_1920():
+    assert _resolve_h3_resolution(
+        "ratio + size",
+        "Use size slider — 32 px steps",
+        "21:9 — ultrawide landscape",
+        640,
+        384,
+        800,
+    ) == (1856, 800)
+    with pytest.raises(ValueError, match="must not exceed 1920"):
+        _resolve_h3_resolution(
+            "ratio + size",
+            "Use size slider — 32 px steps",
+            "21:9 — ultrawide landscape",
+            640,
+            384,
+            832,
+        )
+
+
+@pytest.mark.parametrize("short_edge", range(32, 1089, 32))
+def test_widescreen_size_slider_always_stays_on_h3_grid(short_edge):
+    width, height = _resolve_h3_resolution(
+        "ratio + size",
+        "Use size slider — 32 px steps",
+        "16:9 — widescreen landscape",
+        640,
+        384,
+        short_edge,
+    )
+    assert height == short_edge
+    assert width <= 1920
+    assert width % 32 == height % 32 == 0
 
 
 def test_custom_resolution_uses_exact_dimensions():
@@ -266,7 +401,7 @@ def test_640p_widescreen_preset_uses_h3_grid():
 def test_experimental_2k_preset_resolves_common_widescreen_canvas():
     assert _resolve_h3_resolution(
         "preset", "2K (experimental, very high memory)", "16:9", 640, 384
-    ) == (2048, 1152)
+    ) == (1920, 1088)
 
 
 def test_output_target_stays_below_comfy_output(tmp_path):

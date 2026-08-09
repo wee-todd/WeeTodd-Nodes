@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 import time
 from collections.abc import Callable
@@ -14,7 +13,7 @@ from typing import Any
 
 import numpy as np
 
-from minimax_h3_mlx.media import save_wav
+from minimax_h3_mlx.media import FFmpegExecutable, resolve_ffmpeg, save_wav
 
 from .decoding import (
     AUDIO_VAE_RUNTIME,
@@ -37,17 +36,23 @@ class H3DirectPublicationResult:
 class RawVideoEncoder:
     """Write uint8 RGB chunks to one silent H.264 stream."""
 
-    def __init__(self, path: Path, width: int, height: int, fps: float, crf: int) -> None:
-        ffmpeg = shutil.which("ffmpeg")
-        if ffmpeg is None:
-            raise RuntimeError("ffmpeg is required for direct H3 publication.")
+    def __init__(
+        self,
+        path: Path,
+        width: int,
+        height: int,
+        fps: float,
+        crf: int,
+        ffmpeg: FFmpegExecutable | None = None,
+    ) -> None:
+        ffmpeg = ffmpeg or resolve_ffmpeg()
         self.path = path
         self.width = width
         self.height = height
         self.frames = 0
         self._closed = False
         command = [
-            ffmpeg,
+            str(ffmpeg.path),
             "-y",
             "-loglevel",
             "error",
@@ -113,12 +118,15 @@ class RawVideoEncoder:
         self._closed = True
 
 
-def _mux_audio(silent_video: Path, audio_path: Path, output: Path) -> None:
-    ffmpeg = shutil.which("ffmpeg")
-    if ffmpeg is None:
-        raise RuntimeError("ffmpeg is required for direct H3 publication.")
+def _mux_audio(
+    silent_video: Path,
+    audio_path: Path,
+    output: Path,
+    ffmpeg: FFmpegExecutable | None = None,
+) -> None:
+    ffmpeg = ffmpeg or resolve_ffmpeg()
     command = [
-        ffmpeg,
+        str(ffmpeg.path),
         "-y",
         "-loglevel",
         "error",
@@ -195,6 +203,7 @@ def publish_latents_direct(
     audio_cache=AUDIO_VAE_RUNTIME,
     encoder_factory=RawVideoEncoder,
     muxer=_mux_audio,
+    ffmpeg_path: str | Path | None = None,
 ) -> H3DirectPublicationResult:
     """Decode, stream, mux, and atomically publish one synchronized latent result."""
     if not 0 <= crf <= 51:
@@ -214,17 +223,30 @@ def publish_latents_direct(
     encoder = None
     published = False
     started = time.perf_counter()
+    ffmpeg = None
 
     try:
+        if encoder_factory is RawVideoEncoder or muxer is _mux_audio:
+            ffmpeg = resolve_ffmpeg(ffmpeg_path)
         if check_interrupted is not None:
             check_interrupted()
-        encoder = encoder_factory(
-            silent_video,
-            latents.width,
-            latents.height,
-            float(latents.fps),
-            crf,
-        )
+        if encoder_factory is RawVideoEncoder:
+            encoder = encoder_factory(
+                silent_video,
+                latents.width,
+                latents.height,
+                float(latents.fps),
+                crf,
+                ffmpeg,
+            )
+        else:
+            encoder = encoder_factory(
+                silent_video,
+                latents.width,
+                latents.height,
+                float(latents.fps),
+                crf,
+            )
         video = video_cache.decode_stream(
             H3VideoVAESpec.from_components(components),
             latents,
@@ -258,7 +280,10 @@ def publish_latents_direct(
         save_wav(audio_path, audio.waveform, audio.sample_rate)
         if check_interrupted is not None:
             check_interrupted()
-        muxer(silent_video, audio_path, partial_video)
+        if muxer is _mux_audio:
+            muxer(silent_video, audio_path, partial_video, ffmpeg)
+        else:
+            muxer(silent_video, audio_path, partial_video)
         if check_interrupted is not None:
             check_interrupted()
 
@@ -276,6 +301,7 @@ def publish_latents_direct(
             "tile_decode_batch": video.decode_batch,
             "publish_seconds": time.perf_counter() - started,
             "output_file": target.name,
+            "ffmpeg": ffmpeg.to_dict() if ffmpeg is not None else {"source": "injected"},
             **measured,
         }
         if metadata_updates is not None:

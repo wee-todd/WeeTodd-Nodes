@@ -26,7 +26,7 @@
   "3": {
     "class_type": "WeeToddH3GenerationConfig",
     "inputs": {
-      "aspect_ratio": "16:9",
+      "aspect_ratio": "16:9 — widescreen landscape",
       "attention_chunk_size": "automatic",
       "custom_height": 384,
       "custom_width": 640,
@@ -34,8 +34,9 @@
       "duration_seconds": 5.0,
       "memory_mode": "low_memory_bf16",
       "projection_backend": "mlx",
-      "resolution_mode": "preset",
-      "resolution_tier": "384P (fast smoke)",
+      "resolution_mode": "ratio + size",
+      "resolution_tier": "384 px short edge — fast smoke",
+      "short_edge": 384,
       "seed": 0,
       "steps": 5
     },

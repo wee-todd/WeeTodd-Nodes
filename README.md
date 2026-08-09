@@ -94,7 +94,22 @@ ComfyUI, including roots from `extra_model_paths.yaml`. It checks the component'
 category first and then the remaining registered model categories. Absolute paths remain available
 for diagnostics, but portable workflows should use relative paths.
 
-The Generation Config presets include 640p as a 1120 by 640 canvas on H3's required 32-pixel grid.
+### Choose the canvas size
+
+Generation Config separates shape from size:
+
+1. Select a labeled landscape, square, or portrait aspect ratio.
+2. Select a named short-edge shortcut or choose `Use size slider — 32 px steps`.
+3. Move the short-edge slider from 32 through 1088. Resolved width and height update in the node.
+
+Every dimension stays on H3's 32-pixel grid. Neither resolved dimension can exceed 1920 pixels,
+so very wide or tall ratios automatically use a lower slider maximum. For example, H3 widescreen
+resolves 640 to 1120 by 640, 768 to 1344 by 768, and 1088 to 1920 by 1088. The named shortcuts are
+384, 480, 512, 576, 640, 672, 704, 736, 768, 896, 1024, and 1088 pixels on the short edge.
+
+Choose `exact dimensions` for a manually entered canvas. Width and height must each be 32 through
+1920 in 32-pixel steps. The aspect-ratio display changes to `custom` when those dimensions do not
+match a supported ratio. Legacy preset names remain readable through workflow migration.
 
 ## Run the low-memory ComfyUI smoke test
 
@@ -119,7 +134,7 @@ Keep the supplied first-run settings:
 | Setting | Value |
 | --- | --- |
 | Task | `t2va` |
-| Resolution | `384P (fast smoke)`, `16:9` |
+| Resolution | `384 px short edge — fast smoke`, `16:9 — widescreen landscape` |
 | Canvas | 640 by 384 |
 | Duration | 5 seconds |
 | Requested schedule points | 5 |
@@ -192,6 +207,14 @@ EasyCache, BlockCache, Hierarchical BlockCache, and Trajectory Forecast are mutu
 They can change video and audio output. Turbo LoRA with a cache also requires the explicit
 experimental opt-in. None of these options belongs in the first low-memory smoke test.
 
+Trajectory Forecast provides an optional `offline_smoothing_replay` mode for audio-sensitive runs.
+The first pass captures actual joint video and audio features. A transformer-free second pass
+restarts from the original latents, reuses the actual anchors, and reconstructs skipped steps from
+past and future anchors. The default replay blend is 0.5 for video and zero for audio. Replay can
+prevent forecasted video state from entering a later joint transformer evaluation, but the anchor
+archive increases memory use. Start with eight or more requested schedule points and compare the
+same prompt and seed with replay disabled before adopting the mode.
+
 The optional MPP projection backend targets speed for eligible BF16 projections. It does not lower
 the measured MLX peak and is not part of the minimum-memory workflow. Q4 artifacts are not
 published or supported.
@@ -211,7 +234,7 @@ selected override directory. Remove accidental nested repository folders.
 ### Generation Config values shift after loading an older workflow
 
 Restart ComfyUI and reload the workflow. The frontend migration restores legacy Generation Config
-layouts that predate `resolution_mode`, including the older `384P (fast mode)` label. Save the
+layouts and converts older `P` labels to the explicit ratio-and-short-edge controls. Save the
 workflow again after it loads correctly.
 
 ### Preflight reports a missing processor, tokenizer, or audio VAE
@@ -227,8 +250,19 @@ Publish Latents instead of retaining a complete ComfyUI image batch.
 
 ### Publication fails
 
-Confirm that FFmpeg can encode H.264 video and AAC audio. Check the ComfyUI output directory for
-write permission. The publisher writes atomically and removes incomplete media after failure.
+Read the `publication` section of the Component Preflight report. It shows the output directory
+registered by the running ComfyUI backend and the FFmpeg executable selected for publication.
+
+If a Desktop or Finder launch does not inherit Homebrew's shell path, set the advanced
+`ffmpeg_path` field on the preflight and publication nodes, or set `WEETODD_FFMPEG` before starting
+ComfyUI. Discovery then checks the process path and an installed `imageio-ffmpeg` package. Do not
+place a symlink inside ComfyUI's virtual environment; replacing that environment removes it.
+
+The nodes always publish below `folder_paths.get_output_directory()` so ComfyUI previews remain
+safe and addressable. Configure a shared output root in the ComfyUI backend, such as with
+`--output-directory`; a frontend-only folder preference does not change the backend root. Confirm
+that the reported directory is writable. Publication is atomic and removes incomplete media after
+failure.
 
 ## Development validation
 

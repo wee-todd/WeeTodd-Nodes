@@ -41,8 +41,7 @@ def validate_synchronized_media(
         raise ValueError(f"Video must use uint8 RGB values; got {video.dtype}.")
     if audio.ndim != 2 or audio.shape[0] != 2 or audio.shape[1] < 1:
         raise ValueError(
-            "Audio must have shape (2, samples) with stereo channels; "
-            f"got {audio.shape}."
+            f"Audio must have shape (2, samples) with stereo channels; got {audio.shape}."
         )
     if not np.issubdtype(audio.dtype, np.floating):
         raise ValueError(f"Audio must use floating-point samples; got {audio.dtype}.")
@@ -110,13 +109,12 @@ def publish_synchronized_media(
     generation_metadata: str = "{}",
     writer: MediaWriter | None = None,
     check_interrupted: Callable[[], None] | None = None,
+    ffmpeg_path: str | Path | None = None,
 ) -> H3PublicationResult:
     """Validate, atomically encode, and describe one synchronized H3 result."""
     if not 0 <= crf <= 51:
         raise ValueError("CRF must be between 0 and 51.")
-    measured = validate_synchronized_media(
-        video, audio, sample_rate, fps, max_av_drift_seconds
-    )
+    measured = validate_synchronized_media(video, audio, sample_rate, fps, max_av_drift_seconds)
     supplied = _metadata_object(generation_metadata)
     target = Path(target)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -128,7 +126,18 @@ def publish_synchronized_media(
     if writer is None:
         from minimax_h3_mlx.media import save_mp4
 
-        writer = save_mp4
+        def resolved_writer(path, video, fps, audio, sample_rate, crf):
+            return save_mp4(
+                path,
+                video,
+                fps,
+                audio,
+                sample_rate,
+                crf,
+                ffmpeg_path=ffmpeg_path,
+            )
+
+        writer = resolved_writer
 
     published_video = False
     try:

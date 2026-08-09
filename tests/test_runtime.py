@@ -17,9 +17,7 @@ def test_low_memory_mode_selects_query_chunks_without_quantization():
 
 @pytest.mark.parametrize("chunk", ["512", "1024", "2048"])
 def test_low_memory_mode_accepts_explicit_query_chunk(chunk):
-    config = H3GenerationConfig(
-        memory_mode="low_memory_bf16", attention_chunk_size=chunk
-    )
+    config = H3GenerationConfig(memory_mode="low_memory_bf16", attention_chunk_size=chunk)
     config.validate()
     assert config.attention_query_chunk_size == int(chunk)
 
@@ -53,6 +51,12 @@ def test_config_rejects_unaligned_canvas(width, height):
 def test_config_rejects_nonpositive_canvas():
     with pytest.raises(ValueError, match="at least 32"):
         H3GenerationConfig(width=0, height=384).validate()
+
+
+@pytest.mark.parametrize(("width", "height"), [(1952, 1088), (1088, 1952)])
+def test_generation_config_rejects_dimensions_above_1920(width, height):
+    with pytest.raises(ValueError, match="must not exceed 1920"):
+        H3GenerationConfig(width=width, height=height).validate()
 
 
 def test_model_spec_rejects_missing_checkpoint(tmp_path: Path):

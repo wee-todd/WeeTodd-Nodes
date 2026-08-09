@@ -96,6 +96,13 @@ class H3Latents:
     trajectory_bootstrap_forecasts: int = 0
     trajectory_fallbacks: int = 0
     trajectory_history_bytes: int = 0
+    trajectory_offline_replay: bool = False
+    trajectory_replay_steps: int = 0
+    trajectory_replay_anchor_steps: int = 0
+    trajectory_replay_smoothed_steps: int = 0
+    trajectory_capture_seconds: float = 0.0
+    trajectory_replay_seconds: float = 0.0
+    trajectory_replay_fallback_reason: str | None = None
     lora_report: tuple[dict[str, Any], ...] = ()
     projection_backend_report: dict[str, Any] | None = None
     projection_backend_runtime: dict[str, Any] | None = None
@@ -234,9 +241,7 @@ class H3TransformerCache:
                     self._release_locked()
                     raise
             try:
-                self._sampler.dit.set_attention_query_chunk_size(
-                    config.attention_query_chunk_size
-                )
+                self._sampler.dit.set_attention_query_chunk_size(config.attention_query_chunk_size)
                 result = self._sampler.sample_latents(
                     conditioning.embeddings,
                     conditioning.token_tags,
@@ -273,25 +278,30 @@ class H3TransformerCache:
                         result, "blockcache_resolved_threshold", None
                     ),
                     blockcache_cache_bytes=getattr(result, "blockcache_cache_bytes", 0),
-                    blockcache_segment_hits=getattr(
-                        result, "blockcache_segment_hits", ()
-                    ),
+                    blockcache_segment_hits=getattr(result, "blockcache_segment_hits", ()),
                     blockcache_segment_thresholds=getattr(
                         result, "blockcache_segment_thresholds", ()
                     ),
-                    blockcache_executed_blocks=getattr(
-                        result, "blockcache_executed_blocks", 0
-                    ),
-                    blockcache_skipped_blocks=getattr(
-                        result, "blockcache_skipped_blocks", 0
-                    ),
+                    blockcache_executed_blocks=getattr(result, "blockcache_executed_blocks", 0),
+                    blockcache_skipped_blocks=getattr(result, "blockcache_skipped_blocks", 0),
                     trajectory_forecasts=getattr(result, "trajectory_forecasts", 0),
                     trajectory_bootstrap_forecasts=getattr(
                         result, "trajectory_bootstrap_forecasts", 0
                     ),
                     trajectory_fallbacks=getattr(result, "trajectory_fallbacks", 0),
-                    trajectory_history_bytes=getattr(
-                        result, "trajectory_history_bytes", 0
+                    trajectory_history_bytes=getattr(result, "trajectory_history_bytes", 0),
+                    trajectory_offline_replay=getattr(result, "trajectory_offline_replay", False),
+                    trajectory_replay_steps=getattr(result, "trajectory_replay_steps", 0),
+                    trajectory_replay_anchor_steps=getattr(
+                        result, "trajectory_replay_anchor_steps", 0
+                    ),
+                    trajectory_replay_smoothed_steps=getattr(
+                        result, "trajectory_replay_smoothed_steps", 0
+                    ),
+                    trajectory_capture_seconds=getattr(result, "trajectory_capture_seconds", 0.0),
+                    trajectory_replay_seconds=getattr(result, "trajectory_replay_seconds", 0.0),
+                    trajectory_replay_fallback_reason=getattr(
+                        result, "trajectory_replay_fallback_reason", None
                     ),
                     lora_report=self._lora_report,
                     projection_backend_report=self._projection_backend_report,

@@ -14,9 +14,7 @@ def _features(value: float):
 
 
 def test_turbo_length_schedule_forecasts_only_middle_step():
-    state = H3TrajectoryForecastState(
-        H3TrajectoryForecastConfig(mode="automatic_balanced")
-    )
+    state = H3TrajectoryForecastState(H3TrajectoryForecastConfig(mode="automatic_balanced"))
     state.update(1.0, *_features(0.0))
     state.update(2.0 / 3.0, *_features(1.0))
 
@@ -94,17 +92,92 @@ def test_guard_falls_back_when_forecast_delta_exceeds_ratio():
 
 
 def test_history_is_bounded_and_reports_storage():
-    state = H3TrajectoryForecastState(
-        H3TrajectoryForecastConfig(max_history=2)
-    )
+    state = H3TrajectoryForecastState(H3TrajectoryForecastConfig(max_history=2))
     for index in range(4):
         state.update(float(index), *_features(float(index)))
     assert len(state._history) == 2
     assert state.history_bytes > 0
 
 
+def test_offline_replay_uses_exact_anchors_and_local_audio_interpolation():
+    state = H3TrajectoryForecastState(
+        H3TrajectoryForecastConfig(
+            mode="automatic_balanced",
+            offline_smoothing_replay=True,
+            offline_video_blend=0.5,
+            offline_audio_blend=0.0,
+        )
+    )
+    coordinates = (1.0, 2.0 / 3.0, 1.0 / 3.0, 0.0)
+    state.begin_capture(len(coordinates))
+    for index, coordinate in enumerate(coordinates):
+        predicted = state.try_predict(coordinate, index, len(coordinates))
+        if predicted is None:
+            state.update(coordinate, *_features(float(index)))
+
+    assert state.forecasts == 1
+    assert state.complete_capture() is True
+    assert state._validation_scores["video"]
+    assert state._validation_scores["audio"] == {}
+    archive_bytes = state.archive_bytes
+    assert archive_bytes > 0
+
+    state.begin_replay()
+    replayed = [
+        state.try_predict(coordinate, index, len(coordinates))
+        for index, coordinate in enumerate(coordinates)
+    ]
+
+    assert mx.array_equal(replayed[0][0], _features(0.0)[0])
+    assert mx.array_equal(replayed[1][0], _features(1.0)[0])
+    assert mx.array_equal(replayed[3][0], _features(3.0)[0])
+    assert mx.array_equal(replayed[2][0], _features(2.0)[0])
+    assert mx.array_equal(replayed[2][1], _features(2.0)[1])
+    assert state.replay_steps == 4
+    assert state.replay_anchor_steps == 3
+    assert state.replay_smoothed_steps == 1
+    assert state.history_bytes == archive_bytes
+
+    state.release()
+    assert state.archive_bytes == 0
+    assert state._history == []
+
+
+def test_offline_capture_requires_future_anchor_for_every_forecast():
+    state = H3TrajectoryForecastState(H3TrajectoryForecastConfig(offline_smoothing_replay=True))
+    state.begin_capture(3)
+    state.update(1.0, *_features(0.0))
+    state.update(0.5, *_features(1.0))
+    state._record_capture_step(0.0, False)
+
+    assert state.complete_capture() is False
+    assert "past and future anchors" in state.replay_fallback_reason
+
+
+def test_offline_capture_rejects_changed_feature_shape_without_raising():
+    state = H3TrajectoryForecastState(H3TrajectoryForecastConfig(offline_smoothing_replay=True))
+    state.begin_capture(2)
+    state.update(1.0, *_features(0.0))
+    state.update(
+        0.0,
+        mx.zeros((1, 9, 16), dtype=mx.bfloat16),
+        mx.zeros((1, 4, 16), dtype=mx.bfloat16),
+    )
+
+    assert state.complete_capture() is False
+    assert "shapes or dtypes changed" in state.replay_fallback_reason
+
+
 @pytest.mark.parametrize(
-    "field,value", [("warmup_steps", 1), ("max_history", 1), ("max_history", 3)]
+    "field,value",
+    [
+        ("warmup_steps", 1),
+        ("max_history", 1),
+        ("max_history", 3),
+        ("offline_video_blend", 1.1),
+        ("offline_audio_blend", -0.1),
+        ("offline_ridge_lambda", -1.0),
+    ],
 )
 def test_config_rejects_unsafe_history_controls(field, value):
     values = {field: value}

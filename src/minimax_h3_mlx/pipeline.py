@@ -135,6 +135,13 @@ class LatentResult:
     trajectory_bootstrap_forecasts: int = 0
     trajectory_fallbacks: int = 0
     trajectory_history_bytes: int = 0
+    trajectory_offline_replay: bool = False
+    trajectory_replay_steps: int = 0
+    trajectory_replay_anchor_steps: int = 0
+    trajectory_replay_smoothed_steps: int = 0
+    trajectory_capture_seconds: float = 0.0
+    trajectory_replay_seconds: float = 0.0
+    trajectory_replay_fallback_reason: str | None = None
     seconds_per_evaluation: float = 0.0
     total_seconds: float = 0.0
 
@@ -166,7 +173,7 @@ class MiniMaxH3Pipeline:
         dtype: mx.Dtype = mx.bfloat16,
         load_vision: bool = False,
         verbose: bool = True,
-    ) -> "MiniMaxH3Pipeline":
+    ) -> MiniMaxH3Pipeline:
         """Load a released ``FL2VA/`` (or ``Ref2VA/``) directory.
 
         Args:
@@ -220,7 +227,7 @@ class MiniMaxH3Pipeline:
         ``max(t, 0.999)`` and reference audio rows at ``1.0``, matching the reference.
         """
         per_step = []
-        for t, at in zip(video_timesteps.tolist(), audio_timesteps.tolist()):
+        for t, at in zip(video_timesteps.tolist(), audio_timesteps.tolist(), strict=True):
             distinct, inverse = build_row_timesteps(
                 layout, float(t), float(at), max(float(t), KEYFRAME_NOISE_AUG), 1.0
             )
@@ -371,101 +378,207 @@ class MiniMaxH3Pipeline:
             blockcache = state_type(blockcache_config)
         trajectory_forecast = None
         if trajectory_forecast_config is not None:
-            from .trajectory_forecast import H3TrajectoryForecastState
+            from .trajectory_forecast import (
+                H3OfflineReplayError,
+                H3TrajectoryForecastState,
+            )
 
             trajectory_forecast = H3TrajectoryForecastState(trajectory_forecast_config)
+
+        total_steps = len(video_sched.timesteps)
+        offline_replay = bool(
+            trajectory_forecast is not None and trajectory_forecast.config.offline_smoothing_replay
+        )
+        if offline_replay:
+            initial_video_rows = video_rows + mx.zeros((), dtype=video_rows.dtype)
+            initial_audio_rows = audio_rows + mx.zeros((), dtype=audio_rows.dtype)
+            mx.eval(initial_video_rows, initial_audio_rows)
+            trajectory_forecast.begin_capture(total_steps)
+        else:
+            initial_video_rows = video_rows
+            initial_audio_rows = audio_rows
 
         step_times = []
         transformer_times = []
         transformer_evaluations = 0
-        total_steps = len(video_sched.timesteps)
-        for index, timestep in enumerate(video_sched.timesteps.tolist()):
+        trajectory_capture_seconds = 0.0
+        trajectory_replay_seconds = 0.0
+
+        def run_pass(start_video_rows, start_audio_rows, progress_offset, progress_total):
+            nonlocal transformer_evaluations
+
+            current_video_rows = start_video_rows
+            current_audio_rows = start_audio_rows
+            for index, timestep in enumerate(video_sched.timesteps.tolist()):
+                if step_callback is not None:
+                    step_callback(progress_offset + index, progress_total)
+                started = time.perf_counter()
+                video_input = current_video_rows[None].astype(mx.bfloat16)
+                audio_input = current_audio_rows[None].astype(mx.bfloat16)
+                reused = (
+                    easycache.try_reuse(video_input, audio_input, index, total_steps)
+                    if easycache is not None
+                    else None
+                )
+                blockcache_hit = False
+                hierarchical_blockcache = blockcache is not None and hasattr(
+                    blockcache, "segment_hits"
+                )
+                replaying = bool(trajectory_forecast is not None and trajectory_forecast.replaying)
+                if reused is None:
+                    if diagnostics is not None and hasattr(diagnostics, "begin_evaluation"):
+                        diagnostics.begin_evaluation(
+                            index,
+                            timestep=float(timestep),
+                            audio_timestep=float(audio_sched.timesteps[index].item()),
+                        )
+                    video_pred, audio_pred = self.dit(
+                        video_input,
+                        audio_input,
+                        embeds,
+                        timestep_table,
+                        plan[index],
+                        layout.token_tags,
+                        layout.position_ids,
+                        layout.video_indices,
+                        layout.audio_indices,
+                        layout.text_indices,
+                        modulation_cache=self._cache,
+                        blockcache=blockcache,
+                        trajectory_forecast=trajectory_forecast,
+                        forecast_coordinate=float(timestep),
+                        step_index=index,
+                        total_steps=total_steps,
+                        diagnostics=diagnostics,
+                    )
+                    actual_transformer = not replaying and (
+                        hierarchical_blockcache
+                        or (
+                            (blockcache is None or not blockcache.last_was_hit)
+                            and (
+                                trajectory_forecast is None
+                                or not trajectory_forecast.last_was_forecast
+                            )
+                        )
+                    )
+                    transformer_evaluations += int(actual_transformer)
+                    blockcache_hit = blockcache is not None and blockcache.last_was_hit
+                    if easycache is not None:
+                        easycache.update(video_input, audio_input, video_pred, audio_pred)
+                else:
+                    video_pred, audio_pred = reused
+                current_video_rows = video_sched.step(
+                    video_pred[0].astype(mx.float32),
+                    float(timestep),
+                    current_video_rows,
+                )
+                current_audio_rows = audio_sched.step(
+                    audio_pred[0].astype(mx.float32),
+                    float(audio_sched.timesteps[index].item()),
+                    current_audio_rows,
+                )
+                mx.eval(current_video_rows, current_audio_rows)
+                elapsed = time.perf_counter() - started
+                step_times.append(elapsed)
+                forecast_hit = bool(
+                    trajectory_forecast is not None and trajectory_forecast.last_was_forecast
+                )
+                if (
+                    not replaying
+                    and reused is None
+                    and (not blockcache_hit or hierarchical_blockcache)
+                    and not forecast_hit
+                ):
+                    transformer_times.append(elapsed)
+                if verbose:
+                    completed = progress_offset + index + 1
+                    mean = sum(step_times) / len(step_times)
+                    eta = mean * (progress_total - completed)
+                    action = (
+                        "replay-smooth  "
+                        if replaying and forecast_hit
+                        else "replay-anchor  "
+                        if replaying
+                        else "forecast  "
+                        if forecast_hit
+                        else "cached  "
+                        if reused is not None or blockcache_hit
+                        else ""
+                    )
+                    print(
+                        f"  step {completed}/{progress_total}  {elapsed:.1f}s  "
+                        f"{action}eta {eta / 60:.1f} min",
+                        flush=True,
+                    )
+            return current_video_rows, current_audio_rows
+
+        progress_total = total_steps * (2 if offline_replay else 1)
+        try:
+            capture_started = time.perf_counter()
+            capture_video_rows, capture_audio_rows = run_pass(
+                video_rows,
+                audio_rows,
+                0,
+                progress_total,
+            )
+            if offline_replay:
+                trajectory_capture_seconds = time.perf_counter() - capture_started
+                if trajectory_forecast.complete_capture():
+                    try:
+                        trajectory_forecast.begin_replay()
+                        video_sched.set_timesteps(num_inference_steps)
+                        audio_sched.set_timesteps(num_inference_steps)
+                        replay_started = time.perf_counter()
+                        video_rows, audio_rows = run_pass(
+                            initial_video_rows,
+                            initial_audio_rows,
+                            total_steps,
+                            progress_total,
+                        )
+                        trajectory_replay_seconds = time.perf_counter() - replay_started
+                    except H3OfflineReplayError as exc:
+                        trajectory_forecast.mark_replay_fallback(str(exc))
+                        video_rows, audio_rows = capture_video_rows, capture_audio_rows
+                else:
+                    trajectory_forecast.mark_replay_fallback(
+                        trajectory_forecast.replay_fallback_reason
+                        or "Offline capture validation failed."
+                    )
+                    video_rows, audio_rows = capture_video_rows, capture_audio_rows
+            else:
+                video_rows, audio_rows = capture_video_rows, capture_audio_rows
             if step_callback is not None:
-                step_callback(index, total_steps)
-            started = time.perf_counter()
-            video_input = video_rows[None].astype(mx.bfloat16)
-            audio_input = audio_rows[None].astype(mx.bfloat16)
-            reused = (
-                easycache.try_reuse(video_input, audio_input, index, total_steps)
-                if easycache is not None
+                step_callback(progress_total, progress_total)
+
+            trajectory_forecasts = (
+                trajectory_forecast.forecasts if trajectory_forecast is not None else 0
+            )
+            trajectory_bootstrap_forecasts = (
+                trajectory_forecast.bootstrap_forecasts if trajectory_forecast is not None else 0
+            )
+            trajectory_fallbacks = (
+                trajectory_forecast.fallbacks if trajectory_forecast is not None else 0
+            )
+            trajectory_history_bytes = (
+                trajectory_forecast.history_bytes if trajectory_forecast is not None else 0
+            )
+            trajectory_replay_steps = (
+                trajectory_forecast.replay_steps if trajectory_forecast is not None else 0
+            )
+            trajectory_replay_anchor_steps = (
+                trajectory_forecast.replay_anchor_steps if trajectory_forecast is not None else 0
+            )
+            trajectory_replay_smoothed_steps = (
+                trajectory_forecast.replay_smoothed_steps if trajectory_forecast is not None else 0
+            )
+            trajectory_replay_fallback_reason = (
+                trajectory_forecast.replay_fallback_reason
+                if trajectory_forecast is not None
                 else None
             )
-            blockcache_hit = False
-            hierarchical_blockcache = blockcache is not None and hasattr(
-                blockcache, "segment_hits"
-            )
-            if reused is None:
-                if diagnostics is not None and hasattr(diagnostics, "begin_evaluation"):
-                    diagnostics.begin_evaluation(
-                        index,
-                        timestep=float(timestep),
-                        audio_timestep=float(audio_sched.timesteps[index].item()),
-                    )
-                video_pred, audio_pred = self.dit(
-                    video_input,
-                    audio_input,
-                    embeds,
-                    timestep_table,
-                    plan[index],
-                    layout.token_tags,
-                    layout.position_ids,
-                    layout.video_indices,
-                    layout.audio_indices,
-                    layout.text_indices,
-                    modulation_cache=self._cache,
-                    blockcache=blockcache,
-                    trajectory_forecast=trajectory_forecast,
-                    forecast_coordinate=float(timestep),
-                    step_index=index,
-                    total_steps=total_steps,
-                    diagnostics=diagnostics,
-                )
-                transformer_evaluations += int(
-                    hierarchical_blockcache
-                    or (blockcache is None or not blockcache.last_was_hit)
-                    and (
-                        trajectory_forecast is None
-                        or not trajectory_forecast.last_was_forecast
-                    )
-                )
-                blockcache_hit = blockcache is not None and blockcache.last_was_hit
-                if easycache is not None:
-                    easycache.update(video_input, audio_input, video_pred, audio_pred)
-            else:
-                video_pred, audio_pred = reused
-            video_rows = video_sched.step(
-                video_pred[0].astype(mx.float32), float(timestep), video_rows
-            )
-            audio_rows = audio_sched.step(
-                audio_pred[0].astype(mx.float32),
-                float(audio_sched.timesteps[index].item()),
-                audio_rows,
-            )
-            mx.eval(video_rows, audio_rows)
-            elapsed = time.perf_counter() - started
-            step_times.append(elapsed)
-            forecast_hit = (
-                trajectory_forecast is not None
-                and trajectory_forecast.last_was_forecast
-            )
-            if (
-                reused is None
-                and (not blockcache_hit or hierarchical_blockcache)
-                and not forecast_hit
-            ):
-                transformer_times.append(elapsed)
-            if verbose:
-                completed = index + 1
-                mean = sum(step_times) / len(step_times)
-                eta = mean * (total_steps - completed)
-                print(
-                    f"  step {completed}/{total_steps}  {step_times[-1]:.1f}s  "
-                    f"{'forecast  ' if forecast_hit else 'cached  ' if reused is not None or blockcache_hit else ''}"
-                    f"eta {eta / 60:.1f} min",
-                    flush=True,
-                )
-        if step_callback is not None:
-            step_callback(total_steps, total_steps)
+        finally:
+            if trajectory_forecast is not None:
+                trajectory_forecast.release()
 
         if diagnostics is not None:
             diagnostics.write_metadata()
@@ -502,9 +615,7 @@ class MiniMaxH3Pipeline:
                 blockcache.segment_hits if hasattr(blockcache, "segment_hits") else ()
             ),
             blockcache_segment_thresholds=(
-                blockcache.resolved_threshold
-                if hasattr(blockcache, "segment_hits")
-                else ()
+                blockcache.resolved_threshold if hasattr(blockcache, "segment_hits") else ()
             ),
             blockcache_executed_blocks=(
                 blockcache.executed_blocks
@@ -514,20 +625,17 @@ class MiniMaxH3Pipeline:
             blockcache_skipped_blocks=(
                 blockcache.skipped_blocks if hasattr(blockcache, "skipped_blocks") else 0
             ),
-            trajectory_forecasts=(
-                trajectory_forecast.forecasts if trajectory_forecast is not None else 0
-            ),
-            trajectory_bootstrap_forecasts=(
-                trajectory_forecast.bootstrap_forecasts
-                if trajectory_forecast is not None
-                else 0
-            ),
-            trajectory_fallbacks=(
-                trajectory_forecast.fallbacks if trajectory_forecast is not None else 0
-            ),
-            trajectory_history_bytes=(
-                trajectory_forecast.history_bytes if trajectory_forecast is not None else 0
-            ),
+            trajectory_forecasts=trajectory_forecasts,
+            trajectory_bootstrap_forecasts=trajectory_bootstrap_forecasts,
+            trajectory_fallbacks=trajectory_fallbacks,
+            trajectory_history_bytes=trajectory_history_bytes,
+            trajectory_offline_replay=offline_replay,
+            trajectory_replay_steps=trajectory_replay_steps,
+            trajectory_replay_anchor_steps=trajectory_replay_anchor_steps,
+            trajectory_replay_smoothed_steps=trajectory_replay_smoothed_steps,
+            trajectory_capture_seconds=trajectory_capture_seconds,
+            trajectory_replay_seconds=trajectory_replay_seconds,
+            trajectory_replay_fallback_reason=trajectory_replay_fallback_reason,
             seconds_per_evaluation=(sum(transformer_times) / max(len(transformer_times), 1)),
             total_seconds=time.perf_counter() - run_started,
         )

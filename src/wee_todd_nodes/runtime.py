@@ -1,4 +1,5 @@
 """Lazy, process-local MiniMax H3 MLX runtime management."""
+
 from __future__ import annotations
 
 import gc
@@ -43,6 +44,8 @@ class H3GenerationConfig:
             raise ValueError("steps must be at least 2")
         if self.width < 32 or self.height < 32:
             raise ValueError("width and height must be at least 32 pixels")
+        if self.width > 1920 or self.height > 1920:
+            raise ValueError("width and height must not exceed 1920 pixels")
         if self.width % 32 or self.height % 32:
             raise ValueError("width and height must be divisible by 32")
         if self.memory_mode not in {"normal", "low_memory_bf16"}:

@@ -15,9 +15,10 @@ def test_t2va_api_prompt_uses_registered_nodes_and_staged_unloading():
     assert prompt["5"]["inputs"]["easycache"] == ["9", 0]
     assert prompt["2"]["inputs"]["config"] == ["3", 0]
     assert "width" not in prompt["2"]["inputs"]
-    assert prompt["3"]["inputs"]["resolution_mode"] == "preset"
-    assert prompt["3"]["inputs"]["resolution_tier"] == "384P (fast smoke)"
-    assert prompt["3"]["inputs"]["aspect_ratio"] == "16:9"
+    assert prompt["3"]["inputs"]["resolution_mode"] == "ratio + size"
+    assert prompt["3"]["inputs"]["resolution_tier"] == "384 px short edge — fast smoke"
+    assert prompt["3"]["inputs"]["aspect_ratio"] == "16:9 — widescreen landscape"
+    assert prompt["3"]["inputs"]["short_edge"] == 384
     assert prompt["3"]["inputs"]["memory_mode"] == "normal"
     assert prompt["3"]["inputs"]["attention_chunk_size"] == "automatic"
     assert prompt["9"]["inputs"] == {
@@ -47,9 +48,10 @@ def test_t2va_ui_workflow_links_are_consistent():
         5.0,
         8,
         0,
-        "preset",
-        "384P (fast smoke)",
-        "16:9",
+        "ratio + size",
+        "384 px short edge — fast smoke",
+        "16:9 — widescreen landscape",
+        384,
         640,
         384,
         True,
@@ -70,11 +72,9 @@ def test_low_memory_paged_api_uses_dual_paging_and_direct_publication():
     assert {node["class_type"] for node in prompt.values()} <= set(NODE_CLASS_MAPPINGS)
     assert prompt["1"]["inputs"]["transformer"].endswith("q8_extended_paged")
     assert prompt["1"]["inputs"]["text_encoder"].endswith("q8-paged")
-    assert prompt["1"]["inputs"]["video_vae"].endswith(
-        "q8/video_vae_affine_q8.safetensors"
-    )
+    assert prompt["1"]["inputs"]["video_vae"].endswith("q8/video_vae_affine_q8.safetensors")
     assert prompt["3"]["inputs"] == {
-        "aspect_ratio": "16:9",
+        "aspect_ratio": "16:9 — widescreen landscape",
         "attention_chunk_size": "automatic",
         "custom_height": 384,
         "custom_width": 640,
@@ -82,8 +82,9 @@ def test_low_memory_paged_api_uses_dual_paging_and_direct_publication():
         "duration_seconds": 5.0,
         "memory_mode": "low_memory_bf16",
         "projection_backend": "mlx",
-        "resolution_mode": "preset",
-        "resolution_tier": "384P (fast smoke)",
+        "resolution_mode": "ratio + size",
+        "resolution_tier": "384 px short edge — fast smoke",
+        "short_edge": 384,
         "seed": 0,
         "steps": 5,
     }
@@ -97,9 +98,7 @@ def test_low_memory_paged_api_uses_dual_paging_and_direct_publication():
 
 
 def test_low_memory_paged_ui_workflow_links_are_consistent():
-    workflow = json.loads(
-        (ROOT / "examples" / "t2va_low_memory_paged_workflow.json").read_text()
-    )
+    workflow = json.loads((ROOT / "examples" / "t2va_low_memory_paged_workflow.json").read_text())
     nodes = {node["id"]: node for node in workflow["nodes"]}
     links = {link[0]: link for link in workflow["links"]}
 
@@ -110,16 +109,15 @@ def test_low_memory_paged_ui_workflow_links_are_consistent():
         "MiniMax-H3/transformers/q8_extended_paged",
         "MiniMax-H3/text_encoders/q8-paged",
     ]
-    assert nodes[1]["widgets_values"][6] == (
-        "MiniMax-H3/vae/q8/video_vae_affine_q8.safetensors"
-    )
+    assert nodes[1]["widgets_values"][6] == ("MiniMax-H3/vae/q8/video_vae_affine_q8.safetensors")
     assert nodes[3]["widgets_values"] == [
         5.0,
         5,
         0,
-        "preset",
-        "384P (fast smoke)",
-        "16:9",
+        "ratio + size",
+        "384 px short edge — fast smoke",
+        "16:9 — widescreen landscape",
+        384,
         640,
         384,
         True,

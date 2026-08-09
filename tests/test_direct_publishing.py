@@ -152,3 +152,27 @@ def test_direct_publication_rejects_non_finite_audio(tmp_path):
 
     assert not (tmp_path / "result.mp4").exists()
     assert not list(tmp_path.glob(".*partial*"))
+
+
+def test_direct_publication_unloads_when_ffmpeg_discovery_fails(monkeypatch, tmp_path):
+    components, latents = _inputs(tmp_path)
+    video_cache = FakeVideoCache()
+    audio_cache = FakeAudioCache()
+    monkeypatch.setattr(
+        "wee_todd_nodes.direct_publishing.resolve_ffmpeg",
+        lambda path=None: (_ for _ in ()).throw(RuntimeError("ffmpeg unavailable")),
+    )
+
+    with pytest.raises(RuntimeError, match="ffmpeg unavailable"):
+        publish_latents_direct(
+            tmp_path / "result.mp4",
+            components,
+            latents,
+            video_cache=video_cache,
+            audio_cache=audio_cache,
+            encoder_factory=FakeEncoder,
+        )
+
+    assert video_cache.unloaded is True
+    assert audio_cache.unloaded is True
+    assert not list(tmp_path.glob(".*partial*"))
