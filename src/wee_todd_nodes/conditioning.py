@@ -81,6 +81,8 @@ class H3Conditioning:
     condition_audio_rows: Any | None = None
     keyframe_anchors: tuple[str, ...] = ()
     references: tuple[Any, ...] = ()
+    visual_condition_strength: float = 0.999
+    audio_condition_strength: float = 1.0
 
 
 EncoderFactory = Callable[[H3TextEncoderSpec], Any]

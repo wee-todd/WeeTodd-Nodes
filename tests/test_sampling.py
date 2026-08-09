@@ -55,8 +55,9 @@ def _spec(tmp_path: Path, task="t2va") -> H3TransformerSpec:
     root = tmp_path / task
     transformer = root / "transformer"
     transformer.mkdir(parents=True)
+    partition = "ref2va" if task == "ref2va" else "fl2va"
     (root / "model_index.json").write_text(
-        json.dumps({"_minimax_h3": {"partition": "fl2va", "tasks": [task]}}) + "\n"
+        json.dumps({"_minimax_h3": {"partition": partition, "tasks": [task]}}) + "\n"
     )
     return H3TransformerSpec(
         checkpoint=str(root),
@@ -68,6 +69,28 @@ def _spec(tmp_path: Path, task="t2va") -> H3TransformerSpec:
         audio_vae=str(root / "audio_vae"),
         task=task,
     )
+
+
+def test_transformer_spec_requires_explicit_cross_partition_ref2va(tmp_path: Path):
+    spec = _spec(tmp_path, task="fl2va")
+    ref_spec = H3TransformerSpec(
+        **{
+            **spec.__dict__,
+            "task": "ref2va",
+            "allow_fl2va_weights_for_ref2va": True,
+        }
+    )
+
+    ref_spec.validate()
+
+    strict_spec = H3TransformerSpec(
+        **{
+            **ref_spec.__dict__,
+            "allow_fl2va_weights_for_ref2va": False,
+        }
+    )
+    with pytest.raises(ValueError, match="does not support task 'ref2va'"):
+        strict_spec.validate()
 
 
 def _conditioning(
@@ -129,6 +152,39 @@ def test_transformer_cache_samples_and_unloads(tmp_path: Path):
     assert progress == [(0, 2), (1, 2), (2, 2)]
     assert cache.loaded is False
     assert len(created) == 1
+
+
+def test_transformer_cache_forwards_reference_strengths(tmp_path: Path):
+    created = []
+
+    def factory(spec):
+        sampler = FakeSampler(spec)
+        created.append(sampler)
+        return sampler
+
+    spec = _spec(tmp_path, task="fl2va")
+    conditioning = _conditioning(
+        spec,
+        load_vision=True,
+        task="fl2va",
+        condition_video_rows="rows",
+        keyframe_anchors=("first",),
+    )
+    conditioning = H3Conditioning(
+        **{
+            **conditioning.__dict__,
+            "visual_condition_strength": 0.7,
+            "audio_condition_strength": 0.9,
+        }
+    )
+
+    H3TransformerCache(factory).sample(
+        spec, conditioning, H3GenerationConfig(steps=3), unload_after=True
+    )
+    kwargs = created[0].calls[0][2]
+
+    assert kwargs["visual_condition_strength"] == 0.7
+    assert kwargs["audio_condition_strength"] == 0.9
 
 
 def test_transformer_cache_reuses_only_equal_schedule(tmp_path: Path):

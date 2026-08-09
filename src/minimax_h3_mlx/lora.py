@@ -16,6 +16,7 @@ class LoRARequest:
     path: str
     strength: float = 1.0
     adaln_input_grid: str | None = None
+    qkv_layout: str = "native_interleaved"
 
 
 @dataclass(frozen=True)
@@ -26,6 +27,7 @@ class LoRAApplyReport:
     strength: float
     targets: int
     adaln_targets: int
+    qkv_permuted_targets: int
     tensor_bytes: int
 
 
@@ -148,6 +150,59 @@ def _logical_shape(layer) -> tuple[int, int]:
     return int(weight.shape[0]), int(weight.shape[1])
 
 
+def _is_qkv_target(target: str) -> bool:
+    return target == "attn.qkv_proj" or target.endswith(".attn.qkv_proj")
+
+
+def _prepare_lora_b(dit, target: str, b: mx.array, qkv_layout: str) -> tuple[mx.array, bool]:
+    """Convert a fused QKV LoRA output from contiguous Q/K/V rows when requested."""
+    if qkv_layout not in {"native_interleaved", "contiguous_qkv"}:
+        raise ValueError(
+            "MiniMax H3 LoRA QKV layout must be native_interleaved or contiguous_qkv."
+        )
+    if qkv_layout == "native_interleaved" or not _is_qkv_target(target):
+        return b, False
+    heads = int(dit.config.num_attention_heads)
+    head_dim = int(dit.config.attention_head_dim)
+    expected_rows = 3 * heads * head_dim
+    if b.ndim != 2 or int(b.shape[0]) != expected_rows:
+        raise ValueError(
+            f"LoRA target {target!r} cannot convert contiguous QKV rows: expected "
+            f"B shape ({expected_rows}, rank), got {b.shape}."
+        )
+    rank = int(b.shape[1])
+    converted = (
+        b.reshape(3, heads, head_dim, rank)
+        .transpose(1, 0, 2, 3)
+        .reshape(expected_rows, rank)
+    )
+    return converted, True
+
+
+def _prepare_block_lora_b(block, target: str, b: mx.array, qkv_layout: str) -> mx.array:
+    """Apply the same QKV conversion to a single materialized paged block."""
+    if qkv_layout not in {"native_interleaved", "contiguous_qkv"}:
+        raise ValueError(
+            "MiniMax H3 LoRA QKV layout must be native_interleaved or contiguous_qkv."
+        )
+    if qkv_layout == "native_interleaved" or not _is_qkv_target(target):
+        return b
+    heads = int(block.attn.heads)
+    head_dim = int(block.attn.head_dim)
+    expected_rows = 3 * heads * head_dim
+    if b.ndim != 2 or int(b.shape[0]) != expected_rows:
+        raise ValueError(
+            f"LoRA target {target!r} cannot convert contiguous QKV rows: expected "
+            f"B shape ({expected_rows}, rank), got {b.shape}."
+        )
+    rank = int(b.shape[1])
+    return (
+        b.reshape(3, heads, head_dim, rank)
+        .transpose(1, 0, 2, 3)
+        .reshape(expected_rows, rank)
+    )
+
+
 def _load_input_grid(path: str | Path, expected_width: int) -> mx.array:
     values = mx.load(str(path))
     if "silu_t_emb_grid" in values:
@@ -188,11 +243,13 @@ def apply_lora(dit, request: LoRARequest) -> LoRAApplyReport:
 
     prepared: list[tuple[str, _LoRAProjection]] = []
     adaln_targets = 0
+    qkv_permuted_targets = 0
     source_grid = None
     for target, values in sorted(grouped.items()):
         if "a" not in values or "b" not in values:
             raise ValueError(f"LoRA target {target!r} does not contain both A and B tensors.")
         a, b = values["a"], values["b"]
+        b, qkv_permuted = _prepare_lora_b(dit, target, b, request.qkv_layout)
         if a.ndim != 2 or b.ndim != 2 or a.shape[0] != b.shape[1]:
             raise ValueError(
                 f"LoRA target {target!r} has incompatible A/B shapes {a.shape}/{b.shape}."
@@ -225,6 +282,7 @@ def apply_lora(dit, request: LoRARequest) -> LoRAApplyReport:
         scale = request.strength * alpha / max(int(a.shape[0]), 1)
         prepared.append((target, _LoRAProjection(a, b, scale, grid)))
         adaln_targets += int(is_adaln)
+        qkv_permuted_targets += int(qkv_permuted)
 
     for target, adapter in prepared:
         current = _get_target(dit, target)
@@ -240,6 +298,7 @@ def apply_lora(dit, request: LoRARequest) -> LoRAApplyReport:
         strength=request.strength,
         targets=len(prepared),
         adaln_targets=adaln_targets,
+        qkv_permuted_targets=qkv_permuted_targets,
         tensor_bytes=sum(value.nbytes for value in tensors.values()),
     )
 
@@ -284,6 +343,7 @@ def _apply_paged_lora(dit, request: LoRARequest) -> LoRAApplyReport:
     fixed: list[tuple[str, _LoRAProjection]] = []
     source_grid = None
     adaln_targets = 0
+    qkv_permuted_targets = 0
     for target, values in sorted(grouped.items()):
         if "a" not in values or "b" not in values:
             raise ValueError(f"LoRA target {target!r} does not contain both A and B tensors.")
@@ -298,6 +358,7 @@ def _apply_paged_lora(dit, request: LoRARequest) -> LoRAApplyReport:
             layer = _get_target(dit, target)
             is_block = False
         a, b = values["a"], values["b"]
+        b, qkv_permuted = _prepare_lora_b(dit, target, b, request.qkv_layout)
         if a.ndim != 2 or b.ndim != 2 or a.shape[0] != b.shape[1]:
             raise ValueError(
                 f"LoRA target {target!r} has incompatible A/B shapes {a.shape}/{b.shape}."
@@ -335,6 +396,7 @@ def _apply_paged_lora(dit, request: LoRARequest) -> LoRAApplyReport:
         if not is_block:
             fixed.append((target, adapter))
         adaln_targets += int(is_adaln)
+        qkv_permuted_targets += int(qkv_permuted)
 
     for target, adapter in fixed:
         current = _get_target(dit, target)
@@ -354,6 +416,7 @@ def _apply_paged_lora(dit, request: LoRARequest) -> LoRAApplyReport:
         strength=request.strength,
         targets=len(grouped),
         adaln_targets=adaln_targets,
+        qkv_permuted_targets=qkv_permuted_targets,
         tensor_bytes=tensor_bytes,
     )
 
@@ -377,6 +440,7 @@ def apply_paged_loras_to_block(
             grouped.setdefault(target[len(prefix) :], {})[kind] = value
         for target, values in grouped.items():
             a, b = values["a"], values["b"]
+            b = _prepare_block_lora_b(block, target, b, request.qkv_layout)
             alpha = float(values.get("alpha", mx.array(a.shape[0])).item())
             grid = source_grid if ".adaln_proj.linear" in f".{target}" else None
             adapter = _LoRAProjection(

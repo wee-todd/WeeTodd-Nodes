@@ -5,10 +5,11 @@ match — the only tensor the checkpoint carries that the port does not hold is 
 which is recomputed bit-identically from the config.
 
 MiniMax-H3 ships a **mixed-precision** transformer: the two input patch projections, the timestep
-MLP and the two output heads are float32 while everything else (including the AdaLN projections)
-is bfloat16. That split is preserved on load — it is not incidental. The timestep MLP feeds every
-block's modulation, so rounding it biases all 50 blocks identically at every sampling step and the
-error accumulates coherently along the denoising trajectory.
+MLP and the two output heads are float32 while most of the block stack is bfloat16. Curve-form
+inference checkpoints are a special case: their compact AdaLN projections must also execute in
+float32, even when a source file stores those tensors in float16. This split is not incidental.
+The timestep path feeds every block's modulation, so rounding it biases all 50 blocks identically
+at every sampling step and the error accumulates coherently along the denoising trajectory.
 """
 
 from __future__ import annotations
@@ -37,8 +38,20 @@ FP32_PREFIXES = (
 SKIP_KEYS = ("rope.inv_freq",)
 
 
-def is_fp32_key(key: str) -> bool:
-    return key.startswith(FP32_PREFIXES)
+def is_fp32_key(key: str, *, curve_form: bool = False) -> bool:
+    """Return whether ``key`` belongs to an inference-critical float32 island.
+
+    Native curve-form checkpoints replace the full timestep MLP with a sampled curve and declare
+    every AdaLN projection as float32. Some distributed files store the small rank-8 projections
+    in float16, so the loader must restore the runtime precision instead of trusting storage dtype.
+    """
+    return key.startswith(FP32_PREFIXES) or (
+        curve_form
+        and (
+            ".adaln_proj.linear." in key
+            or key.startswith("final_layer.adaln_proj.linear.")
+        )
+    )
 
 
 def shard_paths(model_dir: str | Path) -> list[Path]:
@@ -157,7 +170,9 @@ def load_dit(
                 with mx.stream(mx.cpu):
                     tensor = tensor.astype(dtype)
                     mx.eval(tensor)
-            elif is_fp32_key(key) and tensor.dtype != mx.float32:
+            elif is_fp32_key(
+                key, curve_form=config.adaln_curve_grid is not None
+            ) and tensor.dtype != mx.float32:
                 # Only twelve small tensors; not worth a stream switch.
                 tensor = tensor.astype(mx.float32)
             weights[key] = tensor

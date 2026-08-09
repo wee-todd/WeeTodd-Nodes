@@ -146,6 +146,23 @@ def test_preflight_rejects_wrong_task(tmp_path: Path):
         )
 
 
+def test_preflight_explicitly_allows_fl2va_weights_for_ref2va(tmp_path: Path):
+    root = _component_tree(tmp_path)
+
+    report = preflight_components(
+        H3ComponentSetSpec(
+            str(root),
+            task="ref2va",
+            allow_fl2va_weights_for_ref2va=True,
+        ),
+        H3PreflightRequest(),
+    )
+
+    assert report.task == "ref2va"
+    assert report.partition == "fl2va"
+    assert any("different learned tensor payloads" in warning for warning in report.warnings)
+
+
 def test_preflight_rejects_unsupported_quantization(tmp_path: Path):
     root = _component_tree(tmp_path)
     _json(root / "transformer" / "quant_config.json", {"bits": 3, "group_size": 64})

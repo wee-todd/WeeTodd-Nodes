@@ -2,6 +2,7 @@ import json
 import sys
 from types import SimpleNamespace
 
+import mlx.core as mx
 import numpy as np
 import pytest
 
@@ -13,10 +14,12 @@ from wee_todd_nodes.nodes import (
     WeeToddH3GenerationConfig,
     WeeToddH3KeyframeEncode,
     WeeToddH3LastFrame,
+    WeeToddH3LoRALoader,
     WeeToddH3QuantizedTransformerLoader,
     WeeToddH3ReferenceAudio,
     WeeToddH3ReferenceEncode,
     WeeToddH3ReferenceImage,
+    WeeToddH3ReferenceStrength,
     WeeToddH3ReferenceVideo,
     WeeToddH3TrajectoryForecast,
     _output_directory,
@@ -77,7 +80,7 @@ def test_sampling_metadata_preserves_exact_prompt(monkeypatch):
 
 
 def test_expected_nodes_are_registered():
-    assert len(NODE_CLASS_MAPPINGS) == 30
+    assert len(NODE_CLASS_MAPPINGS) == 31
     assert "WeeToddH3ComponentLoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3QuantizedTransformerLoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3Preflight" in NODE_CLASS_MAPPINGS
@@ -89,6 +92,7 @@ def test_expected_nodes_are_registered():
     assert "WeeToddH3ReferenceAudio" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3KeyframeEncode" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3ReferenceEncode" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3ReferenceStrength" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3TextEncode" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3TrajectoryForecast" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3UnloadTextEncoder" in NODE_CLASS_MAPPINGS
@@ -104,6 +108,57 @@ def test_expected_nodes_are_registered():
     assert "WeeToddH3UnloadAudioVAE" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3PublishVideoAudio" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3DirectPublishLatents" in NODE_CLASS_MAPPINGS
+
+
+def test_lora_loader_exposes_and_reports_turbo_qkv_layout(tmp_path):
+    path = tmp_path / "example_turbo.safetensors"
+    mx.save_safetensors(
+        str(path),
+        {
+            "blocks.0.attn.qkv_proj.lora_A.weight": mx.zeros((1, 2)),
+            "blocks.0.attn.qkv_proj.lora_B.weight": mx.zeros((6, 1)),
+        },
+    )
+    inputs = WeeToddH3LoRALoader.INPUT_TYPES()
+
+    stack, raw_info = WeeToddH3LoRALoader().load(
+        str(path), 1.0, "turbo", qkv_layout="auto"
+    )
+    info = json.loads(raw_info)
+
+    assert inputs["required"]["qkv_layout"][0] == [
+        "auto",
+        "native_interleaved",
+        "contiguous_qkv",
+    ]
+    assert stack.adapters[0].resolved_qkv_layout == "contiguous_qkv"
+    assert info["qkv_layout"] == "contiguous_qkv"
+
+
+def test_reference_strength_node_preserves_defaults_and_warns_for_weak_fl2va():
+    from wee_todd_nodes.conditioning import H3Conditioning, H3TextEncoderSpec
+
+    conditioning = H3Conditioning(
+        embeddings="embeddings",
+        token_tags="tags",
+        token_count=1,
+        prompt="prompt",
+        load_vision=True,
+        encoder_spec=H3TextEncoderSpec("text", "processor", "tokenizer", True),
+        task="fl2va",
+        condition_video_rows="rows",
+        keyframe_anchors=("first", "last"),
+    )
+
+    default, default_info = WeeToddH3ReferenceStrength().configure(conditioning, 0.999, 1.0)
+    weak, weak_info = WeeToddH3ReferenceStrength().configure(conditioning, 0.5, 0.9)
+
+    assert default.visual_condition_strength == 0.999
+    assert default.audio_condition_strength == 1.0
+    assert json.loads(default_info)["warning"] is None
+    assert weak.visual_condition_strength == 0.5
+    assert weak.audio_condition_strength == 0.9
+    assert "last-frame anchor" in json.loads(weak_info)["warning"]
 
 
 def test_keyframe_nodes_emit_explicit_anchor_contracts():
@@ -362,6 +417,20 @@ def test_component_loader_returns_lazy_immutable_spec():
 
     assert spec.task == "t2va"
     assert spec.transformer is None
+    assert spec.allow_fl2va_weights_for_ref2va is False
+
+
+def test_component_loader_exposes_cross_partition_ref2va_opt_in_last():
+    optional = WeeToddH3ComponentLoader.INPUT_TYPES()["optional"]
+    assert list(optional)[-1] == "allow_fl2va_weights_for_ref2va"
+
+    (spec,) = WeeToddH3ComponentLoader().specify(
+        "MiniMax-H3/FL2VA",
+        "ref2va",
+        allow_fl2va_weights_for_ref2va=True,
+    )
+
+    assert spec.allow_fl2va_weights_for_ref2va is True
 
 
 def test_component_loader_resolves_relative_root_below_comfy_models(monkeypatch, tmp_path):
@@ -501,6 +570,7 @@ def test_generation_config_node_returns_validated_value():
     assert config.memory_mode == "low_memory_bf16"
     assert config.attention_query_chunk_size == 1024
     assert config.projection_backend == "mlx"
+    assert config.sampling_method == "euler"
     assert resolved == "1344 × 768 pixels — 16:9 — 768 px short edge"
 
 
@@ -520,6 +590,7 @@ def test_generation_config_exposes_clear_ratio_size_controls():
     assert slider["max"] == 1088
     assert slider["step"] == 32
     assert slider["display"] == "slider"
+    assert inputs["optional"]["sampling_method"][0] == ["euler", "res_multistep"]
 
 
 def test_manual_nonstandard_resolution_records_custom_aspect_ratio():

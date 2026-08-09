@@ -42,6 +42,15 @@ def test_config_rejects_unknown_projection_backend():
         H3GenerationConfig(projection_backend="unknown").validate()
 
 
+def test_config_accepts_res_multistep_sampling():
+    H3GenerationConfig(sampling_method="res_multistep").validate()
+
+
+def test_config_rejects_unknown_sampling_method():
+    with pytest.raises(ValueError, match="sampling_method"):
+        H3GenerationConfig(sampling_method="unknown").validate()
+
+
 @pytest.mark.parametrize("width,height", [(641, 384), (640, 385)])
 def test_config_rejects_unaligned_canvas(width, height):
     with pytest.raises(ValueError, match="divisible by 32"):

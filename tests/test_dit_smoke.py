@@ -184,23 +184,56 @@ def test_transformer_only_ref2va_sampling_keeps_reference_rows_fixed():
         latent_width=2,
         num_audio_latents=2,
     )
-    result = pipeline.sample_latents(
-        mx.random.normal((1, 2, cfg.text_dim)),
-        np.array([TAG_TEXT, TAG_VIDEO], dtype=np.int32),
+    embeddings = mx.random.normal((1, 2, cfg.text_dim))
+    video_condition = mx.random.normal((1, cfg.video_patch_dim))
+    audio_condition = mx.random.normal((4, cfg.audio_latents_dim))
+    arguments = dict(
         duration_seconds=5.0,
         num_inference_steps=3,
+        seed=27,
         height=32,
         width=32,
         drop_adaln=False,
         verbose=False,
-        condition_video_rows=mx.random.normal((1, cfg.video_patch_dim)),
-        condition_audio_rows=mx.random.normal((4, cfg.audio_latents_dim)),
+        condition_video_rows=video_condition,
+        condition_audio_rows=audio_condition,
         references=(reference,),
+    )
+    result = pipeline.sample_latents(
+        embeddings,
+        np.array([TAG_TEXT, TAG_VIDEO], dtype=np.int32),
+        **arguments,
+    )
+    explicit_defaults = pipeline.sample_latents(
+        embeddings,
+        np.array([TAG_TEXT, TAG_VIDEO], dtype=np.int32),
+        visual_condition_strength=0.999,
+        audio_condition_strength=1.0,
+        **arguments,
+    )
+    weakened = pipeline.sample_latents(
+        embeddings,
+        np.array([TAG_TEXT, TAG_VIDEO], dtype=np.int32),
+        visual_condition_strength=0.7,
+        audio_condition_strength=0.8,
+        **arguments,
+    )
+    mx.eval(
+        result.video_latents,
+        result.audio_latents,
+        explicit_defaults.video_latents,
+        explicit_defaults.audio_latents,
+        weakened.video_latents,
+        weakened.audio_latents,
     )
 
     assert result.video_latents.shape == (1, cfg.latents_dim, 37, 2, 2)
     assert result.audio_latents.shape == (2, cfg.audio_latents_dim, 207)
     assert result.transformer_evaluations == 2
+    assert mx.array_equal(result.video_latents, explicit_defaults.video_latents)
+    assert mx.array_equal(result.audio_latents, explicit_defaults.audio_latents)
+    assert not mx.array_equal(result.video_latents, weakened.video_latents)
+    assert not mx.array_equal(result.audio_latents, weakened.audio_latents)
 
 
 def test_h3_easycache_skips_joint_video_audio_evaluation():

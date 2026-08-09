@@ -50,6 +50,7 @@ class H3ComponentSetSpec:
     tokenizer: str | None = None
     video_vae: str | None = None
     audio_vae: str | None = None
+    allow_fl2va_weights_for_ref2va: bool = False
 
     def resolved_paths(self) -> dict[str, Path]:
         root = Path(self.checkpoint).expanduser()
@@ -57,6 +58,39 @@ class H3ComponentSetSpec:
             name: Path(getattr(self, name)).expanduser() if getattr(self, name) else root / name
             for name in COMPONENT_NAMES
         }
+
+
+def validate_task_partition(
+    *,
+    task: str,
+    tasks: list[str],
+    partition: str,
+    allow_fl2va_weights_for_ref2va: bool = False,
+) -> bool:
+    """Validate task metadata and report experimental FL2VA-to-Ref2VA reuse.
+
+    The two official partitions share an architecture and sampling shifts but not identical
+    learned tensors. Reuse therefore remains an explicit compatibility experiment and is
+    never inferred from matching tensor shapes.
+    """
+
+    expected_partition = "ref2va" if task == "ref2va" else "fl2va"
+    if task in tasks and partition == expected_partition:
+        return False
+    compatible = (
+        allow_fl2va_weights_for_ref2va
+        and task == "ref2va"
+        and partition == "fl2va"
+        and "fl2va" in tasks
+    )
+    if compatible:
+        return True
+    if task not in tasks:
+        raise ValueError(f"Checkpoint does not support task {task!r}; supported tasks: {tasks}.")
+    raise ValueError(
+        f"Checkpoint partition must be {expected_partition!r} for task {task!r}, "
+        f"got {partition!r}."
+    )
 
 
 @dataclass(frozen=True)
@@ -493,19 +527,15 @@ def preflight_components(
     tasks = metadata.get("tasks")
     if not isinstance(tasks, list) or not all(isinstance(task, str) for task in tasks):
         raise ValueError("MiniMax H3 model manifest has invalid task metadata.")
-    if spec.task not in tasks:
-        raise ValueError(
-            f"Checkpoint does not support task {spec.task!r}; supported tasks: {tasks}."
-        )
     partition = metadata.get("partition")
     if not isinstance(partition, str) or not partition:
         raise ValueError("MiniMax H3 model manifest has no partition name.")
-    expected_partition = "ref2va" if spec.task == "ref2va" else "fl2va"
-    if partition != expected_partition:
-        raise ValueError(
-            f"Checkpoint partition must be {expected_partition!r} for task {spec.task!r}, "
-            f"got {partition!r}."
-        )
+    experimental_cross_partition = validate_task_partition(
+        task=spec.task,
+        tasks=tasks,
+        partition=partition,
+        allow_fl2va_weights_for_ref2va=spec.allow_fl2va_weights_for_ref2va,
+    )
 
     paths = spec.resolved_paths()
     components = tuple(
@@ -571,6 +601,12 @@ def preflight_components(
         "Memory values are header-based estimates; Metal kernels and allocator fragmentation "
         "can increase peak memory."
     ]
+    if experimental_cross_partition:
+        warnings.append(
+            "Experimental compatibility mode is using FL2VA weights for Ref2VA packing. "
+            "Official FL2VA and Ref2VA checkpoints share an architecture but have different "
+            "learned tensor payloads; validate reference fidelity before production use."
+        )
     if request.width < 768 and request.height < 768:
         warnings.append("The selected canvas is an off-distribution wiring-test size.")
     if headroom is not None and headroom < 0:

@@ -14,18 +14,31 @@ low-memory path that can be tested before enabling optional acceleration.
 - Text-to-video-plus-audio (`t2va`)
 - Experimental first-frame, last-frame, and combined first/last-frame (`fl2va`) conditioning
 - Experimental ordered image, video, soundtrack, and audio reference (`ref2va`) conditioning
+- Independent visual and audio reference-strength control
 - Synchronized H.264 video and 32 kHz stereo AAC audio
-- Thirty composable nodes under `WeeTodd/H3`
+- Thirty-one composable nodes under `WeeTodd/H3`
 
 The FL2VA path stages Qwen3-VL vision and video-VAE encoding before transformer sampling. The
 Ref2VA path stages media preparation, Qwen3-VL vision, video-VAE encoding, audio-VAE encoding, and
-transformer sampling. Each weighted component unloads before the next low-memory stage. Both paths
-have tiny-model and node-contract coverage but still require real-checkpoint smoke tests. The
-current sampler does not provide a live latent preview.
+transformer sampling. Each weighted component unloads before the next low-memory stage. A genuine
+Ref2VA checkpoint remains the intended strict path, but it is not generation-validated in this
+release. One separately compressed Ref2VA checkpoint produced invalid low-variance video at both
+eight and 20 requested schedule points and was rejected. The Component Loader also offers an
+advanced, explicit FL2VA-to-Ref2VA compatibility switch for comparisons when only FL2VA weights
+are installed. That switch is off by default: the official partitions share transformer
+architecture and sampling shifts but contain different learned weights. The current sampler does
+not provide a live latent preview.
 
 Reference images use an output-relative pixel budget. The 100-percent default matches the output
 canvas area while preserving the source aspect ratio. Values from 50 to 400 percent trade
 reference-token cost against source detail; they do not change the output resolution.
+
+Place **Reference Strength** after the FL2VA or Ref2VA encoder to adjust how strongly the sampler
+trusts its prepared condition rows. Visual strength defaults to `0.999`; audio strength defaults to
+`1.0`. Lower values add more seeded noise to that modality. Start with visual values from `0.7` to
+`0.999`. Values below `0.7` can weaken the FL2VA last-frame anchor. Lowering either value can alter
+generated audio because H3 evaluates audio and video jointly. Keep the seed, prompt, and all other
+settings fixed when comparing strengths.
 
 Start with [`fl2va_first_frame_workflow.json`](examples/fl2va_first_frame_workflow.json) for image-
 to-video-plus-audio or [`ref2va_image_workflow.json`](examples/ref2va_image_workflow.json) for one
@@ -231,6 +244,26 @@ same prompt and seed with replay disabled before adopting the mode.
 The optional MPP projection backend targets speed for eligible BF16 projections. It does not lower
 the measured MLX peak and is not part of the minimum-memory workflow. Q4 artifacts are not
 published or supported.
+
+### Turbo LoRA compatibility
+
+The LoRA Loader keeps adapter updates in activation space. Do not fuse a small Turbo update into a
+BF16 base weight because BF16 rounding can remove most of the update.
+
+Turbo adapters that use contiguous Q, K, and V output rows require conversion to the transformer's
+per-head interleaved row layout. The `auto` QKV layout selects this conversion for the Turbo
+profile. Generation metadata reports the resolved layout and the number of converted QKV targets.
+Use `native_interleaved` only when the adapter publisher confirms that layout.
+
+The four tested Turbo adapter variants contain 52 fused-QKV targets. The two full Turbo variants
+also contain 51 AdaLN targets. The two lighter FL variants omit AdaLN.
+
+A same-seed 640 by 480 validation loaded all 259 targets from a full Turbo adapter and converted all
+52 QKV targets. The resident BF16 run sampled in 128.47 seconds and reached a 49.52 GB complete
+ComfyUI process peak. A dual-paged Q8 run sampled in 157.19 seconds and reached 14.94 GB. Both runs
+produced valid 124-frame H.264 video with stereo 32-kHz AAC audio and 8.3 milliseconds of drift.
+The outputs are not a numerical parity comparison because the paged run also uses quantized
+transformer, text-encoder, and video-VAE components.
 
 ## Troubleshooting
 

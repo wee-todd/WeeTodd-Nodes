@@ -258,6 +258,17 @@ class WeeToddH3ComponentLoader:
                 "tokenizer": ("STRING", {"default": ""}),
                 "video_vae": ("STRING", {"default": ""}),
                 "audio_vae": ("STRING", {"default": ""}),
+                "allow_fl2va_weights_for_ref2va": (
+                    "BOOLEAN",
+                    {
+                        "default": False,
+                        "advanced": True,
+                        "tooltip": (
+                            "Experimental: run Ref2VA packing with an FL2VA checkpoint. "
+                            "The official partitions share an architecture but not weights."
+                        ),
+                    },
+                ),
             },
         }
 
@@ -277,6 +288,7 @@ class WeeToddH3ComponentLoader:
         tokenizer="",
         video_vae="",
         audio_vae="",
+        allow_fl2va_weights_for_ref2va=False,
     ):
         return (
             H3ComponentSetSpec(
@@ -292,6 +304,7 @@ class WeeToddH3ComponentLoader:
                 tokenizer=(_resolve_component_root(tokenizer, "tokenizer") if tokenizer else None),
                 video_vae=(_resolve_component_root(video_vae, "video_vae") if video_vae else None),
                 audio_vae=(_resolve_component_root(audio_vae, "audio_vae") if audio_vae else None),
+                allow_fl2va_weights_for_ref2va=bool(allow_fl2va_weights_for_ref2va),
             ),
         )
 
@@ -454,6 +467,12 @@ class WeeToddH3FirstLastFrame:
 def _append_reference(previous_references, reference):
     stack = (previous_references or H3ReferenceStack()).append(reference)
     return stack, json.dumps(stack.metadata(), indent=2, sort_keys=True)
+
+
+def _checkpoint_task_policy(components) -> str:
+    if getattr(components, "allow_fl2va_weights_for_ref2va", False):
+        return "experimental_fl2va_weights_for_ref2va"
+    return "strict_manifest"
 
 
 class WeeToddH3ReferenceImage:
@@ -712,9 +731,7 @@ class WeeToddH3ReferenceEncode:
             check_interrupted()
 
         def prepare_video_stage():
-            staged["video_vae"] = list(
-                prepare_low_memory_stage("video_vae", config.memory_mode)
-            )
+            staged["video_vae"] = list(prepare_low_memory_stage("video_vae", config.memory_mode))
 
         video_rows = VIDEO_VAE_RUNTIME.encode_references(
             H3VideoVAESpec.from_components(components),
@@ -726,6 +743,7 @@ class WeeToddH3ReferenceEncode:
 
         audio_rows = None
         if any(reference.has_audio for reference in prepared):
+
             def prepare_audio_stage():
                 staged["audio_vae"] = list(
                     prepare_low_memory_stage("audio_vae", config.memory_mode)
@@ -770,6 +788,78 @@ class WeeToddH3ReferenceEncode:
             "audio_vae_resident": AUDIO_VAE_RUNTIME.loaded,
         }
         return conditioning, json.dumps(info, indent=2, sort_keys=True)
+
+
+class WeeToddH3ReferenceStrength:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "conditioning": ("WEETODD_H3_CONDITIONING",),
+                "visual_strength": (
+                    "FLOAT",
+                    {
+                        "default": 0.999,
+                        "min": 0.0,
+                        "max": 1.0,
+                        "step": 0.001,
+                        "tooltip": (
+                            "Lower values add more noise to image and video conditioning. "
+                            "For FL2VA, values below 0.7 can weaken the last-frame anchor."
+                        ),
+                    },
+                ),
+                "audio_strength": (
+                    "FLOAT",
+                    {
+                        "default": 1.0,
+                        "min": 0.0,
+                        "max": 1.0,
+                        "step": 0.001,
+                        "tooltip": (
+                            "1.0 keeps reference audio clean. Lower values add seeded noise and "
+                            "can change generated audio as well as motion."
+                        ),
+                    },
+                ),
+            }
+        }
+
+    RETURN_TYPES = ("WEETODD_H3_CONDITIONING", "STRING")
+    RETURN_NAMES = ("conditioning", "strength_info")
+    FUNCTION = "configure"
+    CATEGORY = "WeeTodd/H3/conditioning"
+    DESCRIPTION = (
+        "Adjust how strongly FL2VA or Ref2VA trusts visual and audio condition rows. "
+        "Defaults preserve the released H3 behavior."
+    )
+
+    def configure(self, conditioning, visual_strength, audio_strength):
+        if conditioning.task not in {"fl2va", "ref2va"}:
+            raise ValueError("H3 reference strength requires FL2VA or Ref2VA conditioning.")
+        for name, value in (
+            ("visual_strength", visual_strength),
+            ("audio_strength", audio_strength),
+        ):
+            if not 0.0 <= value <= 1.0:
+                raise ValueError(f"H3 {name} must be between 0 and 1.")
+        warning = None
+        if conditioning.task == "fl2va" and visual_strength < 0.7:
+            warning = "Visual strength below 0.7 can weaken or remove the last-frame anchor."
+        configured = replace(
+            conditioning,
+            visual_condition_strength=float(visual_strength),
+            audio_condition_strength=float(audio_strength),
+        )
+        info = {
+            "task": conditioning.task,
+            "visual_strength": configured.visual_condition_strength,
+            "audio_strength": configured.audio_condition_strength,
+            "visual_noise_fraction": 1.0 - configured.visual_condition_strength,
+            "audio_noise_fraction": 1.0 - configured.audio_condition_strength,
+            "warning": warning,
+        }
+        return configured, json.dumps(info, indent=2, sort_keys=True)
 
 
 class WeeToddH3TextEncode:
@@ -930,6 +1020,7 @@ class WeeToddH3Sample:
         info = {
             "prompt": conditioning.prompt,
             "task": conditioning.task,
+            "checkpoint_task_policy": _checkpoint_task_policy(components),
             "keyframe_anchors": list(conditioning.keyframe_anchors),
             "references": [
                 {
@@ -939,6 +1030,10 @@ class WeeToddH3Sample:
                 }
                 for reference in conditioning.references
             ],
+            "reference_strength": {
+                "visual": conditioning.visual_condition_strength,
+                "audio": conditioning.audio_condition_strength,
+            },
             "frames": latents.num_frames,
             "width": latents.width,
             "height": latents.height,
@@ -984,6 +1079,7 @@ class WeeToddH3Sample:
             "total_seconds": latents.total_seconds,
             "transformer_resident": TRANSFORMER_RUNTIME.loaded,
             "memory_mode": config.memory_mode,
+            "sampling_method": config.sampling_method,
             "attention_query_chunk_size": config.attention_query_chunk_size,
             "compute_dtype": "bfloat16",
             "projection_backend": getattr(latents, "projection_backend_report", None),
@@ -1019,6 +1115,16 @@ class WeeToddH3LoRALoader:
                         ),
                     },
                 ),
+                "qkv_layout": (
+                    ["auto", "native_interleaved", "contiguous_qkv"],
+                    {
+                        "default": "auto",
+                        "tooltip": (
+                            "Turbo adapters normally use contiguous Q/K/V rows and are converted "
+                            "to the H3 MLX per-head layout. Override only for a verified adapter."
+                        ),
+                    },
+                ),
             },
             "optional": {"previous_loras": ("WEETODD_H3_LORAS",)},
         }
@@ -1032,7 +1138,15 @@ class WeeToddH3LoRALoader:
         "adapter tensors only when the H3 transformer executes."
     )
 
-    def load(self, lora_name, strength, profile, adaln_input_grid="", previous_loras=None):
+    def load(
+        self,
+        lora_name,
+        strength,
+        profile,
+        adaln_input_grid="",
+        qkv_layout="auto",
+        previous_loras=None,
+    ):
         from .lora import H3LoRASpec, H3LoRAStack
 
         path = _resolve_lora_path(lora_name)
@@ -1045,12 +1159,14 @@ class WeeToddH3LoRALoader:
             strength=strength,
             profile=profile,
             adaln_input_grid=str(grid) if grid is not None else None,
+            qkv_layout=qkv_layout,
         )
         stack = (previous_loras or H3LoRAStack()).append(spec)
         info = {
             "file": path.name,
             "strength": strength,
             "profile": spec.resolved_profile,
+            "qkv_layout": spec.resolved_qkv_layout,
             "tensor_bytes": spec.tensor_bytes,
             "adaln_input_grid": grid.name if grid is not None else None,
             "stack_size": len(stack.adapters),
@@ -1698,6 +1814,7 @@ class WeeToddH3PublishVideoAudio:
             "components": {
                 "checkpoint": Path(components.checkpoint).name,
                 "task": components.task,
+                "checkpoint_task_policy": _checkpoint_task_policy(components),
                 **{name: path.name for name, path in component_paths.items()},
             },
             "software": {
@@ -1820,6 +1937,7 @@ class WeeToddH3DirectPublishLatents:
             "components": {
                 "checkpoint": Path(components.checkpoint).name,
                 "task": components.task,
+                "checkpoint_task_policy": _checkpoint_task_policy(components),
                 **{name: path.name for name, path in component_paths.items()},
             },
             "software": {
@@ -1980,7 +2098,17 @@ class WeeToddH3GenerationConfig:
                             "compatible width and height live in the ComfyUI node."
                         ),
                     },
-                )
+                ),
+                "sampling_method": (
+                    ["euler", "res_multistep"],
+                    {
+                        "default": "euler",
+                        "tooltip": (
+                            "Use res_multistep for the native H3 base-model quality regime; "
+                            "Euler remains available for established Turbo and benchmark recipes."
+                        ),
+                    },
+                ),
             },
         }
 
@@ -2009,6 +2137,7 @@ class WeeToddH3GenerationConfig:
         attention_chunk_size="automatic",
         projection_backend="mlx",
         short_edge=None,
+        sampling_method="euler",
     ):
         width, height = _resolve_h3_resolution(
             resolution_mode,
@@ -2034,6 +2163,7 @@ class WeeToddH3GenerationConfig:
             memory_mode=memory_mode,
             attention_chunk_size=attention_chunk_size,
             projection_backend=projection_backend,
+            sampling_method=sampling_method,
         )
         config.validate()
         if ratio_mode:
@@ -2139,6 +2269,7 @@ NODE_CLASS_MAPPINGS = {
     "WeeToddH3ReferenceAudio": WeeToddH3ReferenceAudio,
     "WeeToddH3KeyframeEncode": WeeToddH3KeyframeEncode,
     "WeeToddH3ReferenceEncode": WeeToddH3ReferenceEncode,
+    "WeeToddH3ReferenceStrength": WeeToddH3ReferenceStrength,
     "WeeToddH3TextEncode": WeeToddH3TextEncode,
     "WeeToddH3UnloadTextEncoder": WeeToddH3UnloadTextEncoder,
     "WeeToddH3Sample": WeeToddH3Sample,
@@ -2171,6 +2302,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "WeeToddH3ReferenceAudio": "WeeTodd H3 Reference Audio",
     "WeeToddH3KeyframeEncode": "WeeTodd H3 Encode First / Last Frames",
     "WeeToddH3ReferenceEncode": "WeeTodd H3 Encode References",
+    "WeeToddH3ReferenceStrength": "WeeTodd H3 Reference Strength",
     "WeeToddH3TextEncode": "WeeTodd H3 Text Encode (Qwen3-VL)",
     "WeeToddH3UnloadTextEncoder": "WeeTodd H3 Unload Qwen3-VL",
     "WeeToddH3Sample": "WeeTodd H3 Sample Video + Audio Latents",

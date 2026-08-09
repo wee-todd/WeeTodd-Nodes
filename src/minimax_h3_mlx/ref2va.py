@@ -157,7 +157,7 @@ def encode_reference_video_rows(
     patch_size: tuple[int, int, int],
 ) -> mx.array | None:
     """Encode image and video references into normalized, packed H3 video rows."""
-    from .packing import KEYFRAME_ENCODE_SEED, PIXEL_MEAN, PIXEL_STD, patchify_video_latents
+    from .packing import PIXEL_MEAN, PIXEL_STD, patchify_video_latents
 
     cfg = video_vae.config
     latent_mean = mx.array(np.asarray(cfg.latents_mean, dtype=np.float32)).reshape(
@@ -168,7 +168,6 @@ def encode_reference_video_rows(
     )
     pixel_mean = np.asarray(PIXEL_MEAN, dtype=np.float32).reshape(1, 3, 1, 1, 1)
     pixel_std = np.asarray(PIXEL_STD, dtype=np.float32).reshape(1, 3, 1, 1, 1)
-    mx.random.seed(KEYFRAME_ENCODE_SEED)
     rows = []
     for reference in references:
         if reference.kind == "audio":
@@ -186,9 +185,9 @@ def encode_reference_video_rows(
             normalized = (pixels / 255.0 - pixel_mean) / pixel_std
             moments = video_vae.encode(mx.array(normalized))
         channels = cfg.latent_channels
-        mean, logvar = moments[:, :channels], moments[:, channels:]
-        latent = mean + mx.exp(0.5 * mx.clip(logvar, -30.0, 20.0)) * mx.random.normal(mean.shape)
-        latent = latent.astype(mx.float16).astype(mx.float32)
+        # Ref2VA uses the deterministic posterior mean. FL2VA keyframes use a seeded posterior
+        # sample, but carrying that behavior across tasks destabilizes genuine Ref2VA weights.
+        latent = moments[:, :channels].astype(mx.float32)
         reference.num_latent_frames = int(latent.shape[2])
         reference.latent_height = int(latent.shape[3])
         reference.latent_width = int(latent.shape[4])

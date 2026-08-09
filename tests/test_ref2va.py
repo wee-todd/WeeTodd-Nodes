@@ -1,16 +1,47 @@
 import mlx.core as mx
 import numpy as np
 import pytest
+from PIL import Image
 
 from minimax_h3_mlx.config import TAG_AUDIO, TAG_TEXT, TAG_VIDEO
 from minimax_h3_mlx.packing import build_row_timesteps
+from minimax_h3_mlx.pipeline import MiniMaxH3Pipeline
 from minimax_h3_mlx.ref2va import (
     PreparedReference,
     build_ref2va_packed_sequence,
+    encode_reference_video_rows,
     validate_reference_set,
 )
 
 PATCH = (1, 2, 2)
+
+
+def test_ref2va_image_encoding_uses_posterior_mean_not_sample():
+    class Config:
+        latent_channels = 1
+        latents_mean = [0.0]
+        latents_std = [1.0]
+
+    class FakeVAE:
+        config = Config()
+
+        def _encode_clip(self, pixels):
+            del pixels
+            # Channel-last moments: mean=3, log-variance=20. A sampled posterior would be random
+            # and far from three; Ref2VA must ignore the log-variance half.
+            mean = mx.full((1, 1, 2, 2, 1), 3.0)
+            logvar = mx.full((1, 1, 2, 2, 1), 20.0)
+            return mx.concatenate([mean, logvar], axis=-1)
+
+    reference = PreparedReference("image", image=Image.new("RGB", (32, 32)))
+    rows = encode_reference_video_rows(FakeVAE(), [reference], PATCH)
+
+    np.testing.assert_array_equal(np.asarray(rows), np.full((1, 4), 3.0, dtype=np.float32))
+    assert (reference.num_latent_frames, reference.latent_height, reference.latent_width) == (
+        1,
+        2,
+        2,
+    )
 
 
 def test_reference_set_rejects_audio_only_request():
@@ -101,4 +132,41 @@ def test_ref2va_row_timesteps_keep_all_reference_rows_conditioned():
     np.testing.assert_array_equal(
         np.asarray(rows)[audio_indices[layout.num_condition_audio_rows :]],
         0.25,
+    )
+
+
+def test_reference_strength_timestep_plan_tracks_schedule_above_requested_floor():
+    layout = build_ref2va_packed_sequence(
+        [TAG_TEXT],
+        [PreparedReference("video", 1, 4, 4, num_audio_latents=1)],
+        num_latent_frames=1,
+        latent_height=4,
+        latent_width=4,
+        num_audio_latents=1,
+        patch_size=PATCH,
+    )
+    table, plans = MiniMaxH3Pipeline._row_timestep_plan(
+        None,
+        layout,
+        mx.array([0.8, 0.2]),
+        mx.array([0.6, 0.1]),
+        visual_condition_strength=0.7,
+        audio_condition_strength=0.4,
+    )
+    first = mx.take(table, plans[0])
+    second = mx.take(table, plans[1])
+    video_indices = np.asarray(layout.video_indices)
+    audio_indices = np.asarray(layout.audio_indices)
+
+    np.testing.assert_allclose(
+        np.asarray(first)[video_indices[: layout.num_condition_video_rows]], 0.8
+    )
+    np.testing.assert_allclose(
+        np.asarray(second)[video_indices[: layout.num_condition_video_rows]], 0.7
+    )
+    np.testing.assert_allclose(
+        np.asarray(first)[audio_indices[: layout.num_condition_audio_rows]], 0.6
+    )
+    np.testing.assert_allclose(
+        np.asarray(second)[audio_indices[: layout.num_condition_audio_rows]], 0.4
     )

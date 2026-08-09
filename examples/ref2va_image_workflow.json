@@ -5,7 +5,7 @@
     {
       "id": 1, "type": "WeeToddH3ComponentLoader", "pos": [40, 80], "size": [360, 300], "flags": {}, "order": 0, "mode": 0, "inputs": [],
       "outputs": [{"name": "components", "type": "WEETODD_H3_COMPONENTS", "links": [3, 6, 9], "slot_index": 0}], "properties": {"Node name for S&R": "WeeToddH3ComponentLoader"},
-      "widgets_values": ["MiniMax-H3/Ref2VA", "ref2va", "", "", "", "", "", ""]
+      "widgets_values": ["MiniMax-H3/Ref2VA", "ref2va", "", "", "", "", "", "", false]
     },
     {
       "id": 2, "type": "WeeToddH3GenerationConfig", "pos": [40, 430], "size": [360, 300], "flags": {}, "order": 1, "mode": 0, "inputs": [],

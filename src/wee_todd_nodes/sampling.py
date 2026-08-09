@@ -12,7 +12,7 @@ from typing import Any
 
 from .conditioning import H3Conditioning, H3TextEncoderSpec
 from .lora import H3LoRAStack
-from .preflight import H3ComponentSetSpec
+from .preflight import H3ComponentSetSpec, validate_task_partition
 from .runtime import H3GenerationConfig
 
 
@@ -29,6 +29,7 @@ class H3TransformerSpec:
     audio_vae: str
     task: str
     text_encoder_config: str | None = None
+    allow_fl2va_weights_for_ref2va: bool = False
 
     @classmethod
     def from_components(cls, components: H3ComponentSetSpec) -> H3TransformerSpec:
@@ -44,6 +45,7 @@ class H3TransformerSpec:
             audio_vae=str(paths["audio_vae"]),
             task=components.task,
             text_encoder_config=encoder_spec.config_path,
+            allow_fl2va_weights_for_ref2va=components.allow_fl2va_weights_for_ref2va,
         )
 
     def validate(self) -> None:
@@ -59,12 +61,17 @@ class H3TransformerSpec:
         manifest = json.loads((root / "model_index.json").read_text())
         metadata = manifest.get("_minimax_h3", {})
         tasks = metadata.get("tasks", [])
-        if self.task not in tasks:
-            raise ValueError(
-                f"Checkpoint does not support task {self.task!r}; supported tasks: {tasks}."
-            )
         if self.task not in {"t2va", "fl2va", "ref2va"}:
             raise ValueError(f"The transformer sampler does not support task {self.task!r}.")
+        partition = metadata.get("partition")
+        if not isinstance(partition, str) or not partition:
+            raise ValueError("MiniMax H3 model manifest has no partition name.")
+        validate_task_partition(
+            task=self.task,
+            tasks=tasks,
+            partition=partition,
+            allow_fl2va_weights_for_ref2va=self.allow_fl2va_weights_for_ref2va,
+        )
 
 
 @dataclass(frozen=True)
@@ -136,7 +143,7 @@ class H3TransformerCache:
         self._lock = RLock()
         self._factory = factory or _default_sampler_factory
         self._spec: H3TransformerSpec | None = None
-        self._schedule_key: tuple[int, bool, str, str] | None = None
+        self._schedule_key: tuple[int, bool, str, str, str] | None = None
         self._lora_key = None
         self._lora_report: tuple[dict[str, Any], ...] = ()
         self._projection_backend_report: dict[str, Any] | None = None
@@ -202,6 +209,7 @@ class H3TransformerCache:
             config.drop_adaln,
             config.memory_mode,
             config.projection_backend,
+            config.sampling_method,
         )
         loras = loras or H3LoRAStack()
         loras.validate_for_steps(config.steps)
@@ -284,6 +292,9 @@ class H3TransformerCache:
                     condition_audio_rows=conditioning.condition_audio_rows,
                     keyframe_anchors=conditioning.keyframe_anchors,
                     references=conditioning.references,
+                    sampling_method=config.sampling_method,
+                    visual_condition_strength=conditioning.visual_condition_strength,
+                    audio_condition_strength=conditioning.audio_condition_strength,
                 )
                 from minimax_h3_mlx.projection import mpp_runtime_status
 

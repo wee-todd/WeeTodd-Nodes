@@ -246,14 +246,18 @@ def test_paged_block_lora_matches_resident_adapter(tmp_path):
     convert_to_paged_checkpoint(source, paged_dir)
     paged = load_paged_dit(paged_dir, window_size=2)
     adapter_path = tmp_path / "adapter.safetensors"
+    output_width = 3 * config.num_attention_heads * config.attention_head_dim
     mx.save_safetensors(
         str(adapter_path),
         {
-            "blocks.0.attn.out_proj.lora_A.weight": mx.full((2, 64), 0.01),
-            "blocks.0.attn.out_proj.lora_B.weight": mx.full((64, 2), 0.02),
+            "blocks.0.attn.qkv_proj.lora_A.weight": mx.full((2, 64), 0.01),
+            "blocks.0.attn.qkv_proj.lora_B.weight": mx.arange(
+                output_width * 2, dtype=mx.float32
+            ).reshape(output_width, 2)
+            / output_width,
         },
     )
-    request = LoRARequest(str(adapter_path), strength=0.75)
+    request = LoRARequest(str(adapter_path), strength=0.75, qkv_layout="contiguous_qkv")
     apply_lora(resident, request)
     apply_lora(paged, request)
 

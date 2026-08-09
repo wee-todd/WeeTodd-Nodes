@@ -39,6 +39,41 @@ def test_generic_lora_runs_as_activation_space_update(tmp_path):
     assert report.targets == 1
     assert projection_weight_shape(model.blocks[0].attn.out_proj) == list(layer.weight.shape)
     assert report.adaln_targets == 0
+    assert report.qkv_permuted_targets == 0
+
+
+def test_turbo_qkv_lora_converts_contiguous_rows_to_native_head_layout(tmp_path):
+    model = MiniMaxH3DiT(tiny_config())
+    layer = model.blocks[0].attn.qkv_proj
+    heads = model.config.num_attention_heads
+    head_dim = model.config.attention_head_dim
+    output_width = 3 * heads * head_dim
+    rank = 1
+    value = mx.ones((1, model.config.hidden_size), dtype=mx.float32)
+    base = layer(value)
+    a = mx.ones((rank, model.config.hidden_size), dtype=mx.float32)
+    contiguous_b = mx.arange(output_width, dtype=mx.float32).reshape(output_width, rank)
+    expected_b = (
+        contiguous_b.reshape(3, heads, head_dim, rank)
+        .transpose(1, 0, 2, 3)
+        .reshape(output_width, rank)
+    )
+    path = tmp_path / "turbo_qkv.safetensors"
+    _save(
+        path,
+        {
+            "blocks.0.attn.qkv_proj.lora_A.weight": a,
+            "blocks.0.attn.qkv_proj.lora_B.weight": contiguous_b,
+        },
+    )
+
+    report = apply_lora(model, LoRARequest(str(path), qkv_layout="contiguous_qkv"))
+    output = model.blocks[0].attn.qkv_proj(value)
+    expected = base + ((value @ a.T) @ expected_b.T).astype(base.dtype)
+    mx.eval(output, expected)
+
+    assert mx.array_equal(output, expected)
+    assert report.qkv_permuted_targets == 1
 
 
 def test_generic_lora_targets_quantized_projection_by_logical_width(tmp_path):
@@ -135,7 +170,10 @@ def test_lazy_lora_stack_validates_headers_and_turbo_steps(tmp_path):
     stack = H3LoRAStack().append(spec)
 
     assert spec.resolved_profile == "turbo"
+    assert spec.resolved_qkv_layout == "contiguous_qkv"
+    assert spec.engine_request()["qkv_layout"] == "contiguous_qkv"
     assert stack.metadata()[0]["file"] == path.name
+    assert stack.metadata()[0]["qkv_layout"] == "contiguous_qkv"
     with pytest.raises(ValueError, match="at least five"):
         stack.validate_for_steps(4)
     stack.validate_for_steps(5)
