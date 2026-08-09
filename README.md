@@ -12,11 +12,24 @@ low-memory path that can be tested before enabling optional acceleration.
 - Python 3.11 or later in the ComfyUI environment
 - MLX 0.32.0 or later
 - Text-to-video-plus-audio (`t2va`)
+- Experimental first-frame, last-frame, and combined first/last-frame (`fl2va`) conditioning
+- Experimental ordered image, video, soundtrack, and audio reference (`ref2va`) conditioning
 - Synchronized H.264 video and 32 kHz stereo AAC audio
-- Twenty-two composable nodes under `WeeTodd/H3`
+- Thirty composable nodes under `WeeTodd/H3`
 
-First-frame, last-frame, combined first/last-frame, and reference-conditioning nodes are not yet
-registered. The current sampler does not provide a live latent preview.
+The FL2VA path stages Qwen3-VL vision and video-VAE encoding before transformer sampling. The
+Ref2VA path stages media preparation, Qwen3-VL vision, video-VAE encoding, audio-VAE encoding, and
+transformer sampling. Each weighted component unloads before the next low-memory stage. Both paths
+have tiny-model and node-contract coverage but still require real-checkpoint smoke tests. The
+current sampler does not provide a live latent preview.
+
+Reference images use an output-relative pixel budget. The 100-percent default matches the output
+canvas area while preserving the source aspect ratio. Values from 50 to 400 percent trade
+reference-token cost against source detail; they do not change the output resolution.
+
+Start with [`fl2va_first_frame_workflow.json`](examples/fl2va_first_frame_workflow.json) for image-
+to-video-plus-audio or [`ref2va_image_workflow.json`](examples/ref2va_image_workflow.json) for one
+ordered image reference. Replace the placeholder input image and edit the prompt before queuing.
 
 ## Install
 
@@ -276,7 +289,7 @@ python scripts/lint_docs.py
 ```
 
 The published artifacts were also tested by a complete authenticated download into a clean
-ComfyUI 0.30.0 installation. All remote inventories and weight hashes matched, all 22 nodes
+ComfyUI 0.30.0 installation. All remote inventories and weight hashes matched, all 22 baseline nodes
 registered, the supplied graph contracts validated, and header-only component preflight passed.
 No generation is started by preflight.
 

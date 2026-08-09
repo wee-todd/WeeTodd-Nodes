@@ -7,6 +7,7 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 from .conditioning import TEXT_ENCODER_RUNTIME, H3TextEncoderSpec
+from .conditioning_inputs import H3KeyframeConditioning, H3ReferenceInput, H3ReferenceStack
 from .decoding import (
     AUDIO_VAE_RUNTIME,
     VIDEO_VAE_RUNTIME,
@@ -399,6 +400,378 @@ class WeeToddH3Preflight:
         return components, json.dumps(payload, indent=2, sort_keys=True)
 
 
+class WeeToddH3FirstFrame:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {"first_frame": ("IMAGE",)}}
+
+    RETURN_TYPES = ("WEETODD_H3_KEYFRAMES", "STRING")
+    RETURN_NAMES = ("keyframes", "keyframe_info")
+    FUNCTION = "configure"
+    CATEGORY = "WeeTodd/H3/conditioning"
+    DESCRIPTION = "Use one image as the first-frame endpoint for an FL2VA generation."
+
+    def configure(self, first_frame):
+        conditioning = H3KeyframeConditioning(first_frame=first_frame)
+        return conditioning, json.dumps(conditioning.metadata(), indent=2, sort_keys=True)
+
+
+class WeeToddH3LastFrame:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {"last_frame": ("IMAGE",)}}
+
+    RETURN_TYPES = ("WEETODD_H3_KEYFRAMES", "STRING")
+    RETURN_NAMES = ("keyframes", "keyframe_info")
+    FUNCTION = "configure"
+    CATEGORY = "WeeTodd/H3/conditioning"
+    DESCRIPTION = "Use one image as the last-frame endpoint for an FL2VA generation."
+
+    def configure(self, last_frame):
+        conditioning = H3KeyframeConditioning(last_frame=last_frame)
+        return conditioning, json.dumps(conditioning.metadata(), indent=2, sort_keys=True)
+
+
+class WeeToddH3FirstLastFrame:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {"first_frame": ("IMAGE",), "last_frame": ("IMAGE",)}}
+
+    RETURN_TYPES = ("WEETODD_H3_KEYFRAMES", "STRING")
+    RETURN_NAMES = ("keyframes", "keyframe_info")
+    FUNCTION = "configure"
+    CATEGORY = "WeeTodd/H3/conditioning"
+    DESCRIPTION = "Use two images as the first-frame and last-frame endpoints for FL2VA."
+
+    def configure(self, first_frame, last_frame):
+        conditioning = H3KeyframeConditioning(
+            first_frame=first_frame,
+            last_frame=last_frame,
+        )
+        return conditioning, json.dumps(conditioning.metadata(), indent=2, sort_keys=True)
+
+
+def _append_reference(previous_references, reference):
+    stack = (previous_references or H3ReferenceStack()).append(reference)
+    return stack, json.dumps(stack.metadata(), indent=2, sort_keys=True)
+
+
+class WeeToddH3ReferenceImage:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image": ("IMAGE",),
+                "pixel_budget_percent": (
+                    "INT",
+                    {
+                        "default": 100,
+                        "min": 50,
+                        "max": 400,
+                        "step": 10,
+                        "display": "slider",
+                    },
+                ),
+            },
+            "optional": {"previous_references": ("WEETODD_H3_REFERENCES",)},
+        }
+
+    RETURN_TYPES = ("WEETODD_H3_REFERENCES", "STRING")
+    RETURN_NAMES = ("references", "reference_info")
+    FUNCTION = "append"
+    CATEGORY = "WeeTodd/H3/conditioning"
+    DESCRIPTION = (
+        "Append an image identity, subject, style, or scene reference. Reference order controls "
+        "the prompt labels and packed rotary positions. A 100% pixel budget matches the output "
+        "canvas area; lower values reduce persistent reference tokens and higher values retain "
+        "more source detail."
+    )
+
+    def append(self, image, pixel_budget_percent, previous_references=None):
+        return _append_reference(
+            previous_references,
+            H3ReferenceInput(
+                "image",
+                image,
+                image_pixel_budget_percent=pixel_budget_percent,
+            ),
+        )
+
+
+class WeeToddH3ReferenceVideo:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "video_frames": ("IMAGE",),
+                "fps": ("FLOAT", {"default": 24.0, "min": 0.01, "max": 240.0, "step": 0.01}),
+            },
+            "optional": {
+                "soundtrack": ("AUDIO",),
+                "previous_references": ("WEETODD_H3_REFERENCES",),
+            },
+        }
+
+    RETURN_TYPES = ("WEETODD_H3_REFERENCES", "STRING")
+    RETURN_NAMES = ("references", "reference_info")
+    FUNCTION = "append"
+    CATEGORY = "WeeTodd/H3/conditioning"
+    DESCRIPTION = (
+        "Append a video motion and camera reference, with an optional synchronized soundtrack. "
+        "Supply the source frame rate explicitly."
+    )
+
+    def append(self, video_frames, fps, soundtrack=None, previous_references=None):
+        return _append_reference(
+            previous_references,
+            H3ReferenceInput("video", video_frames, fps=fps, soundtrack=soundtrack),
+        )
+
+
+class WeeToddH3ReferenceAudio:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {"audio": ("AUDIO",)},
+            "optional": {"previous_references": ("WEETODD_H3_REFERENCES",)},
+        }
+
+    RETURN_TYPES = ("WEETODD_H3_REFERENCES", "STRING")
+    RETURN_NAMES = ("references", "reference_info")
+    FUNCTION = "append"
+    CATEGORY = "WeeTodd/H3/conditioning"
+    DESCRIPTION = (
+        "Append a standalone voice, sound, or music reference. Ref2VA also requires at least "
+        "one image or video reference."
+    )
+
+    def append(self, audio, previous_references=None):
+        return _append_reference(previous_references, H3ReferenceInput("audio", audio))
+
+
+class WeeToddH3KeyframeEncode:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "components": ("WEETODD_H3_COMPONENTS",),
+                "config": ("WEETODD_H3_CONFIG",),
+                "keyframes": ("WEETODD_H3_KEYFRAMES",),
+                "prompt": ("STRING", {"multiline": True, "dynamicPrompts": True}),
+            }
+        }
+
+    RETURN_TYPES = ("WEETODD_H3_CONDITIONING", "STRING")
+    RETURN_NAMES = ("conditioning", "conditioning_info")
+    FUNCTION = "encode"
+    CATEGORY = "WeeTodd/H3/conditioning"
+    DESCRIPTION = (
+        "Encode FL2VA prompt vision rows and first/last-frame VAE rows in separate staged phases. "
+        "Each weighted component unloads before the next phase."
+    )
+
+    def encode(self, components, config, keyframes, prompt):
+        if components.task != "fl2va":
+            raise ValueError("H3 keyframe encoding requires an FL2VA component set.")
+        config.validate()
+        keyframes.validate()
+        check_interrupted = None
+        try:
+            import comfy.model_management
+
+            check_interrupted = comfy.model_management.throw_exception_if_processing_interrupted
+        except ImportError:
+            pass
+        if check_interrupted is not None:
+            check_interrupted()
+
+        from minimax_h3_mlx.packing import prepare_keyframe_image
+
+        images = [
+            prepare_keyframe_image(
+                image,
+                config.height,
+                config.width,
+                stretch=anchor == "first",
+            )
+            for anchor, image in zip(keyframes.anchors, keyframes.images(), strict=True)
+        ]
+        text_releases = ()
+        video_vae_releases = ()
+
+        def prepare_text_stage():
+            nonlocal text_releases
+            text_releases = prepare_low_memory_stage("text_encoder", config.memory_mode)
+
+        conditioning = TEXT_ENCODER_RUNTIME.encode(
+            H3TextEncoderSpec.from_components(components, load_vision=True),
+            prompt,
+            images=images,
+            task="fl2va",
+            unload_after=True,
+            prepare_stage=prepare_text_stage,
+        )
+        if check_interrupted is not None:
+            check_interrupted()
+
+        def prepare_video_vae_stage():
+            nonlocal video_vae_releases
+            video_vae_releases = prepare_low_memory_stage("video_vae", config.memory_mode)
+
+        rows = VIDEO_VAE_RUNTIME.encode_keyframes(
+            H3VideoVAESpec.from_components(components),
+            images,
+            height=config.height,
+            width=config.width,
+            unload_after=True,
+            check_interrupted=check_interrupted,
+            prepare_stage=prepare_video_vae_stage,
+        )
+        conditioning = replace(
+            conditioning,
+            condition_video_rows=rows,
+            keyframe_anchors=keyframes.anchors,
+        )
+        info = {
+            "task": "fl2va",
+            "prompt": prompt,
+            "token_count": conditioning.token_count,
+            "anchors": list(keyframes.anchors),
+            "condition_video_rows": int(rows.shape[0]),
+            "vision_loaded": True,
+            "encoder_resident": TEXT_ENCODER_RUNTIME.loaded,
+            "video_vae_resident": VIDEO_VAE_RUNTIME.loaded,
+            "staged_releases": {
+                "text_encoder": list(text_releases),
+                "video_vae": list(video_vae_releases),
+            },
+        }
+        return conditioning, json.dumps(info, indent=2, sort_keys=True)
+
+
+class WeeToddH3ReferenceEncode:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "components": ("WEETODD_H3_COMPONENTS",),
+                "config": ("WEETODD_H3_CONFIG",),
+                "references": ("WEETODD_H3_REFERENCES",),
+                "prompt": ("STRING", {"multiline": True, "dynamicPrompts": True}),
+            }
+        }
+
+    RETURN_TYPES = ("WEETODD_H3_CONDITIONING", "STRING")
+    RETURN_NAMES = ("conditioning", "conditioning_info")
+    FUNCTION = "encode"
+    CATEGORY = "WeeTodd/H3/conditioning"
+    DESCRIPTION = (
+        "Prepare ordered Ref2VA media, then stage Qwen3-VL, the video VAE, and the audio VAE. "
+        "Each weighted component unloads before the next stage."
+    )
+
+    def encode(self, components, config, references, prompt):
+        if components.task != "ref2va":
+            raise ValueError("H3 reference encoding requires a Ref2VA component set.")
+        config.validate()
+        references.validate_request()
+        check_interrupted = None
+        try:
+            import comfy.model_management
+
+            check_interrupted = comfy.model_management.throw_exception_if_processing_interrupted
+        except ImportError:
+            pass
+        if check_interrupted is not None:
+            check_interrupted()
+
+        from minimax_h3_mlx.packing import align_num_frames
+
+        num_frames = align_num_frames(round(config.duration_seconds * 24))
+        prepared = references.prepare(
+            target_width=config.width,
+            target_height=config.height,
+            target_num_frames=num_frames,
+        )
+        staged = {}
+
+        def prepare_text_stage():
+            staged["text_encoder"] = list(
+                prepare_low_memory_stage("text_encoder", config.memory_mode)
+            )
+
+        conditioning = TEXT_ENCODER_RUNTIME.encode(
+            H3TextEncoderSpec.from_components(components, load_vision=True),
+            prompt,
+            references=prepared,
+            task="ref2va",
+            unload_after=True,
+            prepare_stage=prepare_text_stage,
+        )
+        if check_interrupted is not None:
+            check_interrupted()
+
+        def prepare_video_stage():
+            staged["video_vae"] = list(
+                prepare_low_memory_stage("video_vae", config.memory_mode)
+            )
+
+        video_rows = VIDEO_VAE_RUNTIME.encode_references(
+            H3VideoVAESpec.from_components(components),
+            prepared,
+            unload_after=True,
+            check_interrupted=check_interrupted,
+            prepare_stage=prepare_video_stage,
+        )
+
+        audio_rows = None
+        if any(reference.has_audio for reference in prepared):
+            def prepare_audio_stage():
+                staged["audio_vae"] = list(
+                    prepare_low_memory_stage("audio_vae", config.memory_mode)
+                )
+
+            audio_rows = AUDIO_VAE_RUNTIME.encode_references(
+                H3AudioVAESpec.from_components(components),
+                prepared,
+                unload_after=True,
+                check_interrupted=check_interrupted,
+                prepare_stage=prepare_audio_stage,
+            )
+
+        conditioning = replace(
+            conditioning,
+            condition_video_rows=video_rows,
+            condition_audio_rows=audio_rows,
+            references=tuple(prepared),
+        )
+        info = {
+            "task": "ref2va",
+            "prompt": prompt,
+            "token_count": conditioning.token_count,
+            "reference_count": len(prepared),
+            "condition_video_rows": int(video_rows.shape[0]),
+            "condition_audio_rows": 0 if audio_rows is None else int(audio_rows.shape[0]),
+            "references": [
+                {
+                    **metadata,
+                    "latent_frames": reference.num_latent_frames,
+                    "latent_height": reference.latent_height,
+                    "latent_width": reference.latent_width,
+                    "audio_latents": reference.num_audio_latents,
+                }
+                for metadata, reference in zip(
+                    references.metadata()["references"], prepared, strict=True
+                )
+            ],
+            "staged_releases": staged,
+            "encoder_resident": TEXT_ENCODER_RUNTIME.loaded,
+            "video_vae_resident": VIDEO_VAE_RUNTIME.loaded,
+            "audio_vae_resident": AUDIO_VAE_RUNTIME.loaded,
+        }
+        return conditioning, json.dumps(info, indent=2, sort_keys=True)
+
+
 class WeeToddH3TextEncode:
     @classmethod
     def INPUT_TYPES(cls):
@@ -556,6 +929,16 @@ class WeeToddH3Sample:
         )
         info = {
             "prompt": conditioning.prompt,
+            "task": conditioning.task,
+            "keyframe_anchors": list(conditioning.keyframe_anchors),
+            "references": [
+                {
+                    "kind": reference.kind,
+                    "video_rows": reference.video_rows((1, 2, 2)),
+                    "audio_rows": reference.audio_rows,
+                }
+                for reference in conditioning.references
+            ],
             "frames": latents.num_frames,
             "width": latents.width,
             "height": latents.height,
@@ -1748,6 +2131,14 @@ NODE_CLASS_MAPPINGS = {
     "WeeToddH3ComponentLoader": WeeToddH3ComponentLoader,
     "WeeToddH3QuantizedTransformerLoader": WeeToddH3QuantizedTransformerLoader,
     "WeeToddH3Preflight": WeeToddH3Preflight,
+    "WeeToddH3FirstFrame": WeeToddH3FirstFrame,
+    "WeeToddH3LastFrame": WeeToddH3LastFrame,
+    "WeeToddH3FirstLastFrame": WeeToddH3FirstLastFrame,
+    "WeeToddH3ReferenceImage": WeeToddH3ReferenceImage,
+    "WeeToddH3ReferenceVideo": WeeToddH3ReferenceVideo,
+    "WeeToddH3ReferenceAudio": WeeToddH3ReferenceAudio,
+    "WeeToddH3KeyframeEncode": WeeToddH3KeyframeEncode,
+    "WeeToddH3ReferenceEncode": WeeToddH3ReferenceEncode,
     "WeeToddH3TextEncode": WeeToddH3TextEncode,
     "WeeToddH3UnloadTextEncoder": WeeToddH3UnloadTextEncoder,
     "WeeToddH3Sample": WeeToddH3Sample,
@@ -1772,6 +2163,14 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "WeeToddH3ComponentLoader": "WeeTodd H3 Component Loader",
     "WeeToddH3QuantizedTransformerLoader": "WeeTodd H3 Quantized Transformer Loader",
     "WeeToddH3Preflight": "WeeTodd H3 Component Preflight",
+    "WeeToddH3FirstFrame": "WeeTodd H3 First Frame",
+    "WeeToddH3LastFrame": "WeeTodd H3 Last Frame",
+    "WeeToddH3FirstLastFrame": "WeeTodd H3 First + Last Frame",
+    "WeeToddH3ReferenceImage": "WeeTodd H3 Reference Image",
+    "WeeToddH3ReferenceVideo": "WeeTodd H3 Reference Video",
+    "WeeToddH3ReferenceAudio": "WeeTodd H3 Reference Audio",
+    "WeeToddH3KeyframeEncode": "WeeTodd H3 Encode First / Last Frames",
+    "WeeToddH3ReferenceEncode": "WeeTodd H3 Encode References",
     "WeeToddH3TextEncode": "WeeTodd H3 Text Encode (Qwen3-VL)",
     "WeeToddH3UnloadTextEncoder": "WeeTodd H3 Unload Qwen3-VL",
     "WeeToddH3Sample": "WeeTodd H3 Sample Video + Audio Latents",

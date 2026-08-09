@@ -1,9 +1,12 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from wee_todd_nodes.nodes import NODE_CLASS_MAPPINGS
 
 ROOT = Path(__file__).parents[1]
+CORE_NODES = {"LoadImage"}
 
 
 def test_t2va_api_prompt_uses_registered_nodes_and_staged_unloading():
@@ -127,6 +130,34 @@ def test_low_memory_paged_ui_workflow_links_are_consistent():
     ]
     assert nodes[6]["type"] == "WeeToddH3DirectPublishLatents"
     for link_id, origin_id, origin_slot, target_id, target_slot, link_type in links.values():
+        assert link_id in nodes[origin_id]["outputs"][origin_slot]["links"]
+        target_input = nodes[target_id]["inputs"][target_slot]
+        assert target_input["link"] == link_id
+        assert target_input["type"] == link_type
+
+
+@pytest.mark.parametrize(
+    "name, conditioning_node",
+    [
+        ("fl2va_first_frame", "WeeToddH3KeyframeEncode"),
+        ("ref2va_image", "WeeToddH3ReferenceEncode"),
+    ],
+)
+def test_conditioning_api_examples_use_current_nodes(name, conditioning_node):
+    prompt = json.loads((ROOT / "examples" / f"{name}_api.json").read_text())
+    classes = {node["class_type"] for node in prompt.values()}
+    assert classes <= set(NODE_CLASS_MAPPINGS) | CORE_NODES
+    assert conditioning_node in classes
+    assert prompt["6"]["inputs"]["unload_after_sample"] is True
+    assert prompt["7"]["class_type"] == "WeeToddH3DirectPublishLatents"
+
+
+@pytest.mark.parametrize("name", ["fl2va_first_frame", "ref2va_image"])
+def test_conditioning_ui_examples_have_consistent_links(name):
+    workflow = json.loads((ROOT / "examples" / f"{name}_workflow.json").read_text())
+    nodes = {node["id"]: node for node in workflow["nodes"]}
+    assert {node["type"] for node in nodes.values()} <= set(NODE_CLASS_MAPPINGS) | CORE_NODES
+    for link_id, origin_id, origin_slot, target_id, target_slot, link_type in workflow["links"]:
         assert link_id in nodes[origin_id]["outputs"][origin_slot]["links"]
         target_input = nodes[target_id]["inputs"][target_slot]
         assert target_input["link"] == link_id

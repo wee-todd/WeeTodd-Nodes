@@ -18,6 +18,7 @@ from minimax_h3_mlx.config import TAG_AUDIO, TAG_TEXT, TAG_VIDEO, DiTConfig
 from minimax_h3_mlx.dit import MiniMaxH3DiT
 from minimax_h3_mlx.easycache import H3EasyCacheConfig
 from minimax_h3_mlx.pipeline import MiniMaxH3Pipeline
+from minimax_h3_mlx.ref2va import PreparedReference
 from minimax_h3_mlx.trajectory_forecast import H3TrajectoryForecastConfig
 
 
@@ -170,6 +171,36 @@ def test_transformer_only_text_sampling_shapes():
     assert result.audio_latents.shape == (2, cfg.audio_latents_dim, 207)
     assert result.transformer_evaluations == 2
     assert progress == [(0, 2), (1, 2), (2, 2)]
+
+
+def test_transformer_only_ref2va_sampling_keeps_reference_rows_fixed():
+    cfg = tiny_config()
+    mx.random.seed(14)
+    pipeline = MiniMaxH3Pipeline(MiniMaxH3DiT(cfg), None, None, None)
+    reference = PreparedReference(
+        "video",
+        num_latent_frames=1,
+        latent_height=2,
+        latent_width=2,
+        num_audio_latents=2,
+    )
+    result = pipeline.sample_latents(
+        mx.random.normal((1, 2, cfg.text_dim)),
+        np.array([TAG_TEXT, TAG_VIDEO], dtype=np.int32),
+        duration_seconds=5.0,
+        num_inference_steps=3,
+        height=32,
+        width=32,
+        drop_adaln=False,
+        verbose=False,
+        condition_video_rows=mx.random.normal((1, cfg.video_patch_dim)),
+        condition_audio_rows=mx.random.normal((4, cfg.audio_latents_dim)),
+        references=(reference,),
+    )
+
+    assert result.video_latents.shape == (1, cfg.latents_dim, 37, 2, 2)
+    assert result.audio_latents.shape == (2, cfg.audio_latents_dim, 207)
+    assert result.transformer_evaluations == 2
 
 
 def test_h3_easycache_skips_joint_video_audio_evaluation():

@@ -4,8 +4,11 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
+from minimax_h3_mlx.ref2va import PreparedReference
+from minimax_h3_mlx.text_encoder import MiniMaxH3TextEncoder
 from wee_todd_nodes.conditioning import H3TextEncoderCache, H3TextEncoderSpec
 from wee_todd_nodes.preflight import H3ComponentSetSpec
 
@@ -25,6 +28,71 @@ class FakeEncoder:
         if self.fail:
             raise RuntimeError("synthetic encoder failure")
         return "live-mlx-embeddings", _Tags()
+
+
+def test_ref2va_request_uses_independent_labels_and_ordered_visual_units():
+    calls = []
+
+    class Tokenizer:
+        tokens = {
+            "<|vision_start|>": 100,
+            "<|vision_end|>": 101,
+            "<|image_pad|>": 200,
+            "<|video_pad|>": 201,
+        }
+
+        def convert_tokens_to_ids(self, value):
+            return self.tokens[value]
+
+        def __call__(self, value, add_special_tokens=False):
+            calls.append(value)
+            return {"input_ids": [1000 + len(calls)]}
+
+    class ImageProcessor:
+        merge_size = 2
+
+        def __call__(self, **kwargs):
+            return {
+                "pixel_values": np.zeros((4, 3), dtype=np.float32),
+                "image_grid_thw": np.array([[1, 2, 2]], dtype=np.int32),
+            }
+
+    class VideoProcessor:
+        def __call__(self, **kwargs):
+            return {
+                "pixel_values_videos": np.zeros((4, 3), dtype=np.float32),
+                "video_grid_thw": np.array([[1, 2, 2]], dtype=np.int32),
+            }
+
+    encoder = object.__new__(MiniMaxH3TextEncoder)
+    encoder._tokenizer = Tokenizer()
+    encoder._processor = SimpleNamespace(
+        image_processor=ImageProcessor(), video_processor=VideoProcessor()
+    )
+    encoder.merge_size = 2
+    encoder.image_token_id = 200
+    references = [
+        PreparedReference("audio", waveform=np.zeros((2, 3200), dtype=np.float32)),
+        PreparedReference("image", image=np.zeros((32, 32, 3), dtype=np.uint8)),
+        PreparedReference(
+            "video",
+            frames=np.zeros((13, 32, 32, 3), dtype=np.uint8),
+            waveform=np.zeros((2, 3200), dtype=np.float32),
+        ),
+    ]
+
+    _, tags, units = encoder._build_reference_request("prompt", references)
+
+    assert calls == [
+        "<Audio 1>: ",
+        "<Picture 1>: ",
+        "<Audio 2>: ",
+        "<Video 1>: ",
+        "<0.2 seconds>",
+        "prompt",
+    ]
+    assert [unit[0] for unit in units] == [200, 201]
+    assert np.count_nonzero(tags == 0) == 6
 
 
 def _spec(tmp_path: Path, name="encoder") -> H3TextEncoderSpec:
@@ -223,7 +291,7 @@ def test_comfy_entrypoint_imports_without_mlx():
         "submodule_search_locations=[str(root)]); "
         "module=importlib.util.module_from_spec(spec); "
         "sys.modules[spec.name]=module; spec.loader.exec_module(module); "
-        "assert len(module.NODE_CLASS_MAPPINGS) == 22; "
+        "assert len(module.NODE_CLASS_MAPPINGS) == 30; "
         "assert 'mlx' not in sys.modules and 'mlx.core' not in sys.modules"
     )
 

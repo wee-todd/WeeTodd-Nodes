@@ -169,6 +169,96 @@ class H3VideoVAECache:
                 self._release_locked()
             return result
 
+    def encode_keyframes(
+        self,
+        spec: H3VideoVAESpec,
+        images: list[Any],
+        *,
+        height: int,
+        width: int,
+        patch_size: tuple[int, int, int] = (1, 2, 2),
+        unload_after: bool = True,
+        check_interrupted: Callable[[], None] | None = None,
+        prepare_stage: Callable[[], None] | None = None,
+    ) -> Any:
+        """Encode normalized FL2VA keyframe rows with staged VAE residency."""
+        if not images:
+            raise ValueError("FL2VA keyframe encoding requires at least one image.")
+        if len(images) > 2:
+            raise ValueError("FL2VA supports at most a first frame and a last frame.")
+        spec.validate()
+        if prepare_stage is not None:
+            prepare_stage()
+        with self._lock:
+            if self._vae is None or self._spec != spec:
+                self._release_locked()
+                self._vae = self._factory(spec)
+                self._spec = spec
+            try:
+                if check_interrupted is not None:
+                    check_interrupted()
+                from minimax_h3_mlx.pipeline import encode_keyframe_rows
+
+                rows = encode_keyframe_rows(
+                    self._vae,
+                    images,
+                    height,
+                    width,
+                    patch_size,
+                )
+                try:
+                    import mlx.core as mx
+
+                    mx.eval(rows)
+                except ImportError:
+                    pass
+                if check_interrupted is not None:
+                    check_interrupted()
+            except BaseException:
+                self._release_locked()
+                raise
+            if unload_after:
+                self._release_locked()
+            return rows
+
+    def encode_references(
+        self,
+        spec: H3VideoVAESpec,
+        references: list[Any],
+        *,
+        patch_size: tuple[int, int, int] = (1, 2, 2),
+        unload_after: bool = True,
+        check_interrupted: Callable[[], None] | None = None,
+        prepare_stage: Callable[[], None] | None = None,
+    ) -> Any:
+        """Encode Ref2VA image and video rows with staged VAE residency."""
+        spec.validate()
+        if prepare_stage is not None:
+            prepare_stage()
+        with self._lock:
+            if self._vae is None or self._spec != spec:
+                self._release_locked()
+                self._vae = self._factory(spec)
+                self._spec = spec
+            try:
+                if check_interrupted is not None:
+                    check_interrupted()
+                from minimax_h3_mlx.ref2va import encode_reference_video_rows
+
+                rows = encode_reference_video_rows(self._vae, references, patch_size)
+                if rows is not None:
+                    import mlx.core as mx
+
+                    mx.eval(rows)
+                if check_interrupted is not None:
+                    check_interrupted()
+            except BaseException:
+                self._release_locked()
+                raise
+            if unload_after:
+                self._release_locked()
+            return rows
+
     def _decode_normalized(self, normalized: Any, num_frames: int) -> Any:
         import mlx.core as mx
         import numpy as np
@@ -417,6 +507,43 @@ class H3AudioVAECache:
             if unload_after or latents.generation_config.memory_mode == "low_memory_bf16":
                 self._release_locked()
             return result
+
+    def encode_references(
+        self,
+        spec: H3AudioVAESpec,
+        references: list[Any],
+        *,
+        unload_after: bool = True,
+        check_interrupted: Callable[[], None] | None = None,
+        prepare_stage: Callable[[], None] | None = None,
+    ) -> Any:
+        """Encode clean Ref2VA soundtrack rows with staged audio-VAE residency."""
+        spec.validate()
+        if prepare_stage is not None:
+            prepare_stage()
+        with self._lock:
+            if self._vae is None or self._spec != spec:
+                self._release_locked()
+                self._vae = self._factory(spec)
+                self._spec = spec
+            try:
+                if check_interrupted is not None:
+                    check_interrupted()
+                from minimax_h3_mlx.ref2va import encode_reference_audio_rows
+
+                rows = encode_reference_audio_rows(self._vae, references)
+                if rows is not None:
+                    import mlx.core as mx
+
+                    mx.eval(rows)
+                if check_interrupted is not None:
+                    check_interrupted()
+            except BaseException:
+                self._release_locked()
+                raise
+            if unload_after:
+                self._release_locked()
+            return rows
 
     def _decode_normalized(self, normalized: Any) -> Any:
         import mlx.core as mx

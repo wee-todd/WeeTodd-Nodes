@@ -70,7 +70,16 @@ def _spec(tmp_path: Path, task="t2va") -> H3TransformerSpec:
     )
 
 
-def _conditioning(spec: H3TransformerSpec, load_vision=False) -> H3Conditioning:
+def _conditioning(
+    spec: H3TransformerSpec,
+    load_vision=False,
+    *,
+    task="t2va",
+    condition_video_rows=None,
+    condition_audio_rows=None,
+    keyframe_anchors=(),
+    references=(),
+) -> H3Conditioning:
     root = Path(spec.checkpoint)
     for name in ("text_encoder", "processor", "tokenizer"):
         (root / name).mkdir(exist_ok=True)
@@ -85,7 +94,13 @@ def _conditioning(spec: H3TransformerSpec, load_vision=False) -> H3Conditioning:
             text_encoder=str(root / "text_encoder"),
             processor=str(root / "processor"),
             tokenizer=str(root / "tokenizer"),
+            load_vision=load_vision,
         ),
+        task=task,
+        condition_video_rows=condition_video_rows,
+        condition_audio_rows=condition_audio_rows,
+        keyframe_anchors=keyframe_anchors,
+        references=references,
     )
 
 
@@ -291,15 +306,77 @@ def test_transformer_sampler_rejects_non_text_conditioning(tmp_path: Path):
     assert called is False
 
 
-def test_transformer_sampler_rejects_non_t2va_task(tmp_path: Path):
-    cache = H3TransformerCache(lambda spec: FakeSampler(spec))
+def test_transformer_sampler_accepts_prepared_ref2va_conditioning(tmp_path: Path):
+    created = []
 
+    def factory(spec):
+        sampler = FakeSampler(spec)
+        created.append(sampler)
+        return sampler
+
+    cache = H3TransformerCache(factory)
+    spec = _spec(tmp_path, task="ref2va")
+    reference = SimpleNamespace(kind="image")
+    conditioning = _conditioning(
+        spec,
+        load_vision=True,
+        task="ref2va",
+        condition_video_rows="reference-video-rows",
+        condition_audio_rows="reference-audio-rows",
+        references=(reference,),
+    )
+
+    result = cache.sample(spec, conditioning, H3GenerationConfig(steps=3))
+
+    assert result.transformer_evaluations == 2
+    kwargs = created[0].calls[0][2]
+    assert kwargs["condition_video_rows"] == "reference-video-rows"
+    assert kwargs["condition_audio_rows"] == "reference-audio-rows"
+    assert kwargs["references"] == (reference,)
+
+
+def test_transformer_sampler_accepts_prepared_fl2va_conditioning(tmp_path: Path):
+    created = []
+
+    def factory(spec):
+        sampler = FakeSampler(spec)
+        created.append(sampler)
+        return sampler
+
+    cache = H3TransformerCache(factory)
     spec = _spec(tmp_path, task="fl2va")
-    with pytest.raises(ValueError, match="supports the t2va task only"):
+    conditioning = _conditioning(
+        spec,
+        load_vision=True,
+        task="fl2va",
+        condition_video_rows="encoded-keyframe-rows",
+        keyframe_anchors=("first", "last"),
+    )
+
+    result = cache.sample(spec, conditioning, H3GenerationConfig(steps=3))
+
+    assert result.transformer_evaluations == 2
+    assert created[0].calls[0][2]["condition_video_rows"] == "encoded-keyframe-rows"
+    assert created[0].calls[0][2]["keyframe_anchors"] == ("first", "last")
+
+
+def test_fl2va_baseline_rejects_acceleration_until_validated(tmp_path: Path):
+    cache = H3TransformerCache(lambda spec: FakeSampler(spec))
+    spec = _spec(tmp_path, task="fl2va")
+    conditioning = _conditioning(
+        spec,
+        load_vision=True,
+        task="fl2va",
+        condition_video_rows="encoded-keyframe-rows",
+        keyframe_anchors=("first",),
+    )
+
+    with pytest.raises(ValueError, match="does not support cache or trajectory"):
         cache.sample(
             spec,
-            _conditioning(spec),
+            conditioning,
             H3GenerationConfig(steps=3),
+            blockcache=H3BlockCacheConfig(),
         )
 
 

@@ -63,8 +63,8 @@ class H3TransformerSpec:
             raise ValueError(
                 f"Checkpoint does not support task {self.task!r}; supported tasks: {tasks}."
             )
-        if self.task != "t2va":
-            raise ValueError("The first transformer sampler supports the t2va task only.")
+        if self.task not in {"t2va", "fl2va", "ref2va"}:
+            raise ValueError(f"The transformer sampler does not support task {self.task!r}.")
 
 
 @dataclass(frozen=True)
@@ -163,13 +163,34 @@ class H3TransformerCache:
     ) -> H3Latents:
         spec.validate()
         config.validate()
-        if conditioning.load_vision:
-            raise ValueError("The first transformer sampler accepts text-only conditioning.")
+        expected_vision = spec.task in {"fl2va", "ref2va"}
+        if conditioning.task != spec.task:
+            raise ValueError(
+                f"Conditioning task {conditioning.task!r} does not match "
+                f"component task {spec.task!r}."
+            )
+        if conditioning.load_vision != expected_vision:
+            requirement = "vision" if expected_vision else "text-only"
+            raise ValueError(f"The {spec.task} sampler requires {requirement} conditioning.")
+        if spec.task == "t2va" and (
+            conditioning.condition_video_rows is not None or conditioning.keyframe_anchors
+        ):
+            raise ValueError("T2VA conditioning cannot contain first/last-frame rows.")
+        if spec.task == "fl2va" and (
+            conditioning.condition_video_rows is None or not conditioning.keyframe_anchors
+        ):
+            raise ValueError("FL2VA conditioning requires encoded first/last-frame rows.")
+        if spec.task == "ref2va" and (
+            conditioning.condition_video_rows is None or not conditioning.references
+        ):
+            raise ValueError("Ref2VA conditioning requires encoded visual reference rows.")
+        if spec.task == "ref2va" and conditioning.keyframe_anchors:
+            raise ValueError("Ref2VA conditioning cannot contain first/last-frame anchors.")
         expected_encoder = H3TextEncoderSpec(
             text_encoder=spec.text_encoder,
             processor=spec.processor,
             tokenizer=spec.tokenizer,
-            load_vision=False,
+            load_vision=expected_vision,
             config_path=spec.text_encoder_config,
         )
         if conditioning.encoder_spec != expected_encoder:
@@ -204,6 +225,10 @@ class H3TransformerCache:
         if accelerators > 1:
             raise ValueError(
                 "EasyCache, BlockCache, and Trajectory Forecast are mutually exclusive."
+            )
+        if spec.task != "t2va" and accelerators:
+            raise ValueError(
+                "The first FL2VA baseline does not support cache or trajectory acceleration."
             )
         if prepare_stage is not None:
             prepare_stage()
@@ -255,6 +280,10 @@ class H3TransformerCache:
                     easycache_config=easycache,
                     blockcache_config=blockcache,
                     trajectory_forecast_config=trajectory_forecast,
+                    condition_video_rows=conditioning.condition_video_rows,
+                    condition_audio_rows=conditioning.condition_audio_rows,
+                    keyframe_anchors=conditioning.keyframe_anchors,
+                    references=conditioning.references,
                 )
                 from minimax_h3_mlx.projection import mpp_runtime_status
 

@@ -1,0 +1,394 @@
+"""Lightweight ComfyUI input contracts for H3 keyframes and Ref2VA references."""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass
+from typing import Any, Literal
+
+REFERENCE_PIXEL_BUDGET_MIN = 50
+REFERENCE_PIXEL_BUDGET_MAX = 400
+REFERENCE_CANVAS_MULTIPLE = 32
+
+
+def resolve_reference_image_canvas(
+    source_width: int,
+    source_height: int,
+    target_width: int,
+    target_height: int,
+    pixel_budget_percent: int,
+) -> tuple[int, int]:
+    """Preserve source aspect while scaling its area relative to the output canvas."""
+    values = (source_width, source_height, target_width, target_height)
+    if any(value < 1 for value in values):
+        raise ValueError("Reference and target image dimensions must be positive.")
+    if not REFERENCE_PIXEL_BUDGET_MIN <= pixel_budget_percent <= REFERENCE_PIXEL_BUDGET_MAX:
+        raise ValueError(
+            "Reference image pixel budget must be between "
+            f"{REFERENCE_PIXEL_BUDGET_MIN}% and {REFERENCE_PIXEL_BUDGET_MAX}%."
+        )
+    aspect = source_width / source_height
+    if not 0.25 <= aspect <= 4.0:
+        raise ValueError("H3 reference image aspect ratio must be between 1:4 and 4:1.")
+    pixel_budget = target_width * target_height * pixel_budget_percent / 100.0
+    width = math.sqrt(pixel_budget * aspect)
+    height = math.sqrt(pixel_budget / aspect)
+    multiple = REFERENCE_CANVAS_MULTIPLE
+    resolved_width = max(multiple, round(width / multiple) * multiple)
+    resolved_height = max(multiple, round(height / multiple) * multiple)
+    return resolved_width, resolved_height
+
+
+def _shape(value: Any, subject: str) -> tuple[int, ...]:
+    shape = getattr(value, "shape", None)
+    if shape is None:
+        raise ValueError(f"{subject} must be a ComfyUI tensor.")
+    return tuple(int(dimension) for dimension in shape)
+
+
+def _validate_image(value: Any, subject: str, *, video: bool = False) -> tuple[int, ...]:
+    shape = _shape(value, subject)
+    if len(shape) != 4 or shape[-1] < 3:
+        raise ValueError(
+            f"{subject} must have ComfyUI IMAGE shape (frames, height, width, channels)."
+        )
+    if shape[0] < (5 if video else 1) or shape[1] < 1 or shape[2] < 1:
+        minimum = "at least five frames" if video else "one image"
+        raise ValueError(f"{subject} must contain {minimum} with positive dimensions.")
+    return shape
+
+
+def _validate_audio(value: Any, subject: str) -> tuple[int, int, int, int]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{subject} must be a ComfyUI AUDIO value.")
+    waveform = value.get("waveform")
+    sample_rate = value.get("sample_rate")
+    shape = _shape(waveform, f"{subject} waveform")
+    if len(shape) != 3 or shape[0] < 1 or shape[1] not in {1, 2} or shape[2] < 1:
+        raise ValueError(
+            f"{subject} waveform must have shape (batch, mono-or-stereo channels, samples)."
+        )
+    if not isinstance(sample_rate, int) or sample_rate < 1:
+        raise ValueError(f"{subject} sample rate must be a positive integer.")
+    return shape[0], shape[1], shape[2], sample_rate
+
+
+def comfy_image_to_pil(value: Any, subject: str):
+    """Convert the first image of a ComfyUI IMAGE batch at the explicit host boundary."""
+    _validate_image(value, subject)
+    import numpy as np
+    from PIL import Image
+
+    frame = value[0]
+    detach = getattr(frame, "detach", None)
+    if detach is not None:
+        frame = detach()
+    cpu = getattr(frame, "cpu", None)
+    if cpu is not None:
+        frame = cpu()
+    pixels = np.asarray(frame)
+    if pixels.dtype != np.uint8:
+        pixels = np.rint(np.clip(pixels, 0.0, 1.0) * 255.0).astype(np.uint8)
+    return Image.fromarray(pixels[..., :3], mode="RGB")
+
+
+def _comfy_frames_to_uint8(value: Any, subject: str):
+    """Convert one ComfyUI IMAGE batch to channels-last uint8 frames."""
+    _validate_image(value, subject, video=True)
+    import numpy as np
+
+    frames = value
+    detach = getattr(frames, "detach", None)
+    if detach is not None:
+        frames = detach()
+    cpu = getattr(frames, "cpu", None)
+    if cpu is not None:
+        frames = cpu()
+    frames = np.asarray(frames)
+    if frames.dtype != np.uint8:
+        frames = np.rint(np.clip(frames, 0.0, 1.0) * 255.0).astype(np.uint8)
+    return np.ascontiguousarray(frames[..., :3])
+
+
+def _comfy_audio_to_numpy(value: Any, subject: str):
+    """Convert the first ComfyUI audio batch to stereo float32 samples."""
+    import numpy as np
+
+    _, channels, _, sample_rate = _validate_audio(value, subject)
+    waveform = value["waveform"][0]
+    detach = getattr(waveform, "detach", None)
+    if detach is not None:
+        waveform = detach()
+    cpu = getattr(waveform, "cpu", None)
+    if cpu is not None:
+        waveform = cpu()
+    waveform = np.asarray(waveform, dtype=np.float32)
+    if channels == 1:
+        waveform = np.repeat(waveform, 2, axis=0)
+    return np.ascontiguousarray(waveform), sample_rate
+
+
+def _resample_waveform(waveform, source_rate: int, target_rate: int):
+    """Resample a short reference waveform at the host boundary."""
+    if source_rate == target_rate:
+        return waveform
+    try:
+        import torch
+        import torchaudio.functional
+
+        result = torchaudio.functional.resample(
+            torch.from_numpy(waveform), source_rate, target_rate
+        )
+        return result.numpy()
+    except (ImportError, OSError) as error:
+        raise ImportError(
+            "Ref2VA audio resampling requires torchaudio. Supply 32 kHz reference audio or "
+            "install a torchaudio build compatible with the ComfyUI Python environment."
+        ) from error
+
+
+@dataclass(frozen=True)
+class H3KeyframeConditioning:
+    """Optional first and last frames for the FL2VA checkpoint."""
+
+    first_frame: Any | None = None
+    last_frame: Any | None = None
+
+    def validate(self) -> None:
+        if self.first_frame is None and self.last_frame is None:
+            raise ValueError(
+                "H3 keyframe conditioning requires a first frame, a last frame, or both."
+            )
+        if self.first_frame is not None:
+            _validate_image(self.first_frame, "H3 first frame")
+        if self.last_frame is not None:
+            _validate_image(self.last_frame, "H3 last frame")
+
+    @property
+    def anchors(self) -> tuple[str, ...]:
+        return tuple(
+            anchor
+            for anchor, value in (
+                ("first", self.first_frame),
+                ("last", self.last_frame),
+            )
+            if value is not None
+        )
+
+    def metadata(self) -> dict[str, object]:
+        self.validate()
+        return {
+            "task": "fl2va",
+            "anchors": list(self.anchors),
+            "first_frame_shape": (
+                list(_shape(self.first_frame, "H3 first frame"))
+                if self.first_frame is not None
+                else None
+            ),
+            "last_frame_shape": (
+                list(_shape(self.last_frame, "H3 last frame"))
+                if self.last_frame is not None
+                else None
+            ),
+        }
+
+    def images(self) -> list[Any]:
+        self.validate()
+        return [
+            comfy_image_to_pil(value, f"H3 {anchor} frame")
+            for anchor, value in (
+                ("first", self.first_frame),
+                ("last", self.last_frame),
+            )
+            if value is not None
+        ]
+
+
+@dataclass(frozen=True)
+class H3ReferenceInput:
+    """One ordered image, video, or audio reference for Ref2VA."""
+
+    kind: Literal["image", "video", "audio"]
+    media: Any
+    fps: float | None = None
+    soundtrack: Any | None = None
+    image_pixel_budget_percent: int = 100
+
+    def validate(self) -> None:
+        if self.kind == "image":
+            _validate_image(self.media, "H3 reference image")
+            if self.soundtrack is not None:
+                raise ValueError("An H3 image reference cannot carry a soundtrack.")
+            if not (
+                REFERENCE_PIXEL_BUDGET_MIN
+                <= self.image_pixel_budget_percent
+                <= REFERENCE_PIXEL_BUDGET_MAX
+            ):
+                raise ValueError(
+                    "H3 reference image pixel budget must be between "
+                    f"{REFERENCE_PIXEL_BUDGET_MIN}% and {REFERENCE_PIXEL_BUDGET_MAX}%."
+                )
+            return
+        if self.kind == "video":
+            _validate_image(self.media, "H3 reference video", video=True)
+            if self.fps is None or self.fps <= 0:
+                raise ValueError("H3 reference video fps must be positive.")
+            if self.soundtrack is not None:
+                _validate_audio(self.soundtrack, "H3 reference video soundtrack")
+            return
+        if self.kind == "audio":
+            _validate_audio(self.media, "H3 reference audio")
+            if self.soundtrack is not None:
+                raise ValueError(
+                    "A standalone H3 audio reference cannot carry a second soundtrack."
+                )
+            return
+        raise ValueError("H3 reference kind must be image, video, or audio.")
+
+    @property
+    def has_audio(self) -> bool:
+        return self.kind == "audio" or self.soundtrack is not None
+
+    def metadata(self) -> dict[str, object]:
+        self.validate()
+        payload: dict[str, object] = {"kind": self.kind, "has_audio": self.has_audio}
+        if self.kind == "image":
+            payload["shape"] = list(_shape(self.media, "H3 reference image"))
+            payload["image_pixel_budget_percent"] = self.image_pixel_budget_percent
+        elif self.kind == "video":
+            payload["shape"] = list(_shape(self.media, "H3 reference video"))
+            payload["fps"] = self.fps
+        if self.has_audio:
+            audio = self.media if self.kind == "audio" else self.soundtrack
+            _, channels, samples, sample_rate = _validate_audio(audio, "H3 reference audio")
+            payload["audio_channels"] = channels
+            payload["audio_samples"] = samples
+            payload["audio_sample_rate"] = sample_rate
+        return payload
+
+
+@dataclass(frozen=True)
+class H3ReferenceStack:
+    """Ordered Ref2VA reference inputs; order controls labels and rotary placement."""
+
+    references: tuple[H3ReferenceInput, ...] = ()
+
+    def append(self, reference: H3ReferenceInput) -> H3ReferenceStack:
+        reference.validate()
+        result = H3ReferenceStack(self.references + (reference,))
+        result._validate_limits()
+        return result
+
+    def _validate_limits(self) -> None:
+        if len(self.references) > 12:
+            raise ValueError("Ref2VA supports at most 12 references.")
+        images = sum(reference.kind == "image" for reference in self.references)
+        videos = sum(reference.kind == "video" for reference in self.references)
+        audios = sum(reference.has_audio for reference in self.references)
+        if images > 9:
+            raise ValueError("Ref2VA supports at most 9 image references.")
+        if videos > 3:
+            raise ValueError("Ref2VA supports at most 3 video references.")
+        if audios > 3:
+            raise ValueError("Ref2VA supports at most 3 audio references, including soundtracks.")
+
+    def validate_request(self) -> None:
+        self._validate_limits()
+        if not self.references:
+            raise ValueError("Ref2VA requires at least one reference.")
+        for reference in self.references:
+            reference.validate()
+        if not any(reference.kind in {"image", "video"} for reference in self.references):
+            raise ValueError(
+                "Ref2VA audio references require at least one image or video reference."
+            )
+
+    def metadata(self) -> dict[str, object]:
+        self._validate_limits()
+        counts = {"image": 0, "video": 0, "audio": 0}
+        items = []
+        for position, reference in enumerate(self.references, start=1):
+            item = reference.metadata()
+            labels = []
+            if reference.has_audio:
+                counts["audio"] += 1
+                labels.append(f"<Audio {counts['audio']}>")
+            if reference.kind in {"image", "video"}:
+                counts[reference.kind] += 1
+                noun = "Picture" if reference.kind == "image" else "Video"
+                labels.append(f"<{noun} {counts[reference.kind]}>")
+            item.update({"position": position, "prompt_labels": labels})
+            items.append(item)
+        return {"task": "ref2va", "count": len(items), "references": items}
+
+    def prepare(
+        self,
+        *,
+        target_width: int,
+        target_height: int,
+        target_num_frames: int,
+        target_sample_rate: int = 32000,
+    ):
+        """Prepare ordered in-memory media for staged Ref2VA encoders."""
+        import numpy as np
+        from PIL import Image
+
+        from minimax_h3_mlx.packing import resolve_canvas_size
+        from minimax_h3_mlx.ref2va import (
+            PreparedReference,
+            resample_reference_frames,
+            sample_reference_video_frames,
+        )
+
+        self.validate_request()
+        prepared = []
+        max_samples = round(target_num_frames / 24.0 * target_sample_rate)
+        for index, reference in enumerate(self.references, start=1):
+            item = PreparedReference(kind=reference.kind)
+            if reference.kind == "image":
+                image = comfy_image_to_pil(reference.media, f"H3 reference image {index}")
+                width, height = resolve_reference_image_canvas(
+                    image.width,
+                    image.height,
+                    target_width,
+                    target_height,
+                    reference.image_pixel_budget_percent,
+                )
+                item.image = image.resize((width, height), Image.Resampling.LANCZOS)
+            elif reference.kind == "video":
+                frames = _comfy_frames_to_uint8(
+                    reference.media, f"H3 reference video {index}"
+                )
+                frames = resample_reference_frames(frames, float(reference.fps))
+                if frames.shape[0] < 5:
+                    raise ValueError(
+                        f"H3 reference video {index} has fewer than five frames at 24 fps."
+                    )
+                frames = frames[:target_num_frames]
+                height, width = resolve_canvas_size(frames.shape[2], frames.shape[1])
+                if frames.shape[1:3] != (height, width):
+                    frames = np.stack(
+                        [
+                            np.asarray(
+                                Image.fromarray(frame).resize(
+                                    (width, height), Image.Resampling.LANCZOS
+                                )
+                            )
+                            for frame in frames
+                        ]
+                    )
+                item.frames = frames
+                _, item.block_timestamps = sample_reference_video_frames(frames)
+            audio = reference.media if reference.kind == "audio" else reference.soundtrack
+            if audio is not None:
+                waveform, sample_rate = _comfy_audio_to_numpy(
+                    audio, f"H3 reference audio {index}"
+                )
+                item.waveform = np.ascontiguousarray(
+                    _resample_waveform(waveform, sample_rate, target_sample_rate)[
+                        :, :max_samples
+                    ],
+                    dtype=np.float32,
+                )
+            prepared.append(item)
+        return prepared

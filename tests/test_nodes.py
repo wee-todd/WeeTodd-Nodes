@@ -2,13 +2,22 @@ import json
 import sys
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from wee_todd_nodes.nodes import (
     NODE_CLASS_MAPPINGS,
     WeeToddH3ComponentLoader,
+    WeeToddH3FirstFrame,
+    WeeToddH3FirstLastFrame,
     WeeToddH3GenerationConfig,
+    WeeToddH3KeyframeEncode,
+    WeeToddH3LastFrame,
     WeeToddH3QuantizedTransformerLoader,
+    WeeToddH3ReferenceAudio,
+    WeeToddH3ReferenceEncode,
+    WeeToddH3ReferenceImage,
+    WeeToddH3ReferenceVideo,
     WeeToddH3TrajectoryForecast,
     _output_directory,
     _publication_environment,
@@ -68,10 +77,18 @@ def test_sampling_metadata_preserves_exact_prompt(monkeypatch):
 
 
 def test_expected_nodes_are_registered():
-    assert len(NODE_CLASS_MAPPINGS) == 22
+    assert len(NODE_CLASS_MAPPINGS) == 30
     assert "WeeToddH3ComponentLoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3QuantizedTransformerLoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3Preflight" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3FirstFrame" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3LastFrame" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3FirstLastFrame" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3ReferenceImage" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3ReferenceVideo" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3ReferenceAudio" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3KeyframeEncode" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3ReferenceEncode" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3TextEncode" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3TrajectoryForecast" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3UnloadTextEncoder" in NODE_CLASS_MAPPINGS
@@ -87,6 +104,211 @@ def test_expected_nodes_are_registered():
     assert "WeeToddH3UnloadAudioVAE" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3PublishVideoAudio" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3DirectPublishLatents" in NODE_CLASS_MAPPINGS
+
+
+def test_keyframe_nodes_emit_explicit_anchor_contracts():
+    image = SimpleNamespace(shape=(1, 384, 640, 3))
+    first, _ = WeeToddH3FirstFrame().configure(image)
+    last, _ = WeeToddH3LastFrame().configure(image)
+    both, _ = WeeToddH3FirstLastFrame().configure(image, image)
+
+    assert first.anchors == ("first",)
+    assert last.anchors == ("last",)
+    assert both.anchors == ("first", "last")
+
+
+def test_reference_nodes_build_one_ordered_stack():
+    image = SimpleNamespace(shape=(1, 384, 640, 3))
+    video = SimpleNamespace(shape=(48, 384, 640, 3))
+    audio = {
+        "waveform": SimpleNamespace(shape=(1, 2, 32000)),
+        "sample_rate": 32000,
+    }
+    references, _ = WeeToddH3ReferenceImage().append(image, 100)
+    references, _ = WeeToddH3ReferenceVideo().append(
+        video,
+        24.0,
+        soundtrack=audio,
+        previous_references=references,
+    )
+    references, _ = WeeToddH3ReferenceAudio().append(audio, references)
+
+    references.validate_request()
+    assert [reference.kind for reference in references.references] == ["image", "video", "audio"]
+
+
+def test_keyframe_encode_stages_qwen_and_video_vae(monkeypatch):
+    from wee_todd_nodes.conditioning import H3Conditioning
+
+    calls = []
+
+    class FakeTextRuntime:
+        loaded = False
+
+        def encode(self, spec, prompt, **kwargs):
+            kwargs["prepare_stage"]()
+            calls.append(("text", spec, len(kwargs["images"])))
+            return H3Conditioning(
+                embeddings="vision-conditioning",
+                token_tags="vision-tags",
+                token_count=7,
+                prompt=prompt,
+                load_vision=True,
+                encoder_spec=spec,
+                task="fl2va",
+            )
+
+    class FakeVideoRuntime:
+        loaded = False
+
+        def encode_keyframes(self, spec, images, **kwargs):
+            kwargs["prepare_stage"]()
+            calls.append(("video_vae", spec, len(images)))
+            return np.zeros((480, 96), dtype=np.float32)
+
+    monkeypatch.setattr("wee_todd_nodes.nodes.TEXT_ENCODER_RUNTIME", FakeTextRuntime())
+    monkeypatch.setattr("wee_todd_nodes.nodes.VIDEO_VAE_RUNTIME", FakeVideoRuntime())
+    monkeypatch.setattr(
+        "wee_todd_nodes.nodes.H3TextEncoderSpec.from_components",
+        lambda components, load_vision: "vision-spec",
+    )
+    monkeypatch.setattr(
+        "wee_todd_nodes.nodes.H3VideoVAESpec.from_components",
+        lambda components: "video-vae-spec",
+    )
+    monkeypatch.setattr(
+        "wee_todd_nodes.nodes.prepare_low_memory_stage",
+        lambda stage, mode: (f"released-for-{stage}",),
+    )
+
+    frame = np.zeros((1, 384, 640, 3), dtype=np.float32)
+    keyframes, _ = WeeToddH3FirstLastFrame().configure(frame, frame)
+    config = SimpleNamespace(
+        height=384,
+        width=640,
+        memory_mode="low_memory_bf16",
+        validate=lambda: None,
+    )
+    conditioning, encoded_info = WeeToddH3KeyframeEncode().encode(
+        SimpleNamespace(task="fl2va"),
+        config,
+        keyframes,
+        "A precise test prompt.",
+    )
+
+    info = json.loads(encoded_info)
+    assert calls == [
+        ("text", "vision-spec", 2),
+        ("video_vae", "video-vae-spec", 2),
+    ]
+    assert conditioning.keyframe_anchors == ("first", "last")
+    assert conditioning.condition_video_rows.shape == (480, 96)
+    assert info["staged_releases"] == {
+        "text_encoder": ["released-for-text_encoder"],
+        "video_vae": ["released-for-video_vae"],
+    }
+
+
+def test_reference_encode_stages_qwen_and_both_vaes(monkeypatch):
+    from wee_todd_nodes.conditioning import H3Conditioning
+
+    calls = []
+    prepared = [
+        SimpleNamespace(
+            has_audio=True,
+            kind="video",
+            num_latent_frames=3,
+            latent_height=24,
+            latent_width=40,
+            num_audio_latents=10,
+        ),
+        SimpleNamespace(
+            has_audio=True,
+            kind="audio",
+            num_latent_frames=0,
+            latent_height=0,
+            latent_width=0,
+            num_audio_latents=10,
+        ),
+    ]
+    stack = SimpleNamespace(
+        validate_request=lambda: None,
+        prepare=lambda **kwargs: prepared,
+        metadata=lambda: {"references": [{"kind": "video"}, {"kind": "audio"}]},
+    )
+
+    class FakeTextRuntime:
+        loaded = False
+
+        def encode(self, spec, prompt, **kwargs):
+            kwargs["prepare_stage"]()
+            calls.append(("text", len(kwargs["references"])))
+            return H3Conditioning(
+                embeddings="reference-conditioning",
+                token_tags="reference-tags",
+                token_count=11,
+                prompt=prompt,
+                load_vision=True,
+                encoder_spec=spec,
+                task="ref2va",
+            )
+
+    class FakeVideoRuntime:
+        loaded = False
+
+        def encode_references(self, spec, references, **kwargs):
+            kwargs["prepare_stage"]()
+            calls.append(("video_vae", len(references)))
+            return np.zeros((32, 96), dtype=np.float32)
+
+    class FakeAudioRuntime:
+        loaded = False
+
+        def encode_references(self, spec, references, **kwargs):
+            kwargs["prepare_stage"]()
+            calls.append(("audio_vae", len(references)))
+            return np.zeros((20, 32), dtype=np.float32)
+
+    monkeypatch.setattr("wee_todd_nodes.nodes.TEXT_ENCODER_RUNTIME", FakeTextRuntime())
+    monkeypatch.setattr("wee_todd_nodes.nodes.VIDEO_VAE_RUNTIME", FakeVideoRuntime())
+    monkeypatch.setattr("wee_todd_nodes.nodes.AUDIO_VAE_RUNTIME", FakeAudioRuntime())
+    monkeypatch.setattr(
+        "wee_todd_nodes.nodes.H3TextEncoderSpec.from_components",
+        lambda components, load_vision: "vision-spec",
+    )
+    monkeypatch.setattr(
+        "wee_todd_nodes.nodes.H3VideoVAESpec.from_components",
+        lambda components: "video-vae-spec",
+    )
+    monkeypatch.setattr(
+        "wee_todd_nodes.nodes.H3AudioVAESpec.from_components",
+        lambda components: "audio-vae-spec",
+    )
+    monkeypatch.setattr(
+        "wee_todd_nodes.nodes.prepare_low_memory_stage",
+        lambda stage, mode: (f"released-for-{stage}",),
+    )
+    config = SimpleNamespace(
+        duration_seconds=5.0,
+        width=640,
+        height=384,
+        memory_mode="low_memory_bf16",
+        validate=lambda: None,
+    )
+
+    conditioning, encoded_info = WeeToddH3ReferenceEncode().encode(
+        SimpleNamespace(task="ref2va"), config, stack, "A reference test."
+    )
+
+    assert calls == [("text", 2), ("video_vae", 2), ("audio_vae", 2)]
+    assert conditioning.condition_video_rows.shape == (32, 96)
+    assert conditioning.condition_audio_rows.shape == (20, 32)
+    assert conditioning.references == tuple(prepared)
+    assert json.loads(encoded_info)["staged_releases"] == {
+        "text_encoder": ["released-for-text_encoder"],
+        "video_vae": ["released-for-video_vae"],
+        "audio_vae": ["released-for-audio_vae"],
+    }
 
 
 def test_trajectory_forecast_node_exposes_opt_in_bootstrap():
