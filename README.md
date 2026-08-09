@@ -16,7 +16,7 @@ low-memory path that can be tested before enabling optional acceleration.
 - Experimental ordered image, video, soundtrack, and audio reference (`ref2va`) conditioning
 - Independent visual and audio reference-strength control
 - Synchronized H.264 video and 32 kHz stereo AAC audio
-- Thirty-one composable nodes under `WeeTodd/H3`
+- Thirty-two composable nodes under `WeeTodd/H3`
 
 The FL2VA path stages Qwen3-VL vision and video-VAE encoding before transformer sampling. The
 Ref2VA path stages media preparation, Qwen3-VL vision, video-VAE encoding, audio-VAE encoding, and
@@ -245,6 +245,34 @@ The optional MPP projection backend targets speed for eligible BF16 projections.
 the measured MLX peak and is not part of the minimum-memory workflow. Q4 artifacts are not
 published or supported.
 
+### Validated sampling presets
+
+Use **Validated Sampling Preset** after **Generation Config** to apply a complete measured sampling
+policy. Connect its config, LoRA, and trajectory outputs to **Sample Video + Audio Latents**. The
+node preserves the selected canvas, duration, seed, memory mode, and component paths. It corrects
+the Euler schedule and loads a required Turbo adapter only when sampling starts.
+
+| Preset | Requested points | Transformer evaluations | Additional policy |
+| --- | ---: | ---: | --- |
+| Dense baseline | 20 | 19 | None |
+| Trajectory speed with offline replay | 20 | Up to 11 | Guarded trajectory capture and replay |
+| Turbo, Larry EMA-850 | 5 | 4 | Matching Turbo LoRA |
+| Turbo, Larry v4 step-600 | 5 | 4 | Matching Turbo LoRA |
+| Turbo, LightX2V full rank | 5 | 4 | Matching Turbo LoRA |
+| Turbo, LightX2V dynamic rank 21 | 5 | 4 | Matching Turbo LoRA |
+
+The [`workflows/`](workflows/) directory contains one ready-to-load 896 by 512 ComfyUI workflow
+for each preset. Install a workflow's named LoRA in a ComfyUI LoRA model folder before loading a
+Turbo workflow. WeeTodd does not bundle or download adapters.
+
+The following comparison used one Apple Silicon system, a matched prompt and seed, 5.17 seconds,
+124 frames, a resident BF16 transformer, a Q8 text encoder, and Euler sampling. Complete-process
+memory includes ComfyUI, Python, mapped pages, Metal allocations, and allocator retention. The
+dense control did not record a fresh-process peak. Treat every result as a measured capacity point,
+not a guarantee. Trajectory replay and Turbo adapters change the generated video and audio.
+
+![MiniMax H3 512p sampling preset comparison](assets/h3_512p_sampling_preset_comparison.png)
+
 ### Turbo LoRA compatibility
 
 The LoRA Loader keeps adapter updates in activation space. Do not fuse a small Turbo update into a
@@ -322,9 +350,9 @@ python scripts/lint_docs.py
 ```
 
 The published artifacts were also tested by a complete authenticated download into a clean
-ComfyUI 0.30.0 installation. All remote inventories and weight hashes matched, all 22 baseline nodes
-registered, the supplied graph contracts validated, and header-only component preflight passed.
-No generation is started by preflight.
+ComfyUI 0.30.0 installation. All remote inventories and weight hashes matched, every node present
+in that release registered, the supplied graph contracts validated, and header-only component
+preflight passed. No generation is started by preflight.
 
 ## License and status
 

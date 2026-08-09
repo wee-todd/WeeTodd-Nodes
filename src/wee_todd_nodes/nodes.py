@@ -188,6 +188,40 @@ _H3_LEGACY_ASPECT_RATIOS = {
     label.split(" — ", 1)[0]: value for label, value in _H3_ASPECT_RATIOS.items()
 }
 
+_H3_VALIDATED_SAMPLING_PRESETS = {
+    "Dense baseline — 20 points / 19 evaluations": {
+        "steps": 20,
+        "policy": "dense",
+    },
+    "Trajectory speed + offline replay — 20 points / up to 11 evaluations": {
+        "steps": 20,
+        "policy": "trajectory_speed_offline_replay",
+    },
+    "Turbo — Larry EMA-850 — 5 points / 4 evaluations": {
+        "steps": 5,
+        "policy": "turbo",
+        "lora": "minimax_h3_turbo_4step_ema_ckpt850.safetensors",
+    },
+    "Turbo — Larry v4 step-600 — 5 points / 4 evaluations": {
+        "steps": 5,
+        "policy": "turbo",
+        "lora": "minimax_h3_turbo_v4_step600_ema.safetensors",
+    },
+    "Turbo — LightX2V full rank — 5 points / 4 evaluations": {
+        "steps": 5,
+        "policy": "turbo",
+        "lora": "minimax_h3_fl2v_lightx2v_turbo_4step_v0.1_comfy.safetensors",
+    },
+    "Turbo — LightX2V dynamic rank 21 — 5 points / 4 evaluations": {
+        "steps": 5,
+        "policy": "turbo",
+        "lora": (
+            "minimax_h3_fl2v_lightx2v_turbo_4step_v0.1_comfy_"
+            "resized_avg_rank_21_bf16.safetensors"
+        ),
+    },
+}
+
 
 def _h3_aspect_ratio_key(aspect_ratio: str) -> str:
     return aspect_ratio.split(" — ", 1)[0]
@@ -1173,6 +1207,106 @@ class WeeToddH3LoRALoader:
             "loads_at_sampling": True,
         }
         return stack, json.dumps(info, indent=2, sort_keys=True)
+
+
+class WeeToddH3ValidatedSamplingPreset:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "config": ("WEETODD_H3_CONFIG",),
+                "preset": (
+                    list(_H3_VALIDATED_SAMPLING_PRESETS),
+                    {
+                        "default": "Dense baseline — 20 points / 19 evaluations",
+                        "tooltip": (
+                            "Apply one measured sampling schedule. The node preserves the canvas, "
+                            "duration, seed, memory mode, and component paths."
+                        ),
+                    },
+                ),
+            }
+        }
+
+    RETURN_TYPES = (
+        "WEETODD_H3_CONFIG",
+        "WEETODD_H3_LORAS",
+        "WEETODD_H3_TRAJECTORY_FORECAST",
+        "STRING",
+    )
+    RETURN_NAMES = ("config", "loras", "trajectory_forecast", "preset_info")
+    FUNCTION = "apply"
+    CATEGORY = "WeeTodd/H3/sampling"
+    DESCRIPTION = (
+        "Apply a measured dense, trajectory-replay, or Turbo sampling policy. "
+        "Connect all three typed outputs to the H3 sampler."
+    )
+
+    def apply(self, config, preset):
+        try:
+            selected = _H3_VALIDATED_SAMPLING_PRESETS[preset]
+        except KeyError as exc:
+            raise ValueError(f"Unknown H3 validated sampling preset: {preset!r}.") from exc
+
+        steps = int(selected["steps"])
+        configured = replace(config, steps=steps, sampling_method="euler")
+        configured.validate()
+        policy = str(selected["policy"])
+        loras = None
+        trajectory_forecast = None
+
+        if policy == "turbo":
+            lora_name = str(selected["lora"])
+            try:
+                loras, _ = WeeToddH3LoRALoader().load(
+                    lora_name,
+                    1.0,
+                    "turbo",
+                    qkv_layout="auto",
+                )
+            except FileNotFoundError as exc:
+                raise FileNotFoundError(
+                    f"H3 preset requires LoRA {lora_name!r}. "
+                    "Place the file in a ComfyUI LoRA model folder and refresh model files."
+                ) from exc
+        elif policy == "trajectory_speed_offline_replay":
+            from minimax_h3_mlx.trajectory_forecast import H3TrajectoryForecastConfig
+
+            trajectory_forecast = H3TrajectoryForecastConfig(
+                mode="automatic_speed",
+                forecast_strength=1.0,
+                warmup_steps=2,
+                tail_actual_steps=1,
+                max_history=2,
+                max_forecast_fraction=0.5,
+                max_delta_ratio=2.5,
+                bootstrap_first_forecast=False,
+                offline_smoothing_replay=True,
+                offline_video_blend=0.5,
+                offline_audio_blend=0.0,
+            )
+            trajectory_forecast.validate()
+
+        lora_file = str(selected["lora"]) if "lora" in selected else None
+        info = {
+            "preset": preset,
+            "policy": policy,
+            "requested_schedule_points": steps,
+            "transformer_evaluations_without_forecast": steps - 1,
+            "sampling_method": configured.sampling_method,
+            "lora_file": lora_file,
+            "lora_strength": 1.0 if lora_file is not None else None,
+            "trajectory_offline_replay": bool(
+                trajectory_forecast is not None
+                and trajectory_forecast.offline_smoothing_replay
+            ),
+            "canvas": [configured.width, configured.height],
+            "duration_seconds": configured.duration_seconds,
+            "seed": configured.seed,
+        }
+        return configured, loras, trajectory_forecast, json.dumps(
+            info, indent=2, sort_keys=True
+        )
 
 
 class WeeToddH3EasyCache:
@@ -2274,6 +2408,7 @@ NODE_CLASS_MAPPINGS = {
     "WeeToddH3UnloadTextEncoder": WeeToddH3UnloadTextEncoder,
     "WeeToddH3Sample": WeeToddH3Sample,
     "WeeToddH3LoRALoader": WeeToddH3LoRALoader,
+    "WeeToddH3ValidatedSamplingPreset": WeeToddH3ValidatedSamplingPreset,
     "WeeToddH3EasyCache": WeeToddH3EasyCache,
     "WeeToddH3TrajectoryForecast": WeeToddH3TrajectoryForecast,
     "WeeToddH3BlockCache": WeeToddH3BlockCache,
@@ -2307,6 +2442,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "WeeToddH3UnloadTextEncoder": "WeeTodd H3 Unload Qwen3-VL",
     "WeeToddH3Sample": "WeeTodd H3 Sample Video + Audio Latents",
     "WeeToddH3LoRALoader": "WeeTodd H3 LoRA Loader (MLX)",
+    "WeeToddH3ValidatedSamplingPreset": "WeeTodd H3 Validated Sampling Preset",
     "WeeToddH3EasyCache": "WeeTodd H3 EasyCache (MLX)",
     "WeeToddH3TrajectoryForecast": "WeeTodd H3 Trajectory Forecast (MLX)",
     "WeeToddH3BlockCache": "WeeTodd H3 BlockCache (MLX)",

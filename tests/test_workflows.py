@@ -7,6 +7,24 @@ from wee_todd_nodes.nodes import NODE_CLASS_MAPPINGS
 
 ROOT = Path(__file__).parents[1]
 CORE_NODES = {"LoadImage"}
+VALIDATED_WORKFLOW_PRESETS = {
+    "h3_512p_dense_baseline.json": "Dense baseline — 20 points / 19 evaluations",
+    "h3_512p_trajectory_replay.json": (
+        "Trajectory speed + offline replay — 20 points / up to 11 evaluations"
+    ),
+    "h3_512p_turbo_larry_ema850.json": (
+        "Turbo — Larry EMA-850 — 5 points / 4 evaluations"
+    ),
+    "h3_512p_turbo_larry_v4.json": (
+        "Turbo — Larry v4 step-600 — 5 points / 4 evaluations"
+    ),
+    "h3_512p_turbo_lightx2v_full.json": (
+        "Turbo — LightX2V full rank — 5 points / 4 evaluations"
+    ),
+    "h3_512p_turbo_lightx2v_dynamic_rank21.json": (
+        "Turbo — LightX2V dynamic rank 21 — 5 points / 4 evaluations"
+    ),
+}
 
 
 def test_t2va_api_prompt_uses_registered_nodes_and_staged_unloading():
@@ -130,6 +148,38 @@ def test_low_memory_paged_ui_workflow_links_are_consistent():
     ]
     assert nodes[6]["type"] == "WeeToddH3DirectPublishLatents"
     for link_id, origin_id, origin_slot, target_id, target_slot, link_type in links.values():
+        assert link_id in nodes[origin_id]["outputs"][origin_slot]["links"]
+        target_input = nodes[target_id]["inputs"][target_slot]
+        assert target_input["link"] == link_id
+        assert target_input["type"] == link_type
+
+
+@pytest.mark.parametrize("filename,preset", VALIDATED_WORKFLOW_PRESETS.items())
+def test_validated_sampling_workflows_are_loadable_and_preconfigured(filename, preset):
+    workflow = json.loads((ROOT / "workflows" / filename).read_text())
+    nodes = {node["id"]: node for node in workflow["nodes"]}
+
+    assert len(nodes) == 7
+    assert {node["type"] for node in nodes.values()} <= set(NODE_CLASS_MAPPINGS)
+    assert nodes[2]["widgets_values"][:3] == [5.17, 20, 246813579]
+    assert nodes[2]["widgets_values"][4:9] == [
+        "512 px short edge — balanced preview",
+        "16:9 — widescreen landscape",
+        512,
+        896,
+        512,
+    ]
+    assert nodes[3]["type"] == "WeeToddH3ValidatedSamplingPreset"
+    assert nodes[3]["widgets_values"] == [preset]
+    assert [item["name"] for item in nodes[6]["inputs"]] == [
+        "components",
+        "conditioning",
+        "config",
+        "loras",
+        "trajectory_forecast",
+    ]
+
+    for link_id, origin_id, origin_slot, target_id, target_slot, link_type in workflow["links"]:
         assert link_id in nodes[origin_id]["outputs"][origin_slot]["links"]
         target_input = nodes[target_id]["inputs"][target_slot]
         assert target_input["link"] == link_id

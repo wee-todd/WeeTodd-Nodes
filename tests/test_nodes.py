@@ -22,6 +22,7 @@ from wee_todd_nodes.nodes import (
     WeeToddH3ReferenceStrength,
     WeeToddH3ReferenceVideo,
     WeeToddH3TrajectoryForecast,
+    WeeToddH3ValidatedSamplingPreset,
     _output_directory,
     _publication_environment,
     _resolve_h3_resolution,
@@ -80,7 +81,7 @@ def test_sampling_metadata_preserves_exact_prompt(monkeypatch):
 
 
 def test_expected_nodes_are_registered():
-    assert len(NODE_CLASS_MAPPINGS) == 31
+    assert len(NODE_CLASS_MAPPINGS) == 32
     assert "WeeToddH3ComponentLoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3QuantizedTransformerLoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3Preflight" in NODE_CLASS_MAPPINGS
@@ -101,6 +102,7 @@ def test_expected_nodes_are_registered():
     assert "WeeToddH3BlockCache" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3HierarchicalBlockCache" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3LoRALoader" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3ValidatedSamplingPreset" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3UnloadTransformer" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3VideoVAEDecode" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3UnloadVideoVAE" in NODE_CLASS_MAPPINGS
@@ -133,6 +135,105 @@ def test_lora_loader_exposes_and_reports_turbo_qkv_layout(tmp_path):
     ]
     assert stack.adapters[0].resolved_qkv_layout == "contiguous_qkv"
     assert info["qkv_layout"] == "contiguous_qkv"
+
+
+def test_validated_sampling_preset_applies_dense_and_trajectory_policies():
+    from wee_todd_nodes.runtime import H3GenerationConfig
+
+    source = H3GenerationConfig(
+        duration_seconds=7.0,
+        steps=8,
+        seed=42,
+        width=896,
+        height=512,
+        memory_mode="low_memory_bf16",
+        sampling_method="res_multistep",
+    )
+    node = WeeToddH3ValidatedSamplingPreset()
+
+    dense, dense_loras, dense_forecast, dense_raw = node.apply(
+        source, "Dense baseline — 20 points / 19 evaluations"
+    )
+    dense_info = json.loads(dense_raw)
+    assert dense.steps == 20
+    assert dense.sampling_method == "euler"
+    assert (dense.width, dense.height) == (896, 512)
+    assert dense.duration_seconds == 7.0
+    assert dense.seed == 42
+    assert dense.memory_mode == "low_memory_bf16"
+    assert dense_loras is None
+    assert dense_forecast is None
+    assert dense_info["policy"] == "dense"
+    assert dense_info["transformer_evaluations_without_forecast"] == 19
+
+    replay, replay_loras, replay_forecast, replay_raw = node.apply(
+        source,
+        "Trajectory speed + offline replay — 20 points / up to 11 evaluations",
+    )
+    replay_info = json.loads(replay_raw)
+    assert replay.steps == 20
+    assert replay_loras is None
+    assert replay_forecast.mode == "automatic_speed"
+    assert replay_forecast.bootstrap_first_forecast is False
+    assert replay_forecast.offline_smoothing_replay is True
+    assert replay_forecast.offline_video_blend == 0.5
+    assert replay_forecast.offline_audio_blend == 0.0
+    assert replay_info["trajectory_offline_replay"] is True
+
+
+@pytest.mark.parametrize(
+    ("preset", "filename"),
+    [
+        (
+            "Turbo — Larry EMA-850 — 5 points / 4 evaluations",
+            "minimax_h3_turbo_4step_ema_ckpt850.safetensors",
+        ),
+        (
+            "Turbo — Larry v4 step-600 — 5 points / 4 evaluations",
+            "minimax_h3_turbo_v4_step600_ema.safetensors",
+        ),
+        (
+            "Turbo — LightX2V full rank — 5 points / 4 evaluations",
+            "minimax_h3_fl2v_lightx2v_turbo_4step_v0.1_comfy.safetensors",
+        ),
+        (
+            "Turbo — LightX2V dynamic rank 21 — 5 points / 4 evaluations",
+            (
+                "minimax_h3_fl2v_lightx2v_turbo_4step_v0.1_comfy_"
+                "resized_avg_rank_21_bf16.safetensors"
+            ),
+        ),
+    ],
+)
+def test_validated_sampling_preset_builds_each_lazy_turbo_stack(
+    tmp_path, monkeypatch, preset, filename
+):
+    from wee_todd_nodes.runtime import H3GenerationConfig
+
+    path = tmp_path / filename
+    mx.save_safetensors(
+        str(path),
+        {
+            "blocks.0.attn.qkv_proj.lora_A.weight": mx.zeros((1, 2)),
+            "blocks.0.attn.qkv_proj.lora_B.weight": mx.zeros((6, 1)),
+        },
+    )
+    monkeypatch.setattr("wee_todd_nodes.nodes._resolve_lora_path", lambda name: tmp_path / name)
+
+    config, loras, forecast, raw_info = WeeToddH3ValidatedSamplingPreset().apply(
+        H3GenerationConfig(width=896, height=512), preset
+    )
+    info = json.loads(raw_info)
+
+    assert config.steps == 5
+    assert config.sampling_method == "euler"
+    assert forecast is None
+    assert len(loras.adapters) == 1
+    assert loras.adapters[0].resolved_profile == "turbo"
+    assert loras.adapters[0].resolved_qkv_layout == "contiguous_qkv"
+    assert loras.adapters[0].strength == 1.0
+    assert info["lora_file"] == filename
+    assert info["transformer_evaluations_without_forecast"] == 4
 
 
 def test_reference_strength_node_preserves_defaults_and_warns_for_weak_fl2va():
