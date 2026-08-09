@@ -29,13 +29,13 @@ def test_selected_diagnostics_preserve_tiny_transformer_output(tmp_path):
     text_rows, video_rows, audio_rows = 2, 4, 2
     sequence = text_rows + video_rows + audio_rows
     text_indices = mx.arange(text_rows)
-    video_indices = mx.arange(text_rows, text_rows + video_rows)
-    audio_indices = mx.arange(text_rows + video_rows, sequence)
+    audio_indices = mx.arange(text_rows, text_rows + audio_rows)
+    video_indices = mx.arange(text_rows + audio_rows, sequence)
     tags = mx.array(
-        [TAG_TEXT] * text_rows + [TAG_VIDEO] * video_rows + [TAG_AUDIO] * audio_rows,
+        [TAG_TEXT] * text_rows + [TAG_AUDIO] * audio_rows + [TAG_VIDEO] * video_rows,
         dtype=mx.int32,
     )
-    timestep_indices = mx.array([0] * text_rows + [1] * video_rows + [0] * audio_rows)
+    timestep_indices = mx.array([0] * text_rows + [0] * audio_rows + [1] * video_rows)
     position_ids = mx.array(
         np.stack([np.arange(sequence) % 3, np.arange(sequence) % 5, np.arange(sequence) % 7], -1)
     )
@@ -57,8 +57,9 @@ def test_selected_diagnostics_preserve_tiny_transformer_output(tmp_path):
         CaptureConfig(
             enabled=True,
             output_directory=str(tmp_path),
-            targets=("q_output", "mlp_input"),
+            targets=("q_output", "mlp_input", "attention_qkv"),
             blocks=(0,),
+            attention_heads=(0,),
             profile_blocks=(0,),
             max_total_bytes=1024 * 1024,
             profile_regions=True,
@@ -69,5 +70,23 @@ def test_selected_diagnostics_preserve_tiny_transformer_output(tmp_path):
     np.testing.assert_array_equal(np.asarray(measured[0]), np.asarray(baseline[0]))
     np.testing.assert_array_equal(np.asarray(measured[1]), np.asarray(baseline[1]))
     assert diagnostics.measurements
-    assert {item["name"] for item in diagnostics.captures} == {"q_output", "mlp_input"}
+    assert {item["name"] for item in diagnostics.captures} == {
+        "q_output",
+        "mlp_input",
+        "attention_qkv",
+    }
     assert all(item.block in {0, None} for item in diagnostics.measurements)
+
+    q_only_diagnostics = DiagnosticSession(
+        CaptureConfig(
+            enabled=True,
+            output_directory=str(tmp_path),
+            targets=("q_output",),
+            blocks=(0,),
+            max_total_bytes=1024 * 1024,
+        )
+    )
+    q_only_result = model(*inputs, diagnostics=q_only_diagnostics)
+    mx.eval(*q_only_result)
+    assert q_only_diagnostics.captures
+    assert {item["name"] for item in q_only_diagnostics.captures} == {"q_output"}

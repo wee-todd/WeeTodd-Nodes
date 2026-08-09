@@ -62,9 +62,7 @@ def _lora_request(
     if not math.isfinite(strength) or not -10.0 <= strength <= 10.0:
         raise ValueError("MiniMax H3 LoRA strength must be finite and between -10 and 10.")
     if adaln_input_grid is not None and not adaln_input_grid.is_file():
-        raise FileNotFoundError(
-            f"MiniMax H3 LoRA AdaLN input grid not found: {adaln_input_grid}"
-        )
+        raise FileNotFoundError(f"MiniMax H3 LoRA AdaLN input grid not found: {adaln_input_grid}")
     return LoRARequest(
         path=str(path),
         strength=strength,
@@ -90,6 +88,7 @@ def main() -> int:
     parser.add_argument("--profile-block", type=int, action="append", default=[])
     parser.add_argument("--capture-target", action="append", default=[])
     parser.add_argument("--capture-evaluation", type=int, action="append", default=[])
+    parser.add_argument("--capture-head", type=int, action="append", default=[])
     parser.add_argument("--max-capture-mib", type=int, default=512)
     parser.add_argument("--profile-regions", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--hybrid-block", type=int)
@@ -147,9 +146,7 @@ def main() -> int:
         raise ValueError("use block or module quantization overrides, not both")
     if module_overrides:
         invalid = sorted(
-            path
-            for path in module_overrides
-            if int(path.split(".", 2)[1]) >= len(dit.blocks)
+            path for path in module_overrides if int(path.split(".", 2)[1]) >= len(dit.blocks)
         )
         if invalid:
             raise ValueError(f"quantized module paths exceed model depth: {invalid[:4]!r}")
@@ -217,6 +214,7 @@ def main() -> int:
             blocks=tuple(args.capture_block),
             profile_blocks=tuple(args.profile_block),
             evaluation_indices=tuple(args.capture_evaluation),
+            attention_heads=tuple(args.capture_head),
             max_total_bytes=args.max_capture_mib * 1024 * 1024,
             profile_regions=args.profile_regions,
         ),

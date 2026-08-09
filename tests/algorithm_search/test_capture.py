@@ -75,6 +75,17 @@ def test_capture_rejects_negative_evaluation_indices():
         DiagnosticSession(CaptureConfig(evaluation_indices=(-1,)))
 
 
+def test_attention_capture_requires_bounded_head_selection(tmp_path):
+    with pytest.raises(ValueError, match="selected head"):
+        DiagnosticSession(
+            CaptureConfig(
+                enabled=True,
+                output_directory=str(tmp_path),
+                targets=("attention_qkv",),
+            )
+        )
+
+
 def test_block_filter_does_not_reject_global_capture(tmp_path):
     session = DiagnosticSession(
         CaptureConfig(
@@ -87,3 +98,41 @@ def test_block_filter_does_not_reject_global_capture(tmp_path):
     session.capture("video_output", mx.ones((2,)), block=None)
     assert len(session.captures) == 1
     assert session.captures[0]["block"] is None
+
+
+def test_attention_capture_records_exact_prefix_and_selected_heads(tmp_path):
+    session = DiagnosticSession(
+        CaptureConfig(
+            enabled=True,
+            output_directory=str(tmp_path),
+            targets=("attention_qkv",),
+            blocks=(2,),
+            attention_heads=(1,),
+        )
+    )
+    session.set_packed_layout(
+        sequence_rows=10,
+        text_indices=mx.array([0, 1]),
+        audio_indices=mx.array([4, 5]),
+        video_indices=mx.array([2, 3, 6, 7, 8, 9]),
+    )
+    q = mx.ones((1, 3, 10, 4), dtype=mx.bfloat16)
+    session.capture_attention_qkv(q, q, q, block=2)
+    payload = json.loads(session.write_metadata().read_text())
+    capture = payload["captures"][0]
+    assert capture["shapes"] == [[1, 1, 10, 4]] * 3
+    assert capture["metadata"]["prefix_rows"] == 6
+    assert capture["metadata"]["target_video_rows"] == 4
+    assert capture["metadata"]["condition_video_rows"] == 2
+    assert capture["metadata"]["attention_heads"] == [1]
+
+
+def test_attention_capture_rejects_non_contiguous_target_video_tail(tmp_path):
+    session = DiagnosticSession(CaptureConfig(output_directory=str(tmp_path)))
+    with pytest.raises(ValueError, match="contiguous packed tail"):
+        session.set_packed_layout(
+            sequence_rows=8,
+            text_indices=mx.array([0]),
+            audio_indices=mx.array([2, 3]),
+            video_indices=mx.array([1, 4, 6, 7]),
+        )

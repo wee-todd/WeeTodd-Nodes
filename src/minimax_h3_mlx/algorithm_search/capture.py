@@ -20,6 +20,7 @@ class CaptureConfig:
     blocks: tuple[int, ...] = ()
     profile_blocks: tuple[int, ...] = ()
     evaluation_indices: tuple[int, ...] = ()
+    attention_heads: tuple[int, ...] = ()
     max_total_bytes: int = 512 * 1024 * 1024
     profile_regions: bool = False
 
@@ -32,6 +33,10 @@ class CaptureConfig:
             raise ValueError("capture block indices must be non-negative")
         if any(index < 0 for index in self.evaluation_indices):
             raise ValueError("capture evaluation indices must be non-negative")
+        if any(head < 0 for head in self.attention_heads):
+            raise ValueError("capture attention head indices must be non-negative")
+        if self.enabled and "attention_qkv" in self.targets and not self.attention_heads:
+            raise ValueError("attention QKV capture requires at least one selected head")
 
 
 @dataclass
@@ -70,6 +75,43 @@ class DiagnosticSession:
         self.timestep: float | None = None
         self.audio_timestep: float | None = None
         self.hybrid_controller = hybrid_controller
+        self.packed_layout: dict[str, int] | None = None
+
+    @property
+    def requires_packed_layout(self) -> bool:
+        return self.config.enabled and "attention_qkv" in self.config.targets
+
+    def set_packed_layout(
+        self,
+        *,
+        sequence_rows: int,
+        video_indices: mx.array,
+        audio_indices: mx.array,
+        text_indices: mx.array,
+    ) -> None:
+        """Record the exact-prefix boundary for selected attention captures."""
+        if sequence_rows < 1:
+            raise ValueError("packed sequence rows must be positive")
+        video = [int(value) for value in video_indices.tolist()]
+        audio = [int(value) for value in audio_indices.tolist()]
+        text = [int(value) for value in text_indices.tolist()]
+        if not audio:
+            raise ValueError("H3 sparse-attention diagnostics require generated-audio rows")
+        prefix_rows = max(audio) + 1
+        if not 0 < prefix_rows < sequence_rows:
+            raise ValueError("H3 exact-prefix boundary must be inside the packed sequence")
+        condition_video_rows = sum(index < prefix_rows for index in video)
+        target_video_rows = sequence_rows - prefix_rows
+        if target_video_rows != sum(index >= prefix_rows for index in video):
+            raise ValueError("H3 target-video rows must be the contiguous packed tail")
+        self.packed_layout = {
+            "sequence_rows": sequence_rows,
+            "prefix_rows": prefix_rows,
+            "text_rows": len(text),
+            "condition_video_rows": condition_video_rows,
+            "audio_rows": len(audio),
+            "target_video_rows": target_video_rows,
+        }
 
     def begin_evaluation(
         self, index: int, *, timestep: float, audio_timestep: float | None = None
@@ -121,14 +163,20 @@ class DiagnosticSession:
                 evaluation_index=self.evaluation_index,
             )
 
-    def capture(self, name: str, value: Any, *, block: int | None = None) -> None:
+    def capture(
+        self,
+        name: str,
+        value: Any,
+        *,
+        block: int | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
         if not self._selected(name, block):
             return
         leaves = [leaf for leaf in _leaves(value) if hasattr(leaf, "shape")]
         mx.eval(*leaves)
         arrays = [
-            leaf if type(leaf).__module__.startswith("mlx.") else mx.array(leaf)
-            for leaf in leaves
+            leaf if type(leaf).__module__.startswith("mlx.") else mx.array(leaf) for leaf in leaves
         ]
         byte_count = sum(int(array.nbytes) for array in arrays)
         if self.total_bytes + byte_count > self.config.max_total_bytes:
@@ -138,10 +186,7 @@ class DiagnosticSession:
             )
         self.output_directory.mkdir(parents=True, exist_ok=True)
         evaluation = "none" if self.evaluation_index is None else str(self.evaluation_index)
-        stem = (
-            f"{self._capture_index:04d}_eval_{evaluation}_"
-            f"{name.replace('.', '_')}_block_{block}"
-        )
+        stem = f"{self._capture_index:04d}_eval_{evaluation}_{name.replace('.', '_')}_block_{block}"
         path = self.output_directory / f"{stem}.safetensors"
         mx.save_safetensors(
             str(path), {f"tensor_{index}": array for index, array in enumerate(arrays)}
@@ -159,7 +204,41 @@ class DiagnosticSession:
                 "bytes": byte_count,
                 "shapes": [list(array.shape) for array in arrays],
                 "dtypes": [str(array.dtype) for array in arrays],
+                "metadata": metadata or {},
             }
+        )
+
+    def capture_attention_qkv(
+        self,
+        query: mx.array,
+        key: mx.array,
+        value: mx.array,
+        *,
+        block: int,
+    ) -> None:
+        """Save post-normalization, post-RoPE Q/K/V for selected heads only."""
+        if not self._selected("attention_qkv", block):
+            return
+        if self.packed_layout is None:
+            raise RuntimeError("attention QKV capture requires packed-layout metadata")
+        heads = self.config.attention_heads
+        if not heads or max(heads) >= int(query.shape[1]):
+            raise ValueError("capture attention head index exceeds the model head count")
+        selected = mx.array(heads, dtype=mx.int32)
+        self.capture(
+            "attention_qkv",
+            (
+                mx.take(query, selected, axis=1),
+                mx.take(key, selected, axis=1),
+                mx.take(value, selected, axis=1),
+            ),
+            block=block,
+            metadata={
+                **self.packed_layout,
+                "attention_heads": list(heads),
+                "layout": "batch_heads_rows_dim",
+                "stage": "post_qk_norm_and_rope",
+            },
         )
 
     def measure(
@@ -172,9 +251,7 @@ class DiagnosticSession:
         capture_as: str | None = None,
     ):
         profile_selected = self.config.profile_regions and (
-            block is None
-            or not self.config.profile_blocks
-            or block in self.config.profile_blocks
+            block is None or not self.config.profile_blocks or block in self.config.profile_blocks
         )
         if not profile_selected:
             result = fn()

@@ -265,6 +265,13 @@ class Attention(nn.Module):
                 block=block_index,
             )
 
+        if (
+            diagnostics is not None
+            and block_index is not None
+            and module_prefix == "blocks"
+        ):
+            diagnostics.capture_attention_qkv(q, k, v, block=block_index)
+
         chunk = self.query_chunk_size
         if chunk is None or q.shape[-2] <= chunk:
             out = _diagnostic_run(
@@ -741,6 +748,13 @@ class MiniMaxH3DiT(nn.Module):
             text_indices,
             diagnostics,
         )
+        if diagnostics is not None and diagnostics.requires_packed_layout:
+            diagnostics.set_packed_layout(
+                sequence_rows=int(position_ids.shape[0]),
+                video_indices=video_indices,
+                audio_indices=audio_indices,
+                text_indices=text_indices,
+            )
 
         paged = getattr(self, "paged_blocks", None)
         if paged is not None:
