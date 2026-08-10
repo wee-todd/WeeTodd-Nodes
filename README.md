@@ -6,6 +6,13 @@ WeeTodd Nodes keeps the MiniMax H3 engine separate from the ComfyUI adapter. The
 focuses on synchronized text-to-video-plus-audio generation, staged model unloading, and a
 low-memory path that can be tested before enabling optional acceleration.
 
+![MiniMax H3 512p resident and low-memory benchmark matrix](assets/h3_512p_sampling_preset_comparison.png)
+
+The matrix compares all six validated sampling policies with clean-speech and fast-motion prompts.
+The measured low-memory profile reduced complete ComfyUI process peak by approximately 35 to 39 GB
+while increasing workflow time by approximately 5 to 16 percent. See
+[Validated sampling presets](#validated-sampling-presets) for the measurement boundary.
+
 ## Current scope
 
 - Apple Silicon and macOS
@@ -265,13 +272,18 @@ The [`workflows/`](workflows/) directory contains one ready-to-load 896 by 512 C
 for each preset. Install a workflow's named LoRA in a ComfyUI LoRA model folder before loading a
 Turbo workflow. WeeTodd does not bundle or download adapters.
 
-The following comparison used one Apple Silicon system, a matched prompt and seed, 5.17 seconds,
-124 frames, a resident BF16 transformer, a Q8 text encoder, and Euler sampling. Complete-process
-memory includes ComfyUI, Python, mapped pages, Metal allocations, and allocator retention. The
-dense control did not record a fresh-process peak. Treat every result as a measured capacity point,
+The following matrix used one Apple Silicon system, seed 246813579, 896 by 512 output, 5.17
+seconds, 124 frames, and Euler sampling. It compares a clean-speech prompt and a fast-motion stress
+prompt with resident and low-memory component profiles. The low-memory profile uses a paged Q8
+transformer, paged Q8 text encoder, and Q8 video VAE. It reduced measured complete-process peak by
+about 35 to 39 GB, or 70 to 72 percent, while increasing workflow time by 5 to 16 percent.
+
+Complete-process memory includes ComfyUI, Python, mapped pages, Metal allocations, and allocator
+retention. The resident low-motion dense control did not record a fresh-process peak. Compare
+memory profiles only within the same prompt class. Treat every result as a measured capacity point,
 not a guarantee. Trajectory replay and Turbo adapters change the generated video and audio.
 
-![MiniMax H3 512p sampling preset comparison](assets/h3_512p_sampling_preset_comparison.png)
+The featured benchmark matrix near the top of this README contains the complete results.
 
 ### Turbo LoRA compatibility
 
