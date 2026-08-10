@@ -263,6 +263,7 @@ the Euler schedule and loads a required Turbo adapter only when sampling starts.
 | --- | ---: | ---: | --- |
 | Dense baseline | 20 | 19 | None |
 | Trajectory speed with offline replay | 20 | Up to 11 | Guarded trajectory capture and replay |
+| Ref2VA four-reference BF16 with Forward Attention replay | 20 | Up to 11 | Four ordered image references, normal-memory BF16 sampling, guarded replay |
 | Turbo, Larry EMA-850 | 5 | 4 | Matching Turbo LoRA |
 | Turbo, Larry v4 step-600 | 5 | 4 | Matching Turbo LoRA |
 | Turbo, LightX2V full rank | 5 | 4 | Matching Turbo LoRA |
@@ -271,6 +272,15 @@ the Euler schedule and loads a required Turbo adapter only when sampling starts.
 The [`workflows/`](workflows/) directory contains one ready-to-load 896 by 512 ComfyUI workflow
 for each preset. Install a workflow's named LoRA in a ComfyUI LoRA model folder before loading a
 Turbo workflow. WeeTodd does not bundle or download adapters.
+
+[`h3_512p_ref2va_four_reference_forward_attention.json`](workflows/h3_512p_ref2va_four_reference_forward_attention.json)
+reproduces the measured four-image Ref2VA graph. Select Little Red, wolf, Granny, and woodsman
+images in that order after loading it. The workflow uses the explicit FL2VA-to-Ref2VA compatibility
+switch because the separately compressed Ref2VA checkpoint tested for this release produced
+invalid low-variance video. Treat the compatibility path as experimental and review reference
+fidelity before production use. The measured 896 by 512 run used normal-memory BF16 sampling,
+20 requested points, 11 actual transformer evaluations, eight forecasts, no LoRA, and reached
+47.32 GB of MLX peak allocation. This MLX allocator figure is not complete ComfyUI process memory.
 
 The following matrix used one Apple Silicon system, seed 246813579, 896 by 512 output, 5.17
 seconds, 124 frames, and Euler sampling. It compares a clean-speech prompt and a fast-motion stress

@@ -12,15 +12,9 @@ VALIDATED_WORKFLOW_PRESETS = {
     "h3_512p_trajectory_replay.json": (
         "Trajectory speed + offline replay — 20 points / up to 11 evaluations"
     ),
-    "h3_512p_turbo_larry_ema850.json": (
-        "Turbo — Larry EMA-850 — 5 points / 4 evaluations"
-    ),
-    "h3_512p_turbo_larry_v4.json": (
-        "Turbo — Larry v4 step-600 — 5 points / 4 evaluations"
-    ),
-    "h3_512p_turbo_lightx2v_full.json": (
-        "Turbo — LightX2V full rank — 5 points / 4 evaluations"
-    ),
+    "h3_512p_turbo_larry_ema850.json": ("Turbo — Larry EMA-850 — 5 points / 4 evaluations"),
+    "h3_512p_turbo_larry_v4.json": ("Turbo — Larry v4 step-600 — 5 points / 4 evaluations"),
+    "h3_512p_turbo_lightx2v_full.json": ("Turbo — LightX2V full rank — 5 points / 4 evaluations"),
     "h3_512p_turbo_lightx2v_dynamic_rank21.json": (
         "Turbo — LightX2V dynamic rank 21 — 5 points / 4 evaluations"
     ),
@@ -172,6 +166,80 @@ def test_validated_sampling_workflows_are_loadable_and_preconfigured(filename, p
     assert nodes[3]["type"] == "WeeToddH3ValidatedSamplingPreset"
     assert nodes[3]["widgets_values"] == [preset]
     assert [item["name"] for item in nodes[6]["inputs"]] == [
+        "components",
+        "conditioning",
+        "config",
+        "loras",
+        "trajectory_forecast",
+    ]
+
+    for link_id, origin_id, origin_slot, target_id, target_slot, link_type in workflow["links"]:
+        assert link_id in nodes[origin_id]["outputs"][origin_slot]["links"]
+        target_input = nodes[target_id]["inputs"][target_slot]
+        assert target_input["link"] == link_id
+        assert target_input["type"] == link_type
+
+
+def test_four_reference_ref2va_forward_attention_workflow_is_portable_and_linked():
+    path = ROOT / "workflows" / "h3_512p_ref2va_four_reference_forward_attention.json"
+    raw = path.read_text()
+    workflow = json.loads(raw)
+    nodes = {node["id"]: node for node in workflow["nodes"]}
+
+    assert len(nodes) == 15
+    assert {node["type"] for node in nodes.values()} <= set(NODE_CLASS_MAPPINGS) | CORE_NODES
+    assert "/Volumes/" not in raw
+    assert "/Users/" not in raw
+    assert nodes[1]["widgets_values"] == [
+        "MiniMax-H3/FL2VA",
+        "ref2va",
+        "",
+        "MiniMax-H3/text_encoders/q8-paged",
+        "",
+        "",
+        "",
+        "",
+        True,
+    ]
+    assert nodes[2]["widgets_values"] == [
+        5.0,
+        20,
+        842731905,
+        "ratio + size",
+        "512 px short edge — balanced preview",
+        "16:9 — widescreen landscape",
+        512,
+        896,
+        512,
+        True,
+        "normal",
+        "automatic",
+        "mlx",
+    ]
+    assert nodes[3]["widgets_values"] == [
+        ("Ref2VA four-reference BF16 — Forward Attention replay — 20 points / up to 11 evaluations")
+    ]
+    load_images = [node for node in nodes.values() if node["type"] == "LoadImage"]
+    reference_nodes = [node for node in nodes.values() if node["type"] == "WeeToddH3ReferenceImage"]
+    assert len(load_images) == 4
+    assert len(reference_nodes) == 4
+    assert [node["widgets_values"][0] for node in load_images] == [
+        "select_little_red_reference.png",
+        "select_wolf_reference.png",
+        "select_granny_reference.png",
+        "select_woodsman_reference.png",
+    ]
+    assert all(node["widgets_values"] == [100] for node in reference_nodes)
+    assert all(
+        label in nodes[13]["widgets_values"][0]
+        for label in (
+            "<Picture 1>",
+            "<Picture 2>",
+            "<Picture 3>",
+            "<Picture 4>",
+        )
+    )
+    assert [item["name"] for item in nodes[14]["inputs"]] == [
         "components",
         "conditioning",
         "config",

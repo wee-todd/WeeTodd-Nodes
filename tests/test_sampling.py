@@ -391,6 +391,59 @@ def test_transformer_sampler_accepts_prepared_ref2va_conditioning(tmp_path: Path
     assert kwargs["references"] == (reference,)
 
 
+def test_transformer_sampler_accepts_ref2va_trajectory_forecast(tmp_path: Path):
+    created = []
+
+    def factory(spec):
+        sampler = FakeSampler(spec)
+        created.append(sampler)
+        return sampler
+
+    cache = H3TransformerCache(factory)
+    spec = _spec(tmp_path, task="ref2va")
+    reference = SimpleNamespace(kind="image")
+    conditioning = _conditioning(
+        spec,
+        load_vision=True,
+        task="ref2va",
+        condition_video_rows="reference-video-rows",
+        references=(reference,),
+    )
+    trajectory = H3TrajectoryForecastConfig(
+        mode="automatic_speed",
+        offline_smoothing_replay=True,
+    )
+
+    cache.sample(
+        spec,
+        conditioning,
+        H3GenerationConfig(steps=3),
+        trajectory_forecast=trajectory,
+    )
+
+    assert created[0].calls[0][2]["trajectory_forecast_config"] is trajectory
+
+
+def test_transformer_sampler_rejects_ref2va_blockcache_until_validated(tmp_path: Path):
+    cache = H3TransformerCache(lambda spec: FakeSampler(spec))
+    spec = _spec(tmp_path, task="ref2va")
+    conditioning = _conditioning(
+        spec,
+        load_vision=True,
+        task="ref2va",
+        condition_video_rows="reference-video-rows",
+        references=(SimpleNamespace(kind="image"),),
+    )
+
+    with pytest.raises(ValueError, match="supports Trajectory Forecast only"):
+        cache.sample(
+            spec,
+            conditioning,
+            H3GenerationConfig(steps=3),
+            blockcache=H3BlockCacheConfig(),
+        )
+
+
 def test_transformer_sampler_accepts_prepared_fl2va_conditioning(tmp_path: Path):
     created = []
 

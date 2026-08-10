@@ -234,9 +234,14 @@ class H3TransformerCache:
             raise ValueError(
                 "EasyCache, BlockCache, and Trajectory Forecast are mutually exclusive."
             )
-        if spec.task != "t2va" and accelerators:
+        if spec.task == "fl2va" and accelerators:
             raise ValueError(
                 "The first FL2VA baseline does not support cache or trajectory acceleration."
+            )
+        if spec.task == "ref2va" and (easycache is not None or blockcache is not None):
+            raise ValueError(
+                "Ref2VA supports Trajectory Forecast only; EasyCache and BlockCache remain "
+                "disabled until their conditioned-row behavior is validated."
             )
         if prepare_stage is not None:
             prepare_stage()

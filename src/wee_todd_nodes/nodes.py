@@ -197,6 +197,20 @@ _H3_VALIDATED_SAMPLING_PRESETS = {
         "steps": 20,
         "policy": "trajectory_speed_offline_replay",
     },
+    "Ref2VA four-reference BF16 — Forward Attention replay — 20 points / up to 11 evaluations": {
+        "steps": 20,
+        "policy": "trajectory_speed_offline_replay",
+        "measurement": {
+            "task": "ref2va",
+            "reference_images": 4,
+            "canvas": [896, 512],
+            "duration_seconds": 5.0,
+            "memory_mode": "normal",
+            "checkpoint_policy": "experimental_fl2va_weights_for_ref2va",
+            "transformer_evaluations": 11,
+            "mlx_peak_bytes": 47323507330,
+        },
+    },
     "Turbo — Larry EMA-850 — 5 points / 4 evaluations": {
         "steps": 5,
         "policy": "turbo",
@@ -216,8 +230,7 @@ _H3_VALIDATED_SAMPLING_PRESETS = {
         "steps": 5,
         "policy": "turbo",
         "lora": (
-            "minimax_h3_fl2v_lightx2v_turbo_4step_v0.1_comfy_"
-            "resized_avg_rank_21_bf16.safetensors"
+            "minimax_h3_fl2v_lightx2v_turbo_4step_v0.1_comfy_resized_avg_rank_21_bf16.safetensors"
         ),
     },
 }
@@ -1297,16 +1310,14 @@ class WeeToddH3ValidatedSamplingPreset:
             "lora_file": lora_file,
             "lora_strength": 1.0 if lora_file is not None else None,
             "trajectory_offline_replay": bool(
-                trajectory_forecast is not None
-                and trajectory_forecast.offline_smoothing_replay
+                trajectory_forecast is not None and trajectory_forecast.offline_smoothing_replay
             ),
             "canvas": [configured.width, configured.height],
             "duration_seconds": configured.duration_seconds,
             "seed": configured.seed,
+            "measurement": selected.get("measurement"),
         }
-        return configured, loras, trajectory_forecast, json.dumps(
-            info, indent=2, sort_keys=True
-        )
+        return configured, loras, trajectory_forecast, json.dumps(info, indent=2, sort_keys=True)
 
 
 class WeeToddH3EasyCache:

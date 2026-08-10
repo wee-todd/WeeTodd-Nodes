@@ -123,9 +123,7 @@ def test_lora_loader_exposes_and_reports_turbo_qkv_layout(tmp_path):
     )
     inputs = WeeToddH3LoRALoader.INPUT_TYPES()
 
-    stack, raw_info = WeeToddH3LoRALoader().load(
-        str(path), 1.0, "turbo", qkv_layout="auto"
-    )
+    stack, raw_info = WeeToddH3LoRALoader().load(str(path), 1.0, "turbo", qkv_layout="auto")
     info = json.loads(raw_info)
 
     assert inputs["required"]["qkv_layout"][0] == [
@@ -179,6 +177,29 @@ def test_validated_sampling_preset_applies_dense_and_trajectory_policies():
     assert replay_forecast.offline_video_blend == 0.5
     assert replay_forecast.offline_audio_blend == 0.0
     assert replay_info["trajectory_offline_replay"] is True
+
+    ref2va, ref2va_loras, ref2va_forecast, ref2va_raw = node.apply(
+        source,
+        (
+            "Ref2VA four-reference BF16 — Forward Attention replay — "
+            "20 points / up to 11 evaluations"
+        ),
+    )
+    ref2va_info = json.loads(ref2va_raw)
+    assert ref2va.steps == 20
+    assert ref2va_loras is None
+    assert ref2va_forecast.mode == "automatic_speed"
+    assert ref2va_forecast.offline_smoothing_replay is True
+    assert ref2va_info["measurement"] == {
+        "task": "ref2va",
+        "reference_images": 4,
+        "canvas": [896, 512],
+        "duration_seconds": 5.0,
+        "memory_mode": "normal",
+        "checkpoint_policy": "experimental_fl2va_weights_for_ref2va",
+        "transformer_evaluations": 11,
+        "mlx_peak_bytes": 47323507330,
+    }
 
 
 @pytest.mark.parametrize(
