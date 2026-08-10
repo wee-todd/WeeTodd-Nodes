@@ -81,7 +81,7 @@ def test_sampling_metadata_preserves_exact_prompt(monkeypatch):
 
 
 def test_expected_nodes_are_registered():
-    assert len(NODE_CLASS_MAPPINGS) == 32
+    assert len(NODE_CLASS_MAPPINGS) == 39
     assert "WeeToddH3ComponentLoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3QuantizedTransformerLoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3Preflight" in NODE_CLASS_MAPPINGS
@@ -110,6 +110,13 @@ def test_expected_nodes_are_registered():
     assert "WeeToddH3UnloadAudioVAE" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3PublishVideoAudio" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3DirectPublishLatents" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX23ModelLoader" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX23GenerationConfig" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX23Preflight" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX23Generate" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX23UpscalerLoader" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX23UpscalePublish" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX23Unload" in NODE_CLASS_MAPPINGS
 
 
 def test_lora_loader_exposes_and_reports_turbo_qkv_layout(tmp_path):

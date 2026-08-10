@@ -1,6 +1,6 @@
 # WeeTodd Nodes
 
-Experimental MLX-native MiniMax H3 nodes for ComfyUI on Apple Silicon.
+Experimental MLX-native MiniMax H3 and LTX 2.3 nodes for ComfyUI on Apple Silicon.
 
 WeeTodd Nodes keeps the MiniMax H3 engine separate from the ComfyUI adapter. The current release
 focuses on synchronized text-to-video-plus-audio generation, staged model unloading, and a
@@ -24,6 +24,8 @@ while increasing workflow time by approximately 5 to 16 percent. See
 - Independent visual and audio reference-strength control
 - Synchronized H.264 video and 32 kHz stereo AAC audio
 - Thirty-two composable nodes under `WeeTodd/H3`
+- Optional standalone LTX 2.3 T2VA and I2VA pipelines under `WeeTodd/LTX 2.3`
+- Learned LTX latent upscaling for decoded H3 `IMAGE` plus `AUDIO`
 
 The FL2VA path stages Qwen3-VL vision and video-VAE encoding before transformer sampling. The
 Ref2VA path stages media preparation, Qwen3-VL vision, video-VAE encoding, audio-VAE encoding, and
@@ -69,6 +71,94 @@ git clone https://github.com/wee-todd/WeeTodd-Nodes.git \
 Install FFmpeg with H.264 encoding and Advanced Audio Coding (AAC) support. Restart ComfyUI and
 confirm that the `WeeTodd/H3` category is present.
 
+LTX 2.3 is optional. Install the pinned MLX runtime only when those nodes are needed:
+
+```bash
+"$COMFYUI_ROOT/.venv/bin/python" -m pip install -e \
+  "$COMFYUI_ROOT/custom_nodes/WeeTodd-Nodes[ltx]"
+```
+
+Restart ComfyUI and confirm that `WeeTodd/LTX 2.3` is present. The optional dependency is pinned
+to a tested `ltx-2-mlx` revision because its pre-1.0 pipeline API can change.
+
+## LTX 2.3 standalone generation
+
+Load [`ltx23_t2va_two_stage.json`](workflows/ltx23_t2va_two_stage.json) for the initial standalone
+LTX 2.3 graph. The matching API prompt is
+[`ltx23_t2va_two_stage_api.json`](examples/ltx23_t2va_two_stage_api.json).
+
+The graph contains four nodes:
+
+| Order | Node | Purpose |
+| ---: | --- | --- |
+| 1 | LTX 2.3 Model Loader | Select one complete local MLX model bundle and Gemma encoder. |
+| 2 | LTX 2.3 Generation Config | Select pipeline, canvas, duration, steps, guidance, and memory policy. |
+| 3 | LTX 2.3 Preflight | Reject missing mode-specific components before allocating weights. |
+| 4 | LTX 2.3 Generate Video + Audio | Run T2VA, or I2VA when a first frame is connected, and publish MP4. |
+
+The supported generation modes are:
+
+| Mode | Use |
+| --- | --- |
+| `two_stage` | Recommended quality baseline: dev model, half-resolution sampling, learned 2x upscale, and refinement. |
+| `two_stage_hq` | Quality-first second-order stage-one sampling. |
+| `distilled` | Faster distilled two-stage generation when the model bundle includes distilled weights. |
+| `one_stage` | Full-resolution dev-model sampling without the learned upscale stage. |
+
+Set each step field to zero to select its mode-specific default. The current defaults are 30 plus
+3 steps for two-stage, 15 plus 3 for HQ, 8 plus 3 for distilled, and 30 steps for one-stage.
+Generation normalizes duration to an `8n+1` frame count and reports the delivered duration. LTX
+generation produces synchronized 48 kHz stereo audio. `low_memory` unloads weighted stages as they
+finish. `low_ram_streaming` additionally streams transformer blocks from safetensors and trades
+some speed for substantially lower residency.
+
+Use this portable model layout:
+
+```text
+ComfyUI/models/
+└── LTX-2.3/
+    └── q8/
+        ├── connector.safetensors
+        ├── transformer-dev.safetensors
+        ├── ltx-2.3-22b-distilled-lora-384.safetensors
+        ├── vae_encoder.safetensors
+        ├── vae_decoder.safetensors
+        ├── audio_vae.safetensors
+        ├── vocoder.safetensors
+        ├── spatial_upscaler_x2_v1_1_config.json
+        └── spatial_upscaler_x2_v1_1.safetensors
+```
+
+The model loader searches the dedicated `ltx2` category and normal ComfyUI model roots, including
+compatible paths registered through `extra_model_paths.yaml`. Gemma may be selected by a local
+directory or a Hugging Face repository ID that is already fully cached. Preflight uses offline-only
+resolution, so node execution never starts an implicit model download. Obtain LTX weights under
+their applicable model license.
+
+## Upscale H3 output with LTX 2.3
+
+The API example
+[`h3_to_ltx23_2x_upscale_api.json`](examples/h3_to_ltx23_2x_upscale_api.json) connects decoded H3
+frames and audio to the learned LTX spatial upscaler:
+
+```text
+H3 Video VAE Decode ── IMAGE ──┐
+                               ├─ LTX 2.3 Upscale + Publish ── MP4
+H3 Audio VAE Decode ── AUDIO ──┘
+```
+
+Select the upscaler with **LTX 2.3 Upscaler Loader**. The initial validated model is
+`spatial_upscaler_x2_v1_1`; the 1.5x option becomes runnable when its matching config and weights
+are both installed. The node encodes the decoded frames into LTX latent space, runs the learned
+spatial model, unloads the encoder and upscaler, then loads the decoder and streams the result to
+FFmpeg. It passes the supplied ComfyUI audio through without model reconstruction.
+
+H3 normally returns 124 frames for a five-second request, while the LTX VAE requires `8n+1` input.
+The upscaler causally pads only the tail to 129 frames, decodes, and crops publication back to the
+original 124 frames. This preserves H3's frame rate and audio timing and records the padding count
+in generation metadata. The upscale stage changes image detail because it is a learned model; it
+does not resample or regenerate the audio.
+
 ## Obtain the model components
 
 The following public, gated MLX artifacts are provided for the low-memory workflow:
@@ -98,9 +188,34 @@ COMFYUI_ROOT=/path/to/ComfyUI
   --local-dir "$COMFYUI_ROOT/models/MiniMax-H3/vae/q8"
 ```
 
-These repositories do not form a complete H3 checkpoint. Obtain the remaining MiniMax H3
-components under their applicable licenses. The Component Loader still requires a partition root
-with `model_index.json`, plus the processor, tokenizer, and audio VAE.
+These repositories are optimized replacement components, not a complete H3 distribution. Obtain
+the remaining MiniMax H3 components under their applicable licenses. Model weights are not
+included in this repository.
+
+The Component Loader requires a partition root with a WeeTodd-compatible `model_index.json`.
+WeeTodd provides metadata-only templates for both supported partitions. Create the manifest after
+you have made and verified the correct local partition directory:
+
+```bash
+WEETODD_ROOT="$COMFYUI_ROOT/custom_nodes/WeeTodd-Nodes"
+
+"$COMFYUI_ROOT/.venv/bin/python" \
+  "$WEETODD_ROOT/scripts/create_h3_model_index.py" \
+  "$COMFYUI_ROOT/models/MiniMax-H3/FL2VA" \
+  --partition fl2va
+
+# Use this only with a genuine Ref2VA partition.
+"$COMFYUI_ROOT/.venv/bin/python" \
+  "$WEETODD_ROOT/scripts/create_h3_model_index.py" \
+  "$COMFYUI_ROOT/models/MiniMax-H3/Ref2VA" \
+  --partition ref2va
+```
+
+The generator does not download models and does not replace an existing manifest unless you add
+`--force`. The underlying templates are
+[`model_index.fl2va.json`](assets/model_index.fl2va.json) and
+[`model_index.ref2va.json`](assets/model_index.ref2va.json). Select the partition from the actual
+checkpoint identity. Matching tensor shapes are not proof that FL2VA weights are Ref2VA weights.
 
 Use this portable layout:
 
@@ -109,15 +224,38 @@ ComfyUI/models/
 └── MiniMax-H3/
     ├── FL2VA/
     │   ├── model_index.json
-    │   └── <remaining licensed H3 components>
+    │   └── audio_vae/
+    │       ├── config.json
+    │       ├── metadata.json
+    │       └── model.safetensors
     ├── text_encoders/
     │   └── q8-paged/
+    │       ├── config.json
+    │       ├── tokenizer.json
+    │       └── <paged Qwen files>
     ├── transformers/
     │   └── q8_extended_paged/
     └── vae/
         └── q8/
             └── video_vae_affine_q8.safetensors
 ```
+
+For optimized T2VA, set `text_encoder`, `processor`, and `tokenizer` to the Qwen Q8 directory. A
+text-only processor may reuse its `tokenizer.json`. Set `transformer` to the paged transformer,
+`video_vae` to the Q8 video-VAE file, and `audio_vae` to the licensed audio-VAE directory shown
+above. The standard audio VAE is three files, not one loose weight file. A self-describing compact
+MLX audio-VAE `.safetensors` file is also supported when its header contains the required
+`minimax_h3_audio_vae` metadata.
+
+FL2VA image conditioning additionally requires licensed Qwen vision processor assets. Point the
+`processor` field to a directory containing `preprocessor_config.json` or
+`processor_config.json`; a tokenizer-only directory is accepted for T2VA but rejected for FL2VA.
+
+Strict Ref2VA requires an actual Ref2VA partition, its transformer weights, the Ref2VA manifest,
+vision processor assets, and the audio VAE. The audio VAE encoder prepares audio references and
+its decoder produces the final synchronized audio. Do not select the FL2VA manifest for Ref2VA.
+The advanced FL2VA-to-Ref2VA switch is an explicit compatibility experiment, not a substitute for
+the Ref2VA checkpoint.
 
 Do not add a second directory level inside any downloaded repository. The paging manifests must
 be at the roots shown above.
@@ -335,8 +473,13 @@ workflow again after it loads correctly.
 
 ### Preflight reports a missing processor, tokenizer, or audio VAE
 
-The three WeeTodd artifacts intentionally omit those components. Complete the licensed base
-`FL2VA` partition or set the corresponding Component Loader overrides.
+The three WeeTodd artifacts intentionally omit the licensed audio VAE and complete vision
+processor. Follow [Obtain the model components](#obtain-the-model-components), then set the
+corresponding Component Loader overrides. T2VA may point `processor` and `tokenizer` to the Qwen Q8
+directory. FL2VA and Ref2VA require a real vision processor configuration.
+
+If only `model_index.json` is missing, run the included metadata generator for the verified
+partition. It creates no weights and refuses to overwrite an existing manifest by default.
 
 ### ComfyUI runs out of memory
 

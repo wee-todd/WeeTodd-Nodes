@@ -1,0 +1,47 @@
+{
+  "1": {
+    "class_type": "WeeToddLTX23ModelLoader",
+    "inputs": {
+      "model_directory": "LTX-2.3/q8",
+      "gemma_model": "mlx-community/gemma-3-12b-it-4bit"
+    },
+    "_meta": {"title": "LTX 2.3 Model Loader"}
+  },
+  "2": {
+    "class_type": "WeeToddLTX23GenerationConfig",
+    "inputs": {
+      "pipeline_mode": "two_stage",
+      "width": 704,
+      "height": 448,
+      "duration_seconds": 5.0,
+      "frame_rate": 24.0,
+      "seed": 0,
+      "stage1_steps": 0,
+      "stage2_steps": 0,
+      "cfg_scale": 3.0,
+      "stg_scale": 1.0,
+      "low_memory": true,
+      "low_ram_streaming": false
+    },
+    "_meta": {"title": "LTX 2.3 Generation Config"}
+  },
+  "3": {
+    "class_type": "WeeToddLTX23Preflight",
+    "inputs": {
+      "model": ["1", 0],
+      "config": ["2", 0]
+    },
+    "_meta": {"title": "LTX 2.3 Preflight"}
+  },
+  "4": {
+    "class_type": "WeeToddLTX23Generate",
+    "inputs": {
+      "model": ["3", 0],
+      "config": ["2", 0],
+      "prompt": "Cinematic live-action medium-wide shot inside a warmly lit neighborhood bakery at dawn, with amber pendant lights, flour-dusted wood, copper pans, and cool blue window light. A gray-haired baker in his sixties, wearing a white shirt and dark green apron, carefully slides a tray of rising bread toward the oven while a small orange cat watches from a stool. The baker pauses, notices one loaf slowly swelling into a comically perfect dome, and leans closer as his eyebrows lift and the cat tilts its head. Steam curls above the tray, the apron shifts with his breathing, and fine flour drifts through the light. The camera makes one gentle push toward the bread and settles with the baker, cat, and glowing oven clearly framed. The room carries quiet oven crackle, soft tray scrapes, distant morning birds, and the baker says in a dry, quiet voice, \"Well, you are ambitious.\" No music.",
+      "filename_prefix": "WeeTodd/LTX23_two_stage",
+      "unload_after_generate": true
+    },
+    "_meta": {"title": "LTX 2.3 Generate Video + Audio"}
+  }
+}

@@ -2470,3 +2470,15 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "WeeToddH3Generate": "WeeTodd H3 Generate Video + Audio",
     "WeeToddH3Unload": "WeeTodd H3 Unload MLX Runtime",
 }
+
+# LTX 2.3 remains an optional, independently loaded engine. Importing these
+# adapter contracts does not import MLX or ltx-2-mlx.
+from .ltx_nodes import (  # noqa: E402
+    NODE_CLASS_MAPPINGS as LTX23_NODE_CLASS_MAPPINGS,
+)
+from .ltx_nodes import (  # noqa: E402
+    NODE_DISPLAY_NAME_MAPPINGS as LTX23_NODE_DISPLAY_NAME_MAPPINGS,
+)
+
+NODE_CLASS_MAPPINGS.update(LTX23_NODE_CLASS_MAPPINGS)
+NODE_DISPLAY_NAME_MAPPINGS.update(LTX23_NODE_DISPLAY_NAME_MAPPINGS)

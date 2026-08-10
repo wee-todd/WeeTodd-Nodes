@@ -1,10 +1,11 @@
 # WeeTodd Nodes agent guide
 
-This is a standalone ComfyUI custom-node project for MiniMax H3 on Apple Silicon through MLX.
+This is a standalone ComfyUI custom-node project for MiniMax H3 and LTX 2.3 on Apple Silicon
+through MLX.
 
 ## Scope boundary
 
-- Use MiniMax H3, MLX, ComfyUI, and directly relevant media utilities.
+- Use MiniMax H3, LTX 2.3, MLX, ComfyUI, and directly relevant media utilities.
 - Do not import unrelated UI, launch, account, or image-generation functionality.
 - Treat third-party implementations as research references only; independently implement and test project behavior.
 - Never commit model weights, outputs, caches, tokens, credentials, or machine-specific paths.
@@ -12,6 +13,7 @@ This is a standalone ComfyUI custom-node project for MiniMax H3 on Apple Silicon
 ## Development rules
 
 - Keep node imports lightweight; load MLX weights only when a graph executes.
+- Keep the H3 and LTX 2.3 engines isolated behind separate ComfyUI adapters.
 - Preserve synchronized audio and video as a single H3 generation contract.
 - Keep model state process-local and explicitly unloadable.
 - Default weighted stages to staged unloading: Qwen3-VL, transformer, video VAE, then audio VAE.

@@ -21,6 +21,57 @@ VALIDATED_WORKFLOW_PRESETS = {
 }
 
 
+def test_ltx23_standalone_api_is_registered_and_preflighted():
+    prompt = json.loads((ROOT / "examples" / "ltx23_t2va_two_stage_api.json").read_text())
+
+    assert {node["class_type"] for node in prompt.values()} <= set(NODE_CLASS_MAPPINGS)
+    assert prompt["1"]["inputs"]["model_directory"] == "LTX-2.3/q8"
+    assert prompt["2"]["inputs"]["pipeline_mode"] == "two_stage"
+    assert prompt["2"]["inputs"]["stage1_steps"] == 0
+    assert prompt["3"]["inputs"] == {"model": ["1", 0], "config": ["2", 0]}
+    assert prompt["4"]["inputs"]["model"] == ["3", 0]
+    assert prompt["4"]["inputs"]["unload_after_generate"] is True
+
+
+def test_ltx23_standalone_ui_workflow_links_are_consistent():
+    workflow = json.loads((ROOT / "workflows" / "ltx23_t2va_two_stage.json").read_text())
+    nodes = {node["id"]: node for node in workflow["nodes"]}
+
+    assert len(nodes) == 4
+    assert {node["type"] for node in nodes.values()} <= set(NODE_CLASS_MAPPINGS)
+    assert nodes[2]["widgets_values"] == [
+        "two_stage",
+        704,
+        448,
+        5.0,
+        24.0,
+        0,
+        0,
+        0,
+        3.0,
+        1.0,
+        True,
+        False,
+    ]
+    for link_id, origin_id, origin_slot, target_id, target_slot, link_type in workflow["links"]:
+        assert link_id in nodes[origin_id]["outputs"][origin_slot]["links"]
+        target_input = nodes[target_id]["inputs"][target_slot]
+        assert target_input["link"] == link_id
+        assert target_input["type"] == link_type
+
+
+def test_h3_to_ltx23_upscale_api_preserves_comfy_image_and_audio_contracts():
+    prompt = json.loads((ROOT / "examples" / "h3_to_ltx23_2x_upscale_api.json").read_text())
+
+    assert {node["class_type"] for node in prompt.values()} <= set(NODE_CLASS_MAPPINGS)
+    assert prompt["6"]["class_type"] == "WeeToddH3VideoVAEDecode"
+    assert prompt["7"]["class_type"] == "WeeToddH3AudioVAEDecode"
+    assert prompt["9"]["inputs"]["upscaler_name"] == "spatial_upscaler_x2_v1_1"
+    assert prompt["10"]["inputs"]["images"] == ["6", 0]
+    assert prompt["10"]["inputs"]["audio"] == ["7", 0]
+    assert prompt["10"]["inputs"]["fps"] == 24.0
+
+
 def test_t2va_api_prompt_uses_registered_nodes_and_staged_unloading():
     prompt = json.loads((ROOT / "examples" / "t2va_smoke_api.json").read_text())
 
