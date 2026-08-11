@@ -257,6 +257,8 @@ def build_packed_sequence(
     num_audio_latents: int,
     patch_size: tuple[int, int, int],
     keyframe_anchors: tuple[str, ...] = (),
+    continuation_video_frames: int = 0,
+    continuation_audio_latents: int = 0,
 ) -> PackedSequence:
     """Build the ``[text | keyframe conditions | target audio | target video]`` layout.
 
@@ -270,8 +272,13 @@ def build_packed_sequence(
     text_tags = np.asarray(text_token_tags, dtype=np.int64)
     rows_per_frame = (latent_height // ph) * (latent_width // pw)
     num_text = int(text_tags.shape[0])
-    num_condition_rows = len(keyframe_anchors) * rows_per_frame
-    num_audio_rows = num_audio_latents * AUDIO_CHANNELS
+    if continuation_video_frames and keyframe_anchors:
+        raise ValueError("Continuation rows cannot be combined with keyframe anchors.")
+    num_keyframe_rows = len(keyframe_anchors) * rows_per_frame
+    num_continuation_rows = continuation_video_frames * rows_per_frame
+    num_condition_rows = num_keyframe_rows + num_continuation_rows
+    num_condition_audio_rows = continuation_audio_latents * AUDIO_CHANNELS
+    num_audio_rows = (continuation_audio_latents + num_audio_latents) * AUDIO_CHANNELS
     num_video_rows = num_latent_frames * rows_per_frame
     seq_len = num_text + num_condition_rows + num_audio_rows + num_video_rows
 
@@ -290,6 +297,18 @@ def build_packed_sequence(
     hh, ww = np.meshgrid(height_grid, width_grid, indexing="ij")
     frame_grid = np.stack([hh.reshape(-1), ww.reshape(-1)], axis=-1)
 
+    if continuation_video_frames:
+        continuation_pos = np.empty(
+            (continuation_video_frames, rows_per_frame, 3), dtype=np.float64
+        )
+        continuation_pos[:, :, 0] = _temporal_position_grid(
+            continuation_video_frames, float(num_text)
+        )[:, None]
+        continuation_pos[:, :, 1:] = frame_grid[None]
+        position_ids[condition_start : condition_start + num_continuation_rows] = (
+            continuation_pos.reshape(-1, 3)
+        )
+
     for index, anchor in enumerate(keyframe_anchors):
         if anchor == "first":
             anchor_time = float(num_text)
@@ -299,20 +318,38 @@ def build_packed_sequence(
             )
         else:
             raise ValueError(f"A keyframe anchor must be 'first' or 'last', got {anchor!r}.")
-        lo = condition_start + index * rows_per_frame
-        hi = condition_start + (index + 1) * rows_per_frame
+        lo = condition_start + num_continuation_rows + index * rows_per_frame
+        hi = condition_start + num_continuation_rows + (index + 1) * rows_per_frame
         position_ids[lo:hi, 0] = anchor_time
         position_ids[lo:hi, 1:] = frame_grid
 
     # Audio rows are channel-major and share the video's rotary clock: one unit per latent at
     # 40 latents/s equals 24 fps * 5/3. They carry no height coordinate and are pinned to the two
     # extremes of the width grid.
-    audio_time = float(num_text) + np.arange(num_audio_latents, dtype=np.float64)
-    position_ids[audio_start:video_start, 0] = np.tile(audio_time, AUDIO_CHANNELS)
+    condition_audio_time = float(num_text) + np.arange(
+        continuation_audio_latents, dtype=np.float64
+    )
+    target_audio_time = float(num_text) + np.arange(num_audio_latents, dtype=np.float64)
+    audio_time = np.concatenate(
+        [
+            np.tile(condition_audio_time, AUDIO_CHANNELS),
+            np.tile(target_audio_time, AUDIO_CHANNELS),
+        ]
+    )
+    position_ids[audio_start:video_start, 0] = audio_time
     position_ids[audio_start:video_start, 2] = np.concatenate(
         [
+            np.tile(
+                np.concatenate(
+                    [
+                        np.full(continuation_audio_latents, float(width_grid[0])),
+                        np.full(continuation_audio_latents, float(width_grid[-1])),
+                    ]
+                ),
+                1,
+            ),
             np.full(num_audio_latents, float(width_grid[0]), dtype=np.float64),
-            np.full(num_audio_rows - num_audio_latents, float(width_grid[-1]), dtype=np.float64),
+            np.full(num_audio_latents, float(width_grid[-1]), dtype=np.float64),
         ]
     )
 
@@ -341,7 +378,7 @@ def build_packed_sequence(
         audio_indices=mx.array(audio_idx.astype(np.int32)),
         text_indices=mx.array(text_idx.astype(np.int32)),
         num_condition_video_rows=num_condition_rows,
-        num_condition_audio_rows=0,
+        num_condition_audio_rows=num_condition_audio_rows,
     )
 
 

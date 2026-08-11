@@ -75,6 +75,11 @@ def test_bootstrap_rejects_non_speed_policy():
         ).validate()
 
 
+def test_conditioned_row_policy_rejects_unknown_value():
+    with pytest.raises(ValueError, match="conditioned-row policy"):
+        H3TrajectoryForecastConfig(conditioned_row_policy="unknown").validate()
+
+
 def test_guard_falls_back_when_forecast_delta_exceeds_ratio():
     state = H3TrajectoryForecastState(
         H3TrajectoryForecastConfig(

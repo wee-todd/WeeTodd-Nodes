@@ -8,6 +8,7 @@ import pytest
 from minimax_h3_mlx.blockcache import H3BlockCacheConfig
 from minimax_h3_mlx.trajectory_forecast import H3TrajectoryForecastConfig
 from wee_todd_nodes.conditioning import H3Conditioning, H3TextEncoderSpec
+from wee_todd_nodes.continuation import H3ContinuationContext
 from wee_todd_nodes.lora import H3LoRASpec, H3LoRAStack
 from wee_todd_nodes.runtime import H3GenerationConfig
 from wee_todd_nodes.sampling import H3TransformerCache, H3TransformerSpec
@@ -152,6 +153,137 @@ def test_transformer_cache_samples_and_unloads(tmp_path: Path):
     assert progress == [(0, 2), (1, 2), (2, 2)]
     assert cache.loaded is False
     assert len(created) == 1
+
+
+def test_transformer_cache_forwards_dense_continuation(tmp_path: Path):
+    created = []
+
+    def factory(spec):
+        sampler = FakeSampler(spec)
+        created.append(sampler)
+        return sampler
+
+    spec = _spec(tmp_path)
+    context = H3ContinuationContext(
+        video="context-video",
+        audio="context-audio",
+        context_frames=22,
+        width=640,
+        height=384,
+        fps=24,
+        sample_rate=32000,
+        transformer_checkpoint=spec.checkpoint,
+        transformer_path=spec.transformer,
+    )
+
+    H3TransformerCache(factory).sample(
+        spec,
+        _conditioning(spec),
+        H3GenerationConfig(steps=3, width=640, height=384),
+        continuation=context,
+    )
+
+    kwargs = created[0].calls[0][2]
+    assert kwargs["continuation_video_latents"] == "context-video"
+    assert kwargs["continuation_audio_latents"] == "context-audio"
+    assert kwargs["continuation_frames"] == 22
+
+
+def test_transformer_cache_accepts_target_only_forecast_with_continuation(tmp_path: Path):
+    created = []
+
+    def factory(spec):
+        sampler = FakeSampler(spec)
+        created.append(sampler)
+        return sampler
+
+    spec = _spec(tmp_path)
+    context = H3ContinuationContext(
+        video="context-video",
+        audio="context-audio",
+        context_frames=22,
+        width=640,
+        height=384,
+        fps=24,
+        sample_rate=32000,
+        transformer_checkpoint=spec.checkpoint,
+        transformer_path=spec.transformer,
+    )
+    forecast = H3TrajectoryForecastConfig(
+        mode="automatic_speed",
+        offline_smoothing_replay=True,
+        conditioned_row_policy="target_only",
+    )
+
+    H3TransformerCache(factory).sample(
+        spec,
+        _conditioning(spec),
+        H3GenerationConfig(steps=20, width=640, height=384),
+        continuation=context,
+        trajectory_forecast=forecast,
+    )
+
+    kwargs = created[0].calls[0][2]
+    assert kwargs["continuation_frames"] == 22
+    assert kwargs["trajectory_forecast_config"] is forecast
+
+
+def test_transformer_cache_reloads_for_continuation_schedule_when_kept_warm(tmp_path: Path):
+    created = []
+
+    def factory(spec):
+        sampler = FakeSampler(spec)
+        created.append(sampler)
+        return sampler
+
+    cache = H3TransformerCache(factory)
+    spec = _spec(tmp_path)
+    config = H3GenerationConfig(steps=20, width=640, height=384)
+    cache.sample(spec, _conditioning(spec), config, unload_after=False)
+    context = H3ContinuationContext(
+        video="context-video",
+        audio="context-audio",
+        context_frames=22,
+        width=640,
+        height=384,
+        fps=24,
+        sample_rate=32000,
+        transformer_checkpoint=spec.checkpoint,
+        transformer_path=spec.transformer,
+    )
+    cache.sample(
+        spec,
+        _conditioning(spec),
+        config,
+        unload_after=False,
+        continuation=context,
+    )
+
+    assert len(created) == 2
+
+
+def test_transformer_cache_rejects_step_cache_with_continuation(tmp_path: Path):
+    spec = _spec(tmp_path)
+    context = H3ContinuationContext(
+        video="context-video",
+        audio="context-audio",
+        context_frames=22,
+        width=640,
+        height=384,
+        fps=24,
+        sample_rate=32000,
+        transformer_checkpoint=spec.checkpoint,
+        transformer_path=spec.transformer,
+    )
+
+    with pytest.raises(ValueError, match="supports dense sampling or Trajectory Forecast"):
+        H3TransformerCache(lambda value: FakeSampler(value)).sample(
+            spec,
+            _conditioning(spec),
+            H3GenerationConfig(steps=20, width=640, height=384),
+            continuation=context,
+            blockcache=H3BlockCacheConfig(),
+        )
 
 
 def test_transformer_cache_forwards_reference_strengths(tmp_path: Path):

@@ -173,6 +173,62 @@ def test_transformer_only_text_sampling_shapes():
     assert progress == [(0, 2), (1, 2), (2, 2)]
 
 
+def test_transformer_only_continuation_sampling_shapes():
+    cfg = tiny_config()
+    mx.random.seed(5)
+    pipeline = MiniMaxH3Pipeline(MiniMaxH3DiT(cfg), None, None, None)
+
+    result = pipeline.sample_latents(
+        mx.random.normal((1, 3, cfg.text_dim)),
+        np.full((3,), TAG_TEXT, dtype=np.int32),
+        duration_seconds=5.0,
+        num_inference_steps=3,
+        height=32,
+        width=32,
+        drop_adaln=False,
+        verbose=False,
+        continuation_video_latents=mx.random.normal((1, cfg.latents_dim, 7, 2, 2)),
+        continuation_audio_latents=mx.random.normal((2, cfg.audio_latents_dim, 37)),
+        continuation_frames=22,
+    )
+
+    assert result.video_latents.shape == (1, cfg.latents_dim, 37, 2, 2)
+    assert result.audio_latents.shape == (2, cfg.audio_latents_dim, 207)
+    assert result.transformer_evaluations == 2
+
+
+def test_continuation_target_only_trajectory_forecast_excludes_fixed_rows():
+    cfg = tiny_config()
+    mx.random.seed(6)
+    result = MiniMaxH3Pipeline(MiniMaxH3DiT(cfg), None, None, None).sample_latents(
+        mx.random.normal((1, 3, cfg.text_dim)),
+        np.full((3,), TAG_TEXT, dtype=np.int32),
+        duration_seconds=5.0,
+        num_inference_steps=5,
+        height=32,
+        width=32,
+        drop_adaln=False,
+        verbose=False,
+        continuation_video_latents=mx.random.normal((1, cfg.latents_dim, 7, 2, 2)),
+        continuation_audio_latents=mx.random.normal((2, cfg.audio_latents_dim, 37)),
+        continuation_frames=22,
+        trajectory_forecast_config=H3TrajectoryForecastConfig(
+            mode="automatic_speed",
+            max_delta_ratio=100.0,
+            offline_smoothing_replay=True,
+            conditioned_row_policy="target_only",
+        ),
+    )
+
+    assert result.trajectory_conditioned_row_policy == "target_only"
+    assert result.trajectory_excluded_video_rows == 7
+    assert result.trajectory_excluded_audio_rows == 74
+    assert result.trajectory_forecasts == 1
+    assert result.transformer_evaluations == 3
+    assert result.video_latents.shape == (1, cfg.latents_dim, 37, 2, 2)
+    assert result.audio_latents.shape == (2, cfg.audio_latents_dim, 207)
+
+
 def test_transformer_only_ref2va_sampling_keeps_reference_rows_fixed():
     cfg = tiny_config()
     mx.random.seed(14)

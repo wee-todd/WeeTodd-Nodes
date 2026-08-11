@@ -691,6 +691,8 @@ class MiniMaxH3DiT(nn.Module):
         blockcache=None,
         trajectory_forecast=None,
         forecast_coordinate: float | None = None,
+        trajectory_video_row_start: int = 0,
+        trajectory_audio_row_start: int = 0,
         step_index: int = 0,
         total_steps: int = 1,
         diagnostics=None,
@@ -720,13 +722,44 @@ class MiniMaxH3DiT(nn.Module):
             )
             if predicted is not None:
                 temb = self.embed_timesteps(timestep)
-                return self._project_target_features(
+                video_result, audio_result = self._project_target_features(
                     predicted[0],
                     predicted[1],
                     temb,
-                    timestep_indices[video_indices],
-                    timestep_indices[audio_indices],
+                    timestep_indices[video_indices[trajectory_video_row_start:]],
+                    timestep_indices[audio_indices[trajectory_audio_row_start:]],
                 )
+                if trajectory_video_row_start:
+                    video_result = mx.concatenate(
+                        [
+                            mx.zeros(
+                                (
+                                    video_result.shape[0],
+                                    trajectory_video_row_start,
+                                    video_result.shape[2],
+                                ),
+                                dtype=video_result.dtype,
+                            ),
+                            video_result,
+                        ],
+                        axis=1,
+                    )
+                if trajectory_audio_row_start:
+                    audio_result = mx.concatenate(
+                        [
+                            mx.zeros(
+                                (
+                                    audio_result.shape[0],
+                                    trajectory_audio_row_start,
+                                    audio_result.shape[2],
+                                ),
+                                dtype=audio_result.dtype,
+                            ),
+                            audio_result,
+                        ],
+                        axis=1,
+                    )
+                return video_result, audio_result
 
         x, temb, adaln_indices, rotary = self.pack_inputs(
             video_latents,
@@ -871,8 +904,8 @@ class MiniMaxH3DiT(nn.Module):
         if trajectory_forecast is not None and forecast_coordinate is not None:
             trajectory_forecast.update(
                 forecast_coordinate,
-                x[:, video_indices],
-                x[:, audio_indices],
+                x[:, video_indices[trajectory_video_row_start:]],
+                x[:, audio_indices[trajectory_audio_row_start:]],
             )
 
         # 4. Both heads run over every row, then each modality's rows are selected.

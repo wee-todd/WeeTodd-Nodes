@@ -11,6 +11,7 @@ from threading import RLock
 from typing import Any
 
 from .conditioning import H3Conditioning, H3TextEncoderSpec
+from .continuation import H3ContinuationContext, validate_continuation_for_sample
 from .lora import H3LoRAStack
 from .preflight import H3ComponentSetSpec, validate_task_partition
 from .runtime import H3GenerationConfig
@@ -110,6 +111,9 @@ class H3Latents:
     trajectory_capture_seconds: float = 0.0
     trajectory_replay_seconds: float = 0.0
     trajectory_replay_fallback_reason: str | None = None
+    trajectory_conditioned_row_policy: str | None = None
+    trajectory_excluded_video_rows: int = 0
+    trajectory_excluded_audio_rows: int = 0
     lora_report: tuple[dict[str, Any], ...] = ()
     projection_backend_report: dict[str, Any] | None = None
     projection_backend_runtime: dict[str, Any] | None = None
@@ -143,7 +147,7 @@ class H3TransformerCache:
         self._lock = RLock()
         self._factory = factory or _default_sampler_factory
         self._spec: H3TransformerSpec | None = None
-        self._schedule_key: tuple[int, bool, str, str, str] | None = None
+        self._schedule_key: tuple | None = None
         self._lora_key = None
         self._lora_report: tuple[dict[str, Any], ...] = ()
         self._projection_backend_report: dict[str, Any] | None = None
@@ -165,6 +169,7 @@ class H3TransformerCache:
         easycache=None,
         blockcache=None,
         trajectory_forecast=None,
+        continuation: H3ContinuationContext | None = None,
         loras: H3LoRAStack | None = None,
         prepare_stage: Callable[[], None] | None = None,
     ) -> H3Latents:
@@ -193,6 +198,8 @@ class H3TransformerCache:
             raise ValueError("Ref2VA conditioning requires encoded visual reference rows.")
         if spec.task == "ref2va" and conditioning.keyframe_anchors:
             raise ValueError("Ref2VA conditioning cannot contain first/last-frame anchors.")
+        if continuation is not None:
+            validate_continuation_for_sample(continuation, spec, config)
         expected_encoder = H3TextEncoderSpec(
             text_encoder=spec.text_encoder,
             processor=spec.processor,
@@ -204,12 +211,20 @@ class H3TransformerCache:
             raise ValueError(
                 "Conditioning was produced by a different Qwen3-VL component specification."
             )
+        condition_schedule_key = (
+            continuation is not None,
+            conditioning.condition_video_rows is not None,
+            conditioning.condition_audio_rows is not None,
+            float(conditioning.visual_condition_strength),
+            float(conditioning.audio_condition_strength),
+        )
         schedule_key = (
             config.steps,
             config.drop_adaln,
             config.memory_mode,
             config.projection_backend,
             config.sampling_method,
+            condition_schedule_key,
         )
         loras = loras or H3LoRAStack()
         loras.validate_for_steps(config.steps)
@@ -233,6 +248,11 @@ class H3TransformerCache:
         if accelerators > 1:
             raise ValueError(
                 "EasyCache, BlockCache, and Trajectory Forecast are mutually exclusive."
+            )
+        if continuation is not None and (easycache is not None or blockcache is not None):
+            raise ValueError(
+                "H3 continuation supports dense sampling or Trajectory Forecast. Disconnect "
+                "EasyCache and BlockCache."
             )
         if spec.task == "fl2va" and accelerators:
             raise ValueError(
@@ -293,6 +313,15 @@ class H3TransformerCache:
                     easycache_config=easycache,
                     blockcache_config=blockcache,
                     trajectory_forecast_config=trajectory_forecast,
+                    continuation_video_latents=(
+                        continuation.video if continuation is not None else None
+                    ),
+                    continuation_audio_latents=(
+                        continuation.audio if continuation is not None else None
+                    ),
+                    continuation_frames=(
+                        continuation.context_frames if continuation is not None else 0
+                    ),
                     condition_video_rows=conditioning.condition_video_rows,
                     condition_audio_rows=conditioning.condition_audio_rows,
                     keyframe_anchors=conditioning.keyframe_anchors,
@@ -347,6 +376,15 @@ class H3TransformerCache:
                     trajectory_replay_seconds=getattr(result, "trajectory_replay_seconds", 0.0),
                     trajectory_replay_fallback_reason=getattr(
                         result, "trajectory_replay_fallback_reason", None
+                    ),
+                    trajectory_conditioned_row_policy=getattr(
+                        result, "trajectory_conditioned_row_policy", None
+                    ),
+                    trajectory_excluded_video_rows=getattr(
+                        result, "trajectory_excluded_video_rows", 0
+                    ),
+                    trajectory_excluded_audio_rows=getattr(
+                        result, "trajectory_excluded_audio_rows", 0
                     ),
                     lora_report=self._lora_report,
                     projection_backend_report=self._projection_backend_report,

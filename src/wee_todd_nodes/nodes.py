@@ -8,6 +8,11 @@ from pathlib import Path
 
 from .conditioning import TEXT_ENCODER_RUNTIME, H3TextEncoderSpec
 from .conditioning_inputs import H3KeyframeConditioning, H3ReferenceInput, H3ReferenceStack
+from .continuation import (
+    SUPPORTED_CONTEXT_FRAMES,
+    continuation_context_from_latents,
+    trim_continuation_overlap,
+)
 from .decoding import (
     AUDIO_VAE_RUNTIME,
     VIDEO_VAE_RUNTIME,
@@ -80,6 +85,26 @@ def _safe_output_target(output_directory: Path, filename_prefix: str, seed: int)
     if target != root and root not in target.parents:
         raise ValueError("filename_prefix resolves outside ComfyUI's output directory")
     return target
+
+
+def _parse_media_timing_info(raw: str, *, image_frames: int, sample_rate: int):
+    if not raw:
+        return None
+    try:
+        timing = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError("Media timing information must be valid JSON.") from exc
+    if not isinstance(timing, dict):
+        raise ValueError("Media timing information must be a JSON object.")
+    if timing.get("fps") != 24:
+        raise ValueError("Media timing information must declare 24 fps video.")
+    if timing.get("sample_rate") != sample_rate:
+        raise ValueError("Media timing sample rate does not match the AUDIO sample rate.")
+    if timing.get("output_frames") != image_frames:
+        raise ValueError(
+            "Media timing frame count does not match the decoded IMAGE frame count."
+        )
+    return timing
 
 
 _COMPONENT_MODEL_CATEGORIES = {
@@ -189,6 +214,38 @@ _H3_LEGACY_ASPECT_RATIOS = {
 }
 
 _H3_VALIDATED_SAMPLING_PRESETS = {
+    "Chained context — Dense Turbo LightX2V rank 21 — 5 points / 4 evaluations": {
+        "steps": 5,
+        "policy": "turbo",
+        "lora": (
+            "minimax_h3_fl2v_lightx2v_turbo_4step_v0.1_comfy_resized_avg_rank_21_bf16.safetensors"
+        ),
+        "measurement": {
+            "task": "t2va_continuation",
+            "windows": 4,
+            "context_frames": 22,
+            "canvas": [960, 544],
+            "final_duration_seconds": 15.0,
+            "transformer_evaluations_per_window": 4,
+            "complete_workflow_seconds": 1570,
+        },
+    },
+    "Chained context — Trajectory target-only replay — 20 points / up to 11 evaluations": {
+        "steps": 20,
+        "policy": "trajectory_speed_offline_replay",
+        "measurement": {
+            "task": "t2va_continuation",
+            "windows": 4,
+            "context_frames": 22,
+            "canvas": [960, 544],
+            "final_duration_seconds": 15.0,
+            "transformer_evaluations_per_window": 11,
+            "forecasts_per_window": 8,
+            "fallbacks": 0,
+            "complete_workflow_seconds": 3765,
+            "conditioned_row_policy": "target_only",
+        },
+    },
     "Dense baseline — 20 points / 19 evaluations": {
         "steps": 20,
         "policy": "dense",
@@ -984,6 +1041,42 @@ class WeeToddH3UnloadTextEncoder:
         return ("MiniMax H3 Qwen3-VL conditioner kept warm",)
 
 
+class WeeToddH3ContinuationContext:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "latents": ("WEETODD_H3_LATENTS",),
+                "context_frames": ([str(value) for value in SUPPORTED_CONTEXT_FRAMES],),
+            }
+        }
+
+    RETURN_TYPES = ("WEETODD_H3_CONTINUATION", "STRING")
+    RETURN_NAMES = ("continuation", "continuation_info")
+    FUNCTION = "extract"
+    CATEGORY = "WeeTodd/H3/continuation"
+    DESCRIPTION = (
+        "Copy a synchronized tail from H3 video and audio latents for motion continuation. "
+        "The recommended 22-frame overlap is about 0.92 seconds at 24 fps."
+    )
+
+    def extract(self, latents, context_frames):
+        context = continuation_context_from_latents(latents, int(context_frames))
+        info = {
+            "context_frames": context.context_frames,
+            "context_seconds": context.context_frames / context.fps,
+            "video_latent_frames": context.video_latent_frames,
+            "audio_latent_frames": context.audio_latent_frames,
+            "width": context.width,
+            "height": context.height,
+            "fps": context.fps,
+            "sample_rate": context.sample_rate,
+            "checkpoint": Path(context.transformer_checkpoint).name,
+            "transformer": Path(context.transformer_path).name,
+        }
+        return context, json.dumps(info, indent=2, sort_keys=True)
+
+
 class WeeToddH3Sample:
     @classmethod
     def INPUT_TYPES(cls):
@@ -998,6 +1091,7 @@ class WeeToddH3Sample:
                 "easycache": ("WEETODD_H3_EASYCACHE",),
                 "blockcache": ("WEETODD_H3_BLOCKCACHE",),
                 "trajectory_forecast": ("WEETODD_H3_TRAJECTORY_FORECAST",),
+                "continuation": ("WEETODD_H3_CONTINUATION",),
                 "loras": ("WEETODD_H3_LORAS",),
             },
         }
@@ -1020,6 +1114,7 @@ class WeeToddH3Sample:
         easycache=None,
         blockcache=None,
         trajectory_forecast=None,
+        continuation=None,
         loras=None,
     ):
         if sum(value is not None for value in (easycache, blockcache, trajectory_forecast)) > 1:
@@ -1061,6 +1156,7 @@ class WeeToddH3Sample:
             easycache=easycache,
             blockcache=blockcache,
             trajectory_forecast=trajectory_forecast,
+            continuation=continuation,
             loras=loras,
             prepare_stage=prepare_stage,
         )
@@ -1081,6 +1177,16 @@ class WeeToddH3Sample:
                 "visual": conditioning.visual_condition_strength,
                 "audio": conditioning.audio_condition_strength,
             },
+            "continuation": (
+                {
+                    "context_frames": continuation.context_frames,
+                    "context_seconds": continuation.context_frames / continuation.fps,
+                    "video_latent_frames": continuation.video_latent_frames,
+                    "audio_latent_frames": continuation.audio_latent_frames,
+                }
+                if continuation is not None
+                else None
+            ),
             "frames": latents.num_frames,
             "width": latents.width,
             "height": latents.height,
@@ -1117,6 +1223,13 @@ class WeeToddH3Sample:
             "trajectory_replay_fallback_reason": getattr(
                 latents, "trajectory_replay_fallback_reason", None
             ),
+            "trajectory_conditioned_row_policy": getattr(
+                latents, "trajectory_conditioned_row_policy", None
+            ),
+            "trajectory_excluded_condition_rows": {
+                "video": getattr(latents, "trajectory_excluded_video_rows", 0),
+                "audio": getattr(latents, "trajectory_excluded_audio_rows", 0),
+            },
             "trajectory_forecast": (
                 asdict(trajectory_forecast) if trajectory_forecast is not None else None
             ),
@@ -1297,6 +1410,7 @@ class WeeToddH3ValidatedSamplingPreset:
                 offline_smoothing_replay=True,
                 offline_video_blend=0.5,
                 offline_audio_blend=0.0,
+                conditioned_row_policy="target_only",
             )
             trajectory_forecast.validate()
 
@@ -1467,6 +1581,16 @@ class WeeToddH3TrajectoryForecast:
                         ),
                     },
                 ),
+                "conditioned_row_policy": (
+                    ["target_only", "all_rows_legacy"],
+                    {
+                        "default": "target_only",
+                        "tooltip": (
+                            "Forecast only generated rows when continuation or reference rows "
+                            "are present. This is the recommended chained-context policy."
+                        ),
+                    },
+                ),
             },
         }
 
@@ -1492,6 +1616,7 @@ class WeeToddH3TrajectoryForecast:
         offline_smoothing_replay=False,
         offline_video_blend=0.5,
         offline_audio_blend=0.0,
+        conditioned_row_policy="target_only",
     ):
         from minimax_h3_mlx.trajectory_forecast import H3TrajectoryForecastConfig
 
@@ -1507,6 +1632,7 @@ class WeeToddH3TrajectoryForecast:
             offline_smoothing_replay=offline_smoothing_replay,
             offline_video_blend=offline_video_blend,
             offline_audio_blend=offline_audio_blend,
+            conditioned_row_policy=conditioned_row_policy,
         )
         config.validate()
         return (config,)
@@ -1820,6 +1946,33 @@ class WeeToddH3UnloadAudioVAE:
         return ("MiniMax H3 audio VAE kept warm",)
 
 
+class WeeToddH3TrimContinuation:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "images": ("IMAGE",),
+                "audio": ("AUDIO",),
+                "continuation": ("WEETODD_H3_CONTINUATION",),
+            }
+        }
+
+    RETURN_TYPES = ("IMAGE", "AUDIO", "STRING")
+    RETURN_NAMES = ("images", "audio", "trim_info")
+    FUNCTION = "trim"
+    CATEGORY = "WeeTodd/H3/continuation"
+    DESCRIPTION = (
+        "Remove the repeated motion-continuation overlap from decoded video and audio, then "
+        "normalize audio to the exact remaining video duration."
+    )
+
+    def trim(self, images, audio, continuation):
+        trimmed_images, trimmed_audio, info = trim_continuation_overlap(
+            images, audio, continuation.context_frames, continuation.fps
+        )
+        return trimmed_images, trimmed_audio, json.dumps(info, indent=2, sort_keys=True)
+
+
 class WeeToddH3PublishVideoAudio:
     @classmethod
     def INPUT_TYPES(cls):
@@ -1842,6 +1995,7 @@ class WeeToddH3PublishVideoAudio:
                     {"default": "{}", "multiline": True},
                 ),
                 "sampling_info": ("STRING", {"default": ""}),
+                "media_timing_info": ("STRING", {"default": ""}),
                 "ffmpeg_path": (
                     "STRING",
                     {
@@ -1874,6 +2028,7 @@ class WeeToddH3PublishVideoAudio:
         max_av_drift_seconds,
         generation_metadata="{}",
         sampling_info="",
+        media_timing_info="",
         ffmpeg_path="",
     ):
         config.validate()
@@ -1892,7 +2047,12 @@ class WeeToddH3PublishVideoAudio:
         from minimax_h3_mlx.packing import align_num_frames
 
         expected_frames = align_num_frames(int(round(config.duration_seconds * 24)))
-        if images.shape[0] != expected_frames:
+        timing_metadata = _parse_media_timing_info(
+            media_timing_info,
+            image_frames=int(images.shape[0]),
+            sample_rate=int(audio["sample_rate"]),
+        )
+        if timing_metadata is None and images.shape[0] != expected_frames:
             raise ValueError(
                 "Decoded frame count does not match the generation configuration: "
                 f"{images.shape[0]} != {expected_frames}."
@@ -1940,6 +2100,8 @@ class WeeToddH3PublishVideoAudio:
                 supplied_metadata["sampling"] = json.loads(sampling_info)
             except json.JSONDecodeError as exc:
                 raise ValueError("Sampling information must be valid JSON.") from exc
+        if timing_metadata is not None:
+            supplied_metadata["media_timing"] = timing_metadata
         component_paths = components.resolved_paths()
         try:
             package_version = version("comfyui-weetodd-nodes")
@@ -2417,6 +2579,7 @@ NODE_CLASS_MAPPINGS = {
     "WeeToddH3ReferenceStrength": WeeToddH3ReferenceStrength,
     "WeeToddH3TextEncode": WeeToddH3TextEncode,
     "WeeToddH3UnloadTextEncoder": WeeToddH3UnloadTextEncoder,
+    "WeeToddH3ContinuationContext": WeeToddH3ContinuationContext,
     "WeeToddH3Sample": WeeToddH3Sample,
     "WeeToddH3LoRALoader": WeeToddH3LoRALoader,
     "WeeToddH3ValidatedSamplingPreset": WeeToddH3ValidatedSamplingPreset,
@@ -2429,6 +2592,7 @@ NODE_CLASS_MAPPINGS = {
     "WeeToddH3UnloadVideoVAE": WeeToddH3UnloadVideoVAE,
     "WeeToddH3AudioVAEDecode": WeeToddH3AudioVAEDecode,
     "WeeToddH3UnloadAudioVAE": WeeToddH3UnloadAudioVAE,
+    "WeeToddH3TrimContinuation": WeeToddH3TrimContinuation,
     "WeeToddH3PublishVideoAudio": WeeToddH3PublishVideoAudio,
     "WeeToddH3DirectPublishLatents": WeeToddH3DirectPublishLatents,
     "WeeToddH3ModelLoader": WeeToddH3ModelLoader,
@@ -2451,6 +2615,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "WeeToddH3ReferenceStrength": "WeeTodd H3 Reference Strength",
     "WeeToddH3TextEncode": "WeeTodd H3 Text Encode (Qwen3-VL)",
     "WeeToddH3UnloadTextEncoder": "WeeTodd H3 Unload Qwen3-VL",
+    "WeeToddH3ContinuationContext": "WeeTodd H3 Motion Continuation Context",
     "WeeToddH3Sample": "WeeTodd H3 Sample Video + Audio Latents",
     "WeeToddH3LoRALoader": "WeeTodd H3 LoRA Loader (MLX)",
     "WeeToddH3ValidatedSamplingPreset": "WeeTodd H3 Validated Sampling Preset",
@@ -2463,6 +2628,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "WeeToddH3UnloadVideoVAE": "WeeTodd H3 Unload Video VAE",
     "WeeToddH3AudioVAEDecode": "WeeTodd H3 Decode Audio VAE",
     "WeeToddH3UnloadAudioVAE": "WeeTodd H3 Unload Audio VAE",
+    "WeeToddH3TrimContinuation": "WeeTodd H3 Trim Continuation Overlap",
     "WeeToddH3PublishVideoAudio": "WeeTodd H3 Publish Video + Audio",
     "WeeToddH3DirectPublishLatents": "WeeTodd H3 Direct Publish Latents (MLX)",
     "WeeToddH3ModelLoader": "WeeTodd H3 Model Loader (MLX)",

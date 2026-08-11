@@ -142,6 +142,9 @@ class LatentResult:
     trajectory_capture_seconds: float = 0.0
     trajectory_replay_seconds: float = 0.0
     trajectory_replay_fallback_reason: str | None = None
+    trajectory_conditioned_row_policy: str | None = None
+    trajectory_excluded_video_rows: int = 0
+    trajectory_excluded_audio_rows: int = 0
     seconds_per_evaluation: float = 0.0
     total_seconds: float = 0.0
 
@@ -307,6 +310,9 @@ class MiniMaxH3Pipeline:
         diagnostics=None,
         condition_video_rows: mx.array | None = None,
         condition_audio_rows: mx.array | None = None,
+        continuation_video_latents: mx.array | None = None,
+        continuation_audio_latents: mx.array | None = None,
+        continuation_frames: int = 0,
         keyframe_anchors: tuple[str, ...] = (),
         references: tuple | list = (),
         sampling_method: str = "euler",
@@ -358,6 +364,44 @@ class MiniMaxH3Pipeline:
         latent_height, latent_width = height // 16, width // 16
         num_audio_latents = audio_latent_num_frames(num_frames)
         patch_size = self.dit.config.patch_size
+        has_continuation = continuation_frames > 0
+        if has_continuation:
+            if references or keyframe_anchors or condition_video_rows is not None:
+                raise ValueError(
+                    "Initial H3 continuation cannot be combined with Ref2VA or FL2VA rows."
+                )
+            if continuation_video_latents is None or continuation_audio_latents is None:
+                raise ValueError("Continuation requires both video and audio latent streams.")
+            expected_video_frames = video_latent_num_frames(continuation_frames)
+            expected_audio_frames = audio_latent_num_frames(continuation_frames)
+            expected_video_shape = (
+                1,
+                self.dit.config.latents_dim,
+                expected_video_frames,
+                latent_height,
+                latent_width,
+            )
+            if tuple(continuation_video_latents.shape) != expected_video_shape:
+                raise ValueError(
+                    "Continuation video latent shape does not match the target canvas and context: "
+                    f"expected {expected_video_shape}, got "
+                    f"{tuple(continuation_video_latents.shape)}."
+                )
+            expected_audio_shape = (
+                AUDIO_CHANNELS,
+                self.dit.config.audio_latents_dim,
+                expected_audio_frames,
+            )
+            if tuple(continuation_audio_latents.shape) != expected_audio_shape:
+                raise ValueError(
+                    "Continuation audio latent shape does not match the context: "
+                    f"expected {expected_audio_shape}, got "
+                    f"{tuple(continuation_audio_latents.shape)}."
+                )
+        elif continuation_video_latents is not None or continuation_audio_latents is not None:
+            raise ValueError(
+                "Continuation latent streams require a positive continuation frame count."
+            )
         if references:
             if keyframe_anchors:
                 raise ValueError("Ref2VA references cannot be combined with FL2VA keyframes.")
@@ -435,9 +479,26 @@ class MiniMaxH3Pipeline:
                 num_audio_latents,
                 patch_size,
                 keyframe_anchors,
+                continuation_video_frames=(
+                    video_latent_num_frames(continuation_frames) if has_continuation else 0
+                ),
+                continuation_audio_latents=(
+                    audio_latent_num_frames(continuation_frames) if has_continuation else 0
+                ),
             )
 
         mx.random.seed(seed)
+        if has_continuation:
+            condition_video_rows = patchify_video_latents(
+                continuation_video_latents.astype(mx.float32), patch_size
+            )
+            condition_audio_rows = (
+                continuation_audio_latents.astype(mx.float32)
+                .transpose(0, 2, 1)
+                .reshape(-1, self.dit.config.audio_latents_dim)
+            )
+            visual_condition_strength = 1.0
+            audio_condition_strength = 1.0
         if condition_video_rows is not None:
             condition_video_rows = condition_video_rows.astype(mx.float32)
             condition_noise = mx.random.normal(condition_video_rows.shape).astype(mx.float32)
@@ -540,6 +601,12 @@ class MiniMaxH3Pipeline:
         trajectory_replay_seconds = 0.0
         condition_video_count = layout.num_condition_video_rows
         condition_audio_count = layout.num_condition_audio_rows
+        target_only_forecast = bool(
+            trajectory_forecast is not None
+            and trajectory_forecast.config.conditioned_row_policy == "target_only"
+        )
+        trajectory_video_row_start = condition_video_count if target_only_forecast else 0
+        trajectory_audio_row_start = condition_audio_count if target_only_forecast else 0
 
         def run_pass(start_video_rows, start_audio_rows, progress_offset, progress_total):
             nonlocal transformer_evaluations
@@ -584,6 +651,8 @@ class MiniMaxH3Pipeline:
                         blockcache=blockcache,
                         trajectory_forecast=trajectory_forecast,
                         forecast_coordinate=float(timestep),
+                        trajectory_video_row_start=trajectory_video_row_start,
+                        trajectory_audio_row_start=trajectory_audio_row_start,
                         step_index=index,
                         total_steps=total_steps,
                         diagnostics=diagnostics,
@@ -783,6 +852,13 @@ class MiniMaxH3Pipeline:
             trajectory_capture_seconds=trajectory_capture_seconds,
             trajectory_replay_seconds=trajectory_replay_seconds,
             trajectory_replay_fallback_reason=trajectory_replay_fallback_reason,
+            trajectory_conditioned_row_policy=(
+                trajectory_forecast_config.conditioned_row_policy
+                if trajectory_forecast_config is not None
+                else None
+            ),
+            trajectory_excluded_video_rows=trajectory_video_row_start,
+            trajectory_excluded_audio_rows=trajectory_audio_row_start,
             seconds_per_evaluation=(sum(transformer_times) / max(len(transformer_times), 1)),
             total_seconds=time.perf_counter() - run_started,
         )

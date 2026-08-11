@@ -21,9 +21,10 @@ while increasing workflow time by approximately 5 to 16 percent. See
 - Text-to-video-plus-audio (`t2va`)
 - Experimental first-frame, last-frame, and combined first/last-frame (`fl2va`) conditioning
 - Experimental ordered image, video, soundtrack, and audio reference (`ref2va`) conditioning
+- Experimental latent-native motion continuation for dense T2VA sampling
 - Independent visual and audio reference-strength control
 - Synchronized H.264 video and 32 kHz stereo AAC audio
-- Thirty-two composable nodes under `WeeTodd/H3`
+- Thirty-four composable nodes under `WeeTodd/H3`
 - Optional standalone LTX 2.3 T2VA and I2VA pipelines under `WeeTodd/LTX 2.3`
 - Learned LTX latent upscaling for decoded H3 `IMAGE` plus `AUDIO`
 
@@ -52,6 +53,68 @@ settings fixed when comparing strengths.
 Start with [`fl2va_first_frame_workflow.json`](examples/fl2va_first_frame_workflow.json) for image-
 to-video-plus-audio or [`ref2va_image_workflow.json`](examples/ref2va_image_workflow.json) for one
 ordered image reference. Replace the placeholder input image and edit the prompt before queuing.
+
+## Motion continuation
+
+Use **Motion Continuation Context** to copy a synchronized video-and-audio latent tail from one H3
+generation. Connect the continuation output to the next **Sample Video + Audio Latents** node. The
+recommended overlap is 22 frames, or approximately 0.92 seconds at 24 fps.
+
+Decode the second generation, then connect its `IMAGE`, `AUDIO`, and continuation outputs to
+**Trim Continuation Overlap**. The trim node removes the repeated video head, removes the matching
+audio samples, and normalizes audio to the exact remaining video duration. Connect `trim_info` to
+the publisher's `media_timing_info` input. Join the first decoded clip and the trimmed second clip
+with standard ComfyUI media nodes.
+
+The initial continuation path has these limits:
+
+- Use a T2VA checkpoint and the same checkpoint, canvas, frame rate, and sample rate for both clips.
+- Use dense sampling or connect **Trajectory Forecast**. EasyCache and BlockCache remain rejected.
+- Keep `conditioned_row_policy` at `target_only` for chained context. The forecast guard and archive
+  then exclude fixed context rows whose output predictions the scheduler discards.
+- Enable `offline_smoothing_replay` for the guarded replay path. Keep `offline_audio_blend` at zero
+  for the audio-isolation default, but compare against dense output when seed-specific audio matters.
+- Select 5, 22, 39, or 56 context frames. These values match the H3 temporal latent grid.
+- Treat the feature as experimental while broader prompts and longer chains remain untested.
+
+The continuation object contains copied MLX latents. The path does not decode and re-encode the
+overlap, which avoids an extra VAE pass and its reconstruction loss.
+
+The first real-checkpoint smoke test used 672 by 384 output, 124 frames per generated window,
+eight requested Euler points, a resident BF16 transformer, and no acceleration. The base window
+averaged 23.82 seconds per transformer evaluation. The continuation window averaged 29.66 seconds,
+or 24.5 percent longer, because the packed sequence included the fixed context rows. The trim node
+published 102 frames and 136,000 audio samples with zero pre-encode audiovisual drift. A boundary
+contact sheet preserved the courier, bicycle, market, pose, and apple position across the join.
+Treat this result as a wiring and first-quality smoke test, not a guarantee for longer chains.
+
+The first four-window Trajectory Forecast chain used 960 by 544 output, a 22-frame overlap,
+20 requested Euler points, resident BF16 weights, no LoRA, automatic-speed offline replay, and
+`target_only`. Every window used 11 actual transformer evaluations and eight forecasts with zero
+fallbacks. Sampling took 12.15, 15.26, 14.99, and 15.75 minutes. The complete ComfyUI graph took
+1 hour 2 minutes 45 seconds, including four text encodes, all decodes, trims, and publications.
+
+Each target-only replay archive used 2.281 GB. Continuation windows excluded 3,570 fixed video rows
+and 74 fixed audio rows from every anchor. At this shape and schedule, that exclusion saves an
+estimated 0.325 GB, or 12.5 percent, compared with archiving all rows. The final assembly contains
+360 frames and exactly 15 seconds of 32-kHz stereo audio. Treat these measurements as one
+experimental chain result, not a dense matched control.
+
+Two ready-to-load 960 by 544 chained workflows reproduce the measured policies:
+
+- [`h3_544p_chained_dense_turbo_rank21.json`](workflows/h3_544p_chained_dense_turbo_rank21.json)
+  uses the LightX2V rank-21 Turbo LoRA with five requested points and four transformer evaluations
+  per window.
+- [`h3_544p_chained_trajectory_replay.json`](workflows/h3_544p_chained_trajectory_replay.json)
+  uses 20 requested points, target-only Trajectory Forecast, offline replay, and no LoRA. Each
+  window can use up to 11 transformer evaluations.
+
+Each graph generates four source clips, retains 22 latent context frames between clips, trims the
+repeated video and audio from clips two through four, and publishes four synchronized MP4 files.
+The graph keeps the transformer resident between windows and unloads it after the fourth sample.
+Install the named Turbo adapter before running the dense Turbo graph. Join the four published MP4
+files with a media-concatenation node or external editor; WeeTodd does not assume a specific
+third-party ComfyUI video-node package.
 
 ## Install
 
@@ -386,6 +449,13 @@ prevent forecasted video state from entering a later joint transformer evaluatio
 archive increases memory use. Start with eight or more requested schedule points and compare the
 same prompt and seed with replay disabled before adopting the mode.
 
+Trajectory Forecast also supports latent-native motion continuation. Use the default
+`conditioned_row_policy` value, `target_only`, for continuation or Ref2VA. The policy forecasts only
+generated rows and excludes fixed condition rows from the guard and replay archive. Select
+`all_rows_legacy` only for controlled comparisons. Each chained sample starts a new request-local
+forecast state; forecast history never crosses a clip boundary. EasyCache and BlockCache remain
+unavailable for continuation until their fixed-row behavior passes separate validation.
+
 The optional MPP projection backend targets speed for eligible BF16 projections. It does not lower
 the measured MLX peak and is not part of the minimum-memory workflow. Q4 artifacts are not
 published or supported.
@@ -401,15 +471,17 @@ the Euler schedule and loads a required Turbo adapter only when sampling starts.
 | --- | ---: | ---: | --- |
 | Dense baseline | 20 | 19 | None |
 | Trajectory speed with offline replay | 20 | Up to 11 | Guarded trajectory capture and replay |
+| Chained context, dense Turbo LightX2V rank 21 | 5 | 4 per window | Four windows with 22 context frames |
+| Chained context, target-only trajectory replay | 20 | Up to 11 per window | Four windows with 22 context frames and no LoRA |
 | Ref2VA four-reference BF16 with Forward Attention replay | 20 | Up to 11 | Four ordered image references, normal-memory BF16 sampling, guarded replay |
 | Turbo, Larry EMA-850 | 5 | 4 | Matching Turbo LoRA |
 | Turbo, Larry v4 step-600 | 5 | 4 | Matching Turbo LoRA |
 | Turbo, LightX2V full rank | 5 | 4 | Matching Turbo LoRA |
 | Turbo, LightX2V dynamic rank 21 | 5 | 4 | Matching Turbo LoRA |
 
-The [`workflows/`](workflows/) directory contains one ready-to-load 896 by 512 ComfyUI workflow
-for each preset. Install a workflow's named LoRA in a ComfyUI LoRA model folder before loading a
-Turbo workflow. WeeTodd does not bundle or download adapters.
+The [`workflows/`](workflows/) directory contains ready-to-load ComfyUI workflows for the measured
+single-window and chained presets. Install a workflow's named LoRA in a ComfyUI LoRA model folder
+before loading a Turbo workflow. WeeTodd does not bundle or download adapters.
 
 [`h3_512p_ref2va_four_reference_forward_attention.json`](workflows/h3_512p_ref2va_four_reference_forward_attention.json)
 reproduces the measured four-image Ref2VA graph. Select Little Red, wolf, Granny, and woodsman

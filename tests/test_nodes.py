@@ -24,10 +24,28 @@ from wee_todd_nodes.nodes import (
     WeeToddH3TrajectoryForecast,
     WeeToddH3ValidatedSamplingPreset,
     _output_directory,
+    _parse_media_timing_info,
     _publication_environment,
     _resolve_h3_resolution,
     _safe_output_target,
 )
+
+
+def test_trim_timing_metadata_explicitly_authorizes_changed_frame_count():
+    timing = {
+        "context_frames_removed": 22,
+        "output_frames": 102,
+        "fps": 24,
+        "sample_rate": 32000,
+    }
+
+    assert _parse_media_timing_info(
+        json.dumps(timing), image_frames=102, sample_rate=32000
+    ) == timing
+    with pytest.raises(ValueError, match="frame count"):
+        _parse_media_timing_info(json.dumps(timing), image_frames=101, sample_rate=32000)
+    with pytest.raises(ValueError, match="sample rate"):
+        _parse_media_timing_info(json.dumps(timing), image_frames=102, sample_rate=48000)
 
 
 def test_sampling_metadata_preserves_exact_prompt(monkeypatch):
@@ -81,7 +99,7 @@ def test_sampling_metadata_preserves_exact_prompt(monkeypatch):
 
 
 def test_expected_nodes_are_registered():
-    assert len(NODE_CLASS_MAPPINGS) == 39
+    assert len(NODE_CLASS_MAPPINGS) == 41
     assert "WeeToddH3ComponentLoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3QuantizedTransformerLoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3Preflight" in NODE_CLASS_MAPPINGS
@@ -97,6 +115,7 @@ def test_expected_nodes_are_registered():
     assert "WeeToddH3TextEncode" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3TrajectoryForecast" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3UnloadTextEncoder" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3ContinuationContext" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3Sample" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3EasyCache" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3BlockCache" in NODE_CLASS_MAPPINGS
@@ -108,6 +127,7 @@ def test_expected_nodes_are_registered():
     assert "WeeToddH3UnloadVideoVAE" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3AudioVAEDecode" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3UnloadAudioVAE" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3TrimContinuation" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3PublishVideoAudio" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3DirectPublishLatents" in NODE_CLASS_MAPPINGS
     assert "WeeToddLTX23ModelLoader" in NODE_CLASS_MAPPINGS
@@ -207,6 +227,50 @@ def test_validated_sampling_preset_applies_dense_and_trajectory_policies():
         "transformer_evaluations": 11,
         "mlx_peak_bytes": 47323507330,
     }
+
+
+def test_validated_chained_context_presets_match_measured_policies(tmp_path, monkeypatch):
+    from wee_todd_nodes.runtime import H3GenerationConfig
+
+    lora_name = (
+        "minimax_h3_fl2v_lightx2v_turbo_4step_v0.1_comfy_"
+        "resized_avg_rank_21_bf16.safetensors"
+    )
+    path = tmp_path / lora_name
+    mx.save_safetensors(
+        str(path),
+        {
+            "blocks.0.attn.qkv_proj.lora_A.weight": mx.zeros((1, 2)),
+            "blocks.0.attn.qkv_proj.lora_B.weight": mx.zeros((6, 1)),
+        },
+    )
+    monkeypatch.setattr("wee_todd_nodes.nodes._resolve_lora_path", lambda name: tmp_path / name)
+    source = H3GenerationConfig(width=960, height=544, duration_seconds=5.17)
+    node = WeeToddH3ValidatedSamplingPreset()
+
+    turbo, loras, forecast, turbo_raw = node.apply(
+        source,
+        "Chained context — Dense Turbo LightX2V rank 21 — 5 points / 4 evaluations",
+    )
+    turbo_info = json.loads(turbo_raw)
+    assert turbo.steps == 5
+    assert forecast is None
+    assert loras.has_turbo is True
+    assert turbo_info["measurement"]["complete_workflow_seconds"] == 1570
+
+    replay, loras, forecast, replay_raw = node.apply(
+        source,
+        (
+            "Chained context — Trajectory target-only replay — "
+            "20 points / up to 11 evaluations"
+        ),
+    )
+    replay_info = json.loads(replay_raw)
+    assert replay.steps == 20
+    assert loras is None
+    assert forecast.offline_smoothing_replay is True
+    assert forecast.conditioned_row_policy == "target_only"
+    assert replay_info["measurement"]["complete_workflow_seconds"] == 3765
 
 
 @pytest.mark.parametrize(
@@ -539,6 +603,25 @@ def test_trajectory_forecast_node_exposes_opt_in_offline_audio_isolation():
         "offline_smoothing_replay"
     )
     assert optional["offline_smoothing_replay"][1]["default"] is False
+
+
+def test_trajectory_forecast_node_defaults_to_context_safe_target_rows():
+    (config,) = WeeToddH3TrajectoryForecast().configure(
+        "automatic_speed",
+        1.0,
+        2,
+        1,
+        2,
+        0.5,
+        2.5,
+    )
+
+    assert config.conditioned_row_policy == "target_only"
+    choices, options = WeeToddH3TrajectoryForecast.INPUT_TYPES()["optional"][
+        "conditioned_row_policy"
+    ]
+    assert choices == ["target_only", "all_rows_legacy"]
+    assert options["default"] == "target_only"
 
 
 def test_component_loader_returns_lazy_immutable_spec():

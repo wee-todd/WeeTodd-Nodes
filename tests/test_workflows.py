@@ -19,6 +19,15 @@ VALIDATED_WORKFLOW_PRESETS = {
         "Turbo — LightX2V dynamic rank 21 — 5 points / 4 evaluations"
     ),
 }
+CHAINED_WORKFLOW_PRESETS = {
+    "h3_544p_chained_dense_turbo_rank21.json": (
+        "Chained context — Dense Turbo LightX2V rank 21 — 5 points / 4 evaluations"
+    ),
+    "h3_544p_chained_trajectory_replay.json": (
+        "Chained context — Trajectory target-only replay — "
+        "20 points / up to 11 evaluations"
+    ),
+}
 
 
 def test_ltx23_standalone_api_is_registered_and_preflighted():
@@ -223,6 +232,71 @@ def test_validated_sampling_workflows_are_loadable_and_preconfigured(filename, p
         "loras",
         "trajectory_forecast",
     ]
+
+    for link_id, origin_id, origin_slot, target_id, target_slot, link_type in workflow["links"]:
+        assert link_id in nodes[origin_id]["outputs"][origin_slot]["links"]
+        target_input = nodes[target_id]["inputs"][target_slot]
+        assert target_input["link"] == link_id
+        assert target_input["type"] == link_type
+
+
+@pytest.mark.parametrize("filename,preset", CHAINED_WORKFLOW_PRESETS.items())
+def test_chained_workflows_are_portable_linked_and_preconfigured(filename, preset):
+    raw = (ROOT / "workflows" / filename).read_text()
+    workflow = json.loads(raw)
+    nodes = {node["id"]: node for node in workflow["nodes"]}
+
+    assert len(nodes) == 30
+    assert {node["type"] for node in nodes.values()} <= set(NODE_CLASS_MAPPINGS)
+    assert "/Volumes/" not in raw
+    assert "/Users/" not in raw
+    assert nodes[2]["widgets_values"] == [
+        5.17,
+        20,
+        54420260810,
+        "ratio + size",
+        "Use size slider — 32 px steps",
+        "16:9 — widescreen landscape",
+        544,
+        960,
+        544,
+        False,
+        "normal",
+        "automatic",
+        "mlx",
+    ]
+    assert nodes[3]["widgets_values"] == [preset]
+
+    by_type = {}
+    for node in nodes.values():
+        by_type.setdefault(node["type"], []).append(node)
+    assert len(by_type["WeeToddH3TextEncode"]) == 4
+    assert len(by_type["WeeToddH3Sample"]) == 4
+    assert len(by_type["WeeToddH3ContinuationContext"]) == 3
+    assert len(by_type["WeeToddH3VideoVAEDecode"]) == 4
+    assert len(by_type["WeeToddH3AudioVAEDecode"]) == 4
+    assert len(by_type["WeeToddH3TrimContinuation"]) == 3
+    assert len(by_type["WeeToddH3PublishVideoAudio"]) == 4
+    assert [node["widgets_values"] for node in by_type["WeeToddH3ContinuationContext"]] == [
+        ["22"],
+        ["22"],
+        ["22"],
+    ]
+    assert [node["widgets_values"] for node in by_type["WeeToddH3Sample"]] == [
+        [False],
+        [False],
+        [False],
+        [True],
+    ]
+    assert [item["name"] for item in nodes[9]["inputs"]] == [
+        "components",
+        "conditioning",
+        "config",
+        "loras",
+        "trajectory_forecast",
+    ]
+    for sample_id in (10, 11, 12):
+        assert [item["name"] for item in nodes[sample_id]["inputs"]][-1] == "continuation"
 
     for link_id, origin_id, origin_slot, target_id, target_slot, link_type in workflow["links"]:
         assert link_id in nodes[origin_id]["outputs"][origin_slot]["links"]
