@@ -5,12 +5,12 @@
     {
       "id": 1, "type": "WeeToddH3ComponentLoader", "pos": [40, 80], "size": [360, 300], "flags": {}, "order": 0, "mode": 0, "inputs": [],
       "outputs": [{"name": "components", "type": "WEETODD_H3_COMPONENTS", "links": [3, 6, 9], "slot_index": 0}], "properties": {"Node name for S&R": "WeeToddH3ComponentLoader"},
-      "widgets_values": ["MiniMax-H3/Ref2VA", "ref2va", "", "", "", "", "", "", false]
+      "widgets_values": ["MiniMax-H3/Ref2VA", "ref2va", "MiniMax-H3/Ref2VA/transformer", "MiniMax-H3/Ref2VA/text_encoder", "MiniMax-H3/Ref2VA/processor", "MiniMax-H3/Ref2VA/tokenizer", "MiniMax-H3/Ref2VA/video_vae", "MiniMax-H3/Ref2VA/audio_vae", false]
     },
     {
       "id": 2, "type": "WeeToddH3GenerationConfig", "pos": [40, 430], "size": [360, 300], "flags": {}, "order": 1, "mode": 0, "inputs": [],
       "outputs": [{"name": "config", "type": "WEETODD_H3_CONFIG", "links": [4, 8], "slot_index": 0}, {"name": "resolved_resolution", "type": "STRING", "links": null, "slot_index": 1}], "properties": {"Node name for S&R": "WeeToddH3GenerationConfig"},
-      "widgets_values": [5.0, 8, 0, "ratio + size", "384 px short edge — fast smoke", "16:9 — widescreen landscape", 384, 640, 384, true, "low_memory_bf16", "automatic", "mlx"]
+      "widgets_values": [5.0, 8, 0, "ratio + size", "384 px short edge — fast smoke", "16:9 — widescreen landscape", 384, 640, 384, true, "low_memory_bf16", "automatic", "mlx", "euler"]
     },
     {
       "id": 3, "type": "LoadImage", "pos": [460, 40], "size": [300, 310], "flags": {}, "order": 2, "mode": 0, "inputs": [],
@@ -36,7 +36,7 @@
       "id": 7, "type": "WeeToddH3DirectPublishLatents", "pos": [2100, 90], "size": [390, 290], "flags": {}, "order": 6, "mode": 0,
       "inputs": [{"name": "components", "type": "WEETODD_H3_COMPONENTS", "link": 9}, {"name": "latents", "type": "WEETODD_H3_LATENTS", "link": 7}, {"name": "sampling_info", "type": "STRING", "link": 10}],
       "outputs": [{"name": "video_path", "type": "STRING", "links": null, "slot_index": 0}, {"name": "generation_info", "type": "STRING", "links": null, "slot_index": 1}], "properties": {"Node name for S&R": "WeeToddH3DirectPublishLatents"},
-      "widgets_values": ["WeeTodd/H3_Ref2VA_Image", 18, 0.025, "{\"workflow\": \"ref2va_image\"}"]
+      "widgets_values": ["WeeTodd/H3_Ref2VA_Image", 18, 0.025, "{\"workflow\": \"ref2va_image\"}", ""]
     }
   ],
   "links": [[1,3,0,4,0,"IMAGE"],[2,4,0,5,2,"WEETODD_H3_REFERENCES"],[3,1,0,5,0,"WEETODD_H3_COMPONENTS"],[4,2,0,5,1,"WEETODD_H3_CONFIG"],[5,5,0,6,1,"WEETODD_H3_CONDITIONING"],[6,1,0,6,0,"WEETODD_H3_COMPONENTS"],[7,6,0,7,1,"WEETODD_H3_LATENTS"],[8,2,0,6,2,"WEETODD_H3_CONFIG"],[9,1,0,7,0,"WEETODD_H3_COMPONENTS"],[10,6,1,7,2,"STRING"]],

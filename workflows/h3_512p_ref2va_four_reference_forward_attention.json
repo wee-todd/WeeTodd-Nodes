@@ -18,12 +18,12 @@
       "widgets_values": [
         "MiniMax-H3/FL2VA",
         "ref2va",
-        "",
-        "MiniMax-H3/text_encoders/q8-paged",
-        "",
-        "",
-        "",
-        "",
+        "MiniMax-H3/transformers/q8_extended_paged",
+        "MiniMax-H3/FL2VA/text_encoder",
+        "MiniMax-H3/FL2VA/processor",
+        "MiniMax-H3/FL2VA/tokenizer",
+        "MiniMax-H3/vae/q8/video_vae_affine_q8.safetensors",
+        "MiniMax-H3/FL2VA/audio_vae",
         true
       ]
     },
@@ -54,7 +54,8 @@
         true,
         "normal",
         "automatic",
-        "mlx"
+        "mlx",
+        "euler"
       ]
     },
     {
@@ -96,7 +97,7 @@
         {"name": "preflight_report", "type": "STRING", "links": null, "slot_index": 1}
       ],
       "properties": {"Node name for S&R": "WeeToddH3Preflight"},
-      "widgets_values": [2500, 0.0]
+      "widgets_values": [2500, 0.0, ""]
     },
     {
       "id": 5,
@@ -271,8 +272,8 @@
         {"name": "components", "type": "WEETODD_H3_COMPONENTS", "link": 15},
         {"name": "conditioning", "type": "WEETODD_H3_CONDITIONING", "link": 14},
         {"name": "config", "type": "WEETODD_H3_CONFIG", "link": 16},
-        {"name": "loras", "type": "WEETODD_H3_LORAS", "link": 17},
-        {"name": "trajectory_forecast", "type": "WEETODD_H3_TRAJECTORY_FORECAST", "link": 18}
+        {"name": "trajectory_forecast", "type": "WEETODD_H3_TRAJECTORY_FORECAST", "link": 18},
+        {"name": "loras", "type": "WEETODD_H3_LORAS", "link": 17}
       ],
       "outputs": [
         {"name": "latents", "type": "WEETODD_H3_LATENTS", "links": [20], "slot_index": 0},
@@ -303,7 +304,8 @@
         "WeeTodd/H3_Ref2VA_4Ref_BF16_ForwardAttention_512p",
         18,
         0.025,
-        "{\"workflow\": \"h3_512p_ref2va_four_reference_forward_attention\", \"checkpoint_policy\": \"experimental_fl2va_weights_for_ref2va\", \"reference_order\": [\"Little Red\", \"wolf\", \"Granny\", \"woodsman\"]}"
+        "{\"workflow\": \"h3_512p_ref2va_four_reference_forward_attention\", \"checkpoint_policy\": \"experimental_fl2va_weights_for_ref2va\", \"reference_order\": [\"Little Red\", \"wolf\", \"Granny\", \"woodsman\"]}",
+        ""
       ]
     }
   ],
@@ -324,8 +326,8 @@
     [14, 13, 0, 14, 1, "WEETODD_H3_CONDITIONING"],
     [15, 4, 0, 14, 0, "WEETODD_H3_COMPONENTS"],
     [16, 3, 0, 14, 2, "WEETODD_H3_CONFIG"],
-    [17, 3, 1, 14, 3, "WEETODD_H3_LORAS"],
-    [18, 3, 2, 14, 4, "WEETODD_H3_TRAJECTORY_FORECAST"],
+    [17, 3, 1, 14, 4, "WEETODD_H3_LORAS"],
+    [18, 3, 2, 14, 3, "WEETODD_H3_TRAJECTORY_FORECAST"],
     [19, 4, 0, 15, 0, "WEETODD_H3_COMPONENTS"],
     [20, 14, 0, 15, 1, "WEETODD_H3_LATENTS"],
     [21, 14, 1, 15, 2, "STRING"]

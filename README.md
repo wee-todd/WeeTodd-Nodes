@@ -24,7 +24,7 @@ while increasing workflow time by approximately 5 to 16 percent. See
 - Experimental latent-native motion continuation for dense T2VA sampling
 - Independent visual and audio reference-strength control
 - Synchronized H.264 video and 32 kHz stereo AAC audio
-- Thirty-four composable nodes under `WeeTodd/H3`
+- 34 composable nodes under `WeeTodd/H3`
 - Optional standalone LTX 2.3 T2VA and I2VA pipelines under `WeeTodd/LTX 2.3`
 - Learned LTX latent upscaling for decoded H3 `IMAGE` plus `AUDIO`
 
@@ -249,15 +249,24 @@ COMFYUI_ROOT=/path/to/ComfyUI
 
 "$COMFYUI_ROOT/.venv/bin/hf" download Vayden/MiniMax-H3-Video-VAE-MLX-Q8 \
   --local-dir "$COMFYUI_ROOT/models/MiniMax-H3/vae/q8"
+
+"$COMFYUI_ROOT/.venv/bin/hf" download MiniMaxAI/MiniMax-H3 \
+  --include "LICENSE" \
+  --include "FL2VA/model_index.json" \
+  --include "FL2VA/processor/*" \
+  --include "FL2VA/tokenizer/*" \
+  --include "FL2VA/audio_vae/*" \
+  --local-dir "$COMFYUI_ROOT/models/MiniMax-H3"
 ```
 
-These repositories are optimized replacement components, not a complete H3 distribution. Obtain
-the remaining MiniMax H3 components under their applicable licenses. Model weights are not
-included in this repository.
+The three WeeTodd repositories are optimized replacement components, not a complete H3
+distribution. The final command obtains the licensed FL2VA manifest, processor, tokenizer, and
+audio VAE from the official MiniMax H3 repository. Review the MiniMax H3 license before download.
+Model weights are not included in this repository.
 
-The Component Loader requires a partition root with a WeeTodd-compatible `model_index.json`.
-WeeTodd provides metadata-only templates for both supported partitions. Create the manifest after
-you have made and verified the correct local partition directory:
+The Component Loader requires a partition root with a WeeTodd-compatible `model_index.json`. The
+official partial-download command above installs the FL2VA manifest. If a verified local partition
+does not include that file, use the WeeTodd metadata-only generator:
 
 ```bash
 WEETODD_ROOT="$COMFYUI_ROOT/custom_nodes/WeeTodd-Nodes"
@@ -287,32 +296,56 @@ ComfyUI/models/
 └── MiniMax-H3/
     ├── FL2VA/
     │   ├── model_index.json
+    │   ├── processor/
+    │   │   ├── preprocessor_config.json
+    │   │   └── tokenizer.json
+    │   ├── tokenizer/
+    │   │   └── tokenizer.json
     │   └── audio_vae/
     │       ├── config.json
     │       ├── metadata.json
     │       └── model.safetensors
     ├── text_encoders/
     │   └── q8-paged/
+    │       ├── architecture_config.json
     │       ├── config.json
-    │       ├── tokenizer.json
-    │       └── <paged Qwen files>
+    │       ├── paged_text_encoder_manifest.json
+    │       └── pages/
     ├── transformers/
     │   └── q8_extended_paged/
+    │       ├── config.json
+    │       ├── paged_manifest.json
+    │       └── pages/
     └── vae/
         └── q8/
             └── video_vae_affine_q8.safetensors
 ```
 
-For optimized T2VA, set `text_encoder`, `processor`, and `tokenizer` to the Qwen Q8 directory. A
-text-only processor may reuse its `tokenizer.json`. Set `transformer` to the paged transformer,
-`video_vae` to the Q8 video-VAE file, and `audio_vae` to the licensed audio-VAE directory shown
-above. The standard audio VAE is three files, not one loose weight file. A self-describing compact
-MLX audio-VAE `.safetensors` file is also supported when its header contains the required
-`minimax_h3_audio_vae` metadata.
+Use these Component Loader values for the shipped T2VA workflows:
 
-FL2VA image conditioning additionally requires licensed Qwen vision processor assets. Point the
-`processor` field to a directory containing `preprocessor_config.json` or
-`processor_config.json`; a tokenizer-only directory is accepted for T2VA but rejected for FL2VA.
+| Field | Value |
+| --- | --- |
+| `checkpoint` | `MiniMax-H3/FL2VA` |
+| `task` | `t2va` |
+| `transformer` | `MiniMax-H3/transformers/q8_extended_paged` |
+| `text_encoder` | `MiniMax-H3/text_encoders/q8-paged` |
+| `processor` | `MiniMax-H3/FL2VA/processor` |
+| `tokenizer` | `MiniMax-H3/FL2VA/tokenizer` |
+| `video_vae` | `MiniMax-H3/vae/q8/video_vae_affine_q8.safetensors` |
+| `audio_vae` | `MiniMax-H3/FL2VA/audio_vae` |
+
+The published paged Qwen repository is text-only. It does not contain tokenizer or processor
+assets. Do not select the paged Qwen directory for `processor` or `tokenizer`.
+
+The standard audio VAE is a directory with `config.json`, `metadata.json`, and
+`model.safetensors`. A self-describing compact MLX audio-VAE `.safetensors` file is also supported
+when its header contains the required `minimax_h3_audio_vae` metadata.
+
+FL2VA image conditioning additionally requires a resident Qwen3-VL text encoder with vision
+weights. The paged Qwen text encoder cannot run FL2VA or Ref2VA. Point `text_encoder` to the native
+partition text encoder, and point `processor` to a directory that contains
+`preprocessor_config.json` or `processor_config.json`. A tokenizer-only processor is accepted for
+T2VA but rejected for FL2VA and Ref2VA.
 
 Strict Ref2VA requires an actual Ref2VA partition, its transformer weights, the Ref2VA manifest,
 vision processor assets, and the audio VAE. The audio VAE encoder prepares audio references and
@@ -322,6 +355,29 @@ the Ref2VA checkpoint.
 
 Do not add a second directory level inside any downloaded repository. The paging manifests must
 be at the roots shown above.
+
+The names in `model_index.json`, such as `transformer`, are logical component names. Shared
+physical model categories can use plural names, such as `MiniMax-H3/transformers/`. Do not rename
+the shared `transformers` directory because an error mentions the logical `transformer`
+component.
+
+The native self-contained partition layout remains supported. In that layout, place all six
+native component directories directly below `FL2VA` and leave the override fields blank:
+
+```text
+MiniMax-H3/FL2VA/
+├── model_index.json
+├── transformer/
+├── text_encoder/
+├── processor/
+├── tokenizer/
+├── video_vae/
+└── audio_vae/
+```
+
+Do not combine the two layouts by moving a shared category directory under `FL2VA/transformer`.
+If `config.json` is one directory below the selected root, select that nested component root
+instead.
 
 The Component Loader resolves relative paths through all compatible model roots registered by
 ComfyUI, including roots from `extra_model_paths.yaml`. It checks the component's normal ComfyUI
@@ -386,7 +442,10 @@ The workflow selects these portable overrides:
 ```text
 transformer: MiniMax-H3/transformers/q8_extended_paged
 text_encoder: MiniMax-H3/text_encoders/q8-paged
+processor: MiniMax-H3/FL2VA/processor
+tokenizer: MiniMax-H3/FL2VA/tokenizer
 video_vae: MiniMax-H3/vae/q8/video_vae_affine_q8.safetensors
+audio_vae: MiniMax-H3/FL2VA/audio_vae
 ```
 
 Edit the prompt if desired, but keep the first test concrete and physically coherent. Describe the
@@ -483,6 +542,18 @@ The [`workflows/`](workflows/) directory contains ready-to-load ComfyUI workflow
 single-window and chained presets. Install a workflow's named LoRA in a ComfyUI LoRA model folder
 before loading a Turbo workflow. WeeTodd does not bundle or download adapters.
 
+The single-window preset workflows are:
+
+- [`h3_512p_dense_baseline.json`](workflows/h3_512p_dense_baseline.json)
+- [`h3_512p_trajectory_replay.json`](workflows/h3_512p_trajectory_replay.json)
+- [`h3_512p_turbo_larry_ema850.json`](workflows/h3_512p_turbo_larry_ema850.json)
+- [`h3_512p_turbo_larry_v4.json`](workflows/h3_512p_turbo_larry_v4.json)
+- [`h3_512p_turbo_lightx2v_full.json`](workflows/h3_512p_turbo_lightx2v_full.json)
+- [`h3_512p_turbo_lightx2v_dynamic_rank21.json`](workflows/h3_512p_turbo_lightx2v_dynamic_rank21.json)
+
+Use [`t2va_smoke_workflow.json`](examples/t2va_smoke_workflow.json) for a basic composable wiring
+check. Use the low-memory workflow described above for the recommended first generation.
+
 [`h3_512p_ref2va_four_reference_forward_attention.json`](workflows/h3_512p_ref2va_four_reference_forward_attention.json)
 reproduces the measured four-image Ref2VA graph. Select Little Red, wolf, Granny, and woodsman
 images in that order after loading it. The workflow uses the explicit FL2VA-to-Ref2VA compatibility
@@ -545,10 +616,13 @@ workflow again after it loads correctly.
 
 ### Preflight reports a missing processor, tokenizer, or audio VAE
 
-The three WeeTodd artifacts intentionally omit the licensed audio VAE and complete vision
-processor. Follow [Obtain the model components](#obtain-the-model-components), then set the
-corresponding Component Loader overrides. T2VA may point `processor` and `tokenizer` to the Qwen Q8
-directory. FL2VA and Ref2VA require a real vision processor configuration.
+The three WeeTodd artifacts intentionally omit the licensed audio VAE, processor, and tokenizer.
+Follow [Obtain the model components](#obtain-the-model-components), then use the complete Component
+Loader table. Do not point `processor` or `tokenizer` to the paged Qwen directory. FL2VA and
+Ref2VA also require a resident Qwen3-VL text encoder with vision weights.
+
+If preflight reports a nested component root, select the directory named in that message. The
+selected root must directly contain its `config.json`, paging manifest, or tokenizer assets.
 
 If only `model_index.json` is missing, run the included metadata generator for the verified
 partition. It creates no weights and refuses to overwrite an existing manifest by default.
@@ -581,7 +655,8 @@ Run inexpensive validation with the project environment:
 
 ```bash
 python -m compileall -q src __init__.py
-python -m pytest -q tests/test_nodes.py tests/test_runtime.py tests/test_workflows.py
+python -m pytest -q \
+  tests/test_nodes.py tests/test_runtime.py tests/test_readme.py tests/test_workflows.py
 python -m ruff check src/wee_todd_nodes tests
 python scripts/lint_docs.py
 ```

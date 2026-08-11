@@ -1,7 +1,17 @@
 {
   "1": {
     "class_type": "WeeToddH3ComponentLoader",
-    "inputs": {"checkpoint": "MiniMax-H3/Ref2VA", "task": "ref2va"}
+    "inputs": {
+      "checkpoint": "MiniMax-H3/Ref2VA",
+      "task": "ref2va",
+      "transformer": "MiniMax-H3/Ref2VA/transformer",
+      "text_encoder": "MiniMax-H3/Ref2VA/text_encoder",
+      "processor": "MiniMax-H3/Ref2VA/processor",
+      "tokenizer": "MiniMax-H3/Ref2VA/tokenizer",
+      "video_vae": "MiniMax-H3/Ref2VA/video_vae",
+      "audio_vae": "MiniMax-H3/Ref2VA/audio_vae",
+      "allow_fl2va_weights_for_ref2va": false
+    }
   },
   "2": {
     "class_type": "WeeToddH3GenerationConfig",
@@ -18,7 +28,8 @@
       "drop_adaln": true,
       "memory_mode": "low_memory_bf16",
       "attention_chunk_size": "automatic",
-      "projection_backend": "mlx"
+      "projection_backend": "mlx",
+      "sampling_method": "euler"
     }
   },
   "3": {"class_type": "LoadImage", "inputs": {"image": "reference.png"}},

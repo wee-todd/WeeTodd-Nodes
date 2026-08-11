@@ -27,6 +27,9 @@ through MLX.
 - Use `.agents/skills/wee-todd-h3-mlx/SKILL.md` for H3 implementation work.
 - Before any pip, Python, venv, MLX, or dependency change, use
   `.agents/skills/python-environment-preflight/SKILL.md`. Run its preflight before mutation.
+- Before every commit, use `.agents/skills/readme-workflow-commit-gate/SKILL.md`. Audit the complete
+  `README.md` and every shipped UI/API workflow, then record the review for the exact staged
+  snapshot. Do not commit when the gate or its local pre-commit hook fails.
 
 ## Validation
 
@@ -34,8 +37,12 @@ through MLX.
 python .agents/skills/python-environment-preflight/scripts/preflight.py \
   --project . --python python --require-architecture arm64
 python -m compileall -q src __init__.py
-python -m pytest -q tests/test_nodes.py tests/test_runtime.py
+python -m pytest -q tests/test_nodes.py tests/test_runtime.py tests/test_readme.py \
+  tests/test_workflows.py
 ruff check src/wee_todd_nodes tests
+./.venv/bin/python .agents/skills/readme-workflow-commit-gate/scripts/audit.py \
+  --project . --record-review \
+  --confirm-readme-reviewed --confirm-workflows-reviewed
 ```
 
 Full parity and checkpoint tests are optional and expensive. State clearly when they were not run.

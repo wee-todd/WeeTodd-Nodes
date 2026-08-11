@@ -356,12 +356,63 @@ class WeeToddH3ComponentLoader:
                 "task": (["t2va", "fl2va", "ref2va"], {"default": "t2va"}),
             },
             "optional": {
-                "transformer": ("STRING", {"default": ""}),
-                "text_encoder": ("STRING", {"default": ""}),
-                "processor": ("STRING", {"default": ""}),
-                "tokenizer": ("STRING", {"default": ""}),
-                "video_vae": ("STRING", {"default": ""}),
-                "audio_vae": ("STRING", {"default": ""}),
+                "transformer": (
+                    "STRING",
+                    {
+                        "default": "",
+                        "tooltip": (
+                            "Select a shared or optimized transformer. Leave blank only when "
+                            "the checkpoint contains a native transformer directory."
+                        ),
+                    },
+                ),
+                "text_encoder": (
+                    "STRING",
+                    {
+                        "default": "",
+                        "tooltip": (
+                            "Select a Qwen3-VL text-encoder root. Leave blank only when the "
+                            "checkpoint contains a native text_encoder directory."
+                        ),
+                    },
+                ),
+                "processor": (
+                    "STRING",
+                    {
+                        "default": "",
+                        "tooltip": (
+                            "Select the processor asset directory. T2VA can use tokenizer-only "
+                            "assets. Image and reference tasks require vision processor files."
+                        ),
+                    },
+                ),
+                "tokenizer": (
+                    "STRING",
+                    {
+                        "default": "",
+                        "tooltip": "Select the directory that directly contains tokenizer.json.",
+                    },
+                ),
+                "video_vae": (
+                    "STRING",
+                    {
+                        "default": "",
+                        "tooltip": (
+                            "Select a native video-VAE directory or a self-describing MLX "
+                            "safetensors file."
+                        ),
+                    },
+                ),
+                "audio_vae": (
+                    "STRING",
+                    {
+                        "default": "",
+                        "tooltip": (
+                            "Select the licensed audio-VAE directory or a self-describing MLX "
+                            "safetensors file."
+                        ),
+                    },
+                ),
                 "allow_fl2va_weights_for_ref2va": (
                     "BOOLEAN",
                     {

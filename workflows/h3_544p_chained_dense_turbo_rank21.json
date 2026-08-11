@@ -33,12 +33,13 @@
       "widgets_values": [
         "MiniMax-H3/FL2VA",
         "t2va",
-        "",
+        "MiniMax-H3/transformers/q8_extended_paged",
         "MiniMax-H3/text_encoders/q8-paged",
-        "",
-        "",
-        "",
-        ""
+        "MiniMax-H3/FL2VA/processor",
+        "MiniMax-H3/FL2VA/tokenizer",
+        "MiniMax-H3/vae/q8/video_vae_affine_q8.safetensors",
+        "MiniMax-H3/FL2VA/audio_vae",
+        false
       ]
     },
     {
@@ -88,7 +89,8 @@
         false,
         "normal",
         "automatic",
-        "mlx"
+        "mlx",
+        "euler"
       ]
     },
     {
@@ -235,7 +237,8 @@
       },
       "widgets_values": [
         512,
-        0.0
+        0.0,
+        ""
       ]
     },
     {
@@ -469,14 +472,14 @@
           "link": 8
         },
         {
-          "name": "loras",
-          "type": "WEETODD_H3_LORAS",
-          "link": 9
-        },
-        {
           "name": "trajectory_forecast",
           "type": "WEETODD_H3_TRAJECTORY_FORECAST",
           "link": 10
+        },
+        {
+          "name": "loras",
+          "type": "WEETODD_H3_LORAS",
+          "link": 9
         }
       ],
       "outputs": [
@@ -537,11 +540,6 @@
           "link": 15
         },
         {
-          "name": "loras",
-          "type": "WEETODD_H3_LORAS",
-          "link": 16
-        },
-        {
           "name": "trajectory_forecast",
           "type": "WEETODD_H3_TRAJECTORY_FORECAST",
           "link": 17
@@ -550,6 +548,11 @@
           "name": "continuation",
           "type": "WEETODD_H3_CONTINUATION",
           "link": 33
+        },
+        {
+          "name": "loras",
+          "type": "WEETODD_H3_LORAS",
+          "link": 16
         }
       ],
       "outputs": [
@@ -610,11 +613,6 @@
           "link": 22
         },
         {
-          "name": "loras",
-          "type": "WEETODD_H3_LORAS",
-          "link": 23
-        },
-        {
           "name": "trajectory_forecast",
           "type": "WEETODD_H3_TRAJECTORY_FORECAST",
           "link": 24
@@ -623,6 +621,11 @@
           "name": "continuation",
           "type": "WEETODD_H3_CONTINUATION",
           "link": 35
+        },
+        {
+          "name": "loras",
+          "type": "WEETODD_H3_LORAS",
+          "link": 23
         }
       ],
       "outputs": [
@@ -683,11 +686,6 @@
           "link": 29
         },
         {
-          "name": "loras",
-          "type": "WEETODD_H3_LORAS",
-          "link": 30
-        },
-        {
           "name": "trajectory_forecast",
           "type": "WEETODD_H3_TRAJECTORY_FORECAST",
           "link": 31
@@ -696,6 +694,11 @@
           "name": "continuation",
           "type": "WEETODD_H3_CONTINUATION",
           "link": 37
+        },
+        {
+          "name": "loras",
+          "type": "WEETODD_H3_LORAS",
+          "link": 30
         }
       ],
       "outputs": [
@@ -1499,7 +1502,9 @@
         "WeeTodd/H3_544p_Dense_Turbo_Rank21_Chained_Clip1",
         18,
         0.025,
-        "{\"workflow\": \"h3_544p_chained_dense_turbo_rank21\", \"preset\": \"Chained context \\u2014 Dense Turbo LightX2V rank 21 \\u2014 5 points / 4 evaluations\", \"clip\": 1, \"context_frames\": 0}"
+        "{\"workflow\": \"h3_544p_chained_dense_turbo_rank21\", \"preset\": \"Chained context \\u2014 Dense Turbo LightX2V rank 21 \\u2014 5 points / 4 evaluations\", \"clip\": 1, \"context_frames\": 0}",
+        "",
+        ""
       ]
     },
     {
@@ -1569,7 +1574,8 @@
         "WeeTodd/H3_544p_Dense_Turbo_Rank21_Chained_Clip2",
         18,
         0.025,
-        "{\"workflow\": \"h3_544p_chained_dense_turbo_rank21\", \"preset\": \"Chained context \\u2014 Dense Turbo LightX2V rank 21 \\u2014 5 points / 4 evaluations\", \"clip\": 2, \"context_frames\": 22}"
+        "{\"workflow\": \"h3_544p_chained_dense_turbo_rank21\", \"preset\": \"Chained context \\u2014 Dense Turbo LightX2V rank 21 \\u2014 5 points / 4 evaluations\", \"clip\": 2, \"context_frames\": 22}",
+        ""
       ]
     },
     {
@@ -1639,7 +1645,8 @@
         "WeeTodd/H3_544p_Dense_Turbo_Rank21_Chained_Clip3",
         18,
         0.025,
-        "{\"workflow\": \"h3_544p_chained_dense_turbo_rank21\", \"preset\": \"Chained context \\u2014 Dense Turbo LightX2V rank 21 \\u2014 5 points / 4 evaluations\", \"clip\": 3, \"context_frames\": 22}"
+        "{\"workflow\": \"h3_544p_chained_dense_turbo_rank21\", \"preset\": \"Chained context \\u2014 Dense Turbo LightX2V rank 21 \\u2014 5 points / 4 evaluations\", \"clip\": 3, \"context_frames\": 22}",
+        ""
       ]
     },
     {
@@ -1709,7 +1716,8 @@
         "WeeTodd/H3_544p_Dense_Turbo_Rank21_Chained_Clip4",
         18,
         0.025,
-        "{\"workflow\": \"h3_544p_chained_dense_turbo_rank21\", \"preset\": \"Chained context \\u2014 Dense Turbo LightX2V rank 21 \\u2014 5 points / 4 evaluations\", \"clip\": 4, \"context_frames\": 22}"
+        "{\"workflow\": \"h3_544p_chained_dense_turbo_rank21\", \"preset\": \"Chained context \\u2014 Dense Turbo LightX2V rank 21 \\u2014 5 points / 4 evaluations\", \"clip\": 4, \"context_frames\": 22}",
+        ""
       ]
     }
   ],
@@ -1783,7 +1791,7 @@
       3,
       1,
       9,
-      3,
+      4,
       "WEETODD_H3_LORAS"
     ],
     [
@@ -1791,7 +1799,7 @@
       3,
       2,
       9,
-      4,
+      3,
       "WEETODD_H3_TRAJECTORY_FORECAST"
     ],
     [
@@ -1839,7 +1847,7 @@
       3,
       1,
       10,
-      3,
+      5,
       "WEETODD_H3_LORAS"
     ],
     [
@@ -1847,7 +1855,7 @@
       3,
       2,
       10,
-      4,
+      3,
       "WEETODD_H3_TRAJECTORY_FORECAST"
     ],
     [
@@ -1895,7 +1903,7 @@
       3,
       1,
       11,
-      3,
+      5,
       "WEETODD_H3_LORAS"
     ],
     [
@@ -1903,7 +1911,7 @@
       3,
       2,
       11,
-      4,
+      3,
       "WEETODD_H3_TRAJECTORY_FORECAST"
     ],
     [
@@ -1951,7 +1959,7 @@
       3,
       1,
       12,
-      3,
+      5,
       "WEETODD_H3_LORAS"
     ],
     [
@@ -1959,7 +1967,7 @@
       3,
       2,
       12,
-      4,
+      3,
       "WEETODD_H3_TRAJECTORY_FORECAST"
     ],
     [
@@ -1975,7 +1983,7 @@
       13,
       0,
       10,
-      5,
+      4,
       "WEETODD_H3_CONTINUATION"
     ],
     [
@@ -1991,7 +1999,7 @@
       14,
       0,
       11,
-      5,
+      4,
       "WEETODD_H3_CONTINUATION"
     ],
     [
@@ -2007,7 +2015,7 @@
       15,
       0,
       12,
-      5,
+      4,
       "WEETODD_H3_CONTINUATION"
     ],
     [

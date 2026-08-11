@@ -19,6 +19,14 @@ COMPONENT_NAMES = (
     "audio_vae",
 )
 WEIGHT_COMPONENTS = frozenset({"transformer", "text_encoder", "video_vae", "audio_vae"})
+COMPONENT_EXPECTATIONS = {
+    "transformer": "a transformer directory or an MLX-ready pruned safetensors file",
+    "text_encoder": "a text-encoder directory with config.json and weights",
+    "processor": "a processor directory with processor configuration",
+    "tokenizer": "a tokenizer directory with tokenizer.json or vocab.json",
+    "video_vae": "a video-VAE directory or a self-describing MLX safetensors file",
+    "audio_vae": "an audio-VAE directory or a self-describing MLX safetensors file",
+}
 DTYPE_BYTES = {
     "BOOL": 1,
     "I8": 1,
@@ -318,6 +326,19 @@ def _validate_asset_directory(
         ):
             return
         joined = " or ".join(candidates)
+        nested = sorted(
+            candidate
+            for child in path.iterdir()
+            if child.is_dir()
+            for name in candidates
+            if (candidate := child / name).is_file()
+        )
+        if nested:
+            selected_root = nested[0].parent
+            raise FileNotFoundError(
+                f"{component} requires {joined} directly in the selected directory: {path}. "
+                f"A nested component root was found: {selected_root}. Select that directory."
+            )
         raise FileNotFoundError(f"{component} requires {joined}: {path}")
 
 
@@ -361,6 +382,18 @@ def _validate_component_config(path: Path, component: str) -> None:
     if component == "video_vae" and (path / "source" / "config.json").is_file():
         config_path = path / "source" / "config.json"
     if not config_path.is_file():
+        nested = sorted(path.glob("*/config.json"))
+        if component == "video_vae":
+            nested.extend(sorted(path.glob("*/source/config.json")))
+        if nested:
+            selected_root = nested[0].parent
+            if nested[0].parent.name == "source":
+                selected_root = nested[0].parent.parent
+            raise FileNotFoundError(
+                f"{component} config.json must be directly in the selected component root: "
+                f"{path}. A nested component root was found: {selected_root}. "
+                "Select that directory instead."
+            )
         raise FileNotFoundError(f"{component} config file not found: {config_path}")
     if component == "audio_vae" and not (path / "metadata.json").is_file():
         raise FileNotFoundError(f"audio_vae metadata file not found: {path / 'metadata.json'}")
@@ -493,6 +526,33 @@ def _component_report(
     )
 
 
+def _component_resolution_error(
+    spec: H3ComponentSetSpec,
+    name: str,
+    path: Path,
+    error: FileNotFoundError | ValueError,
+) -> str:
+    """Explain whether a failed path came from an override or native fallback."""
+
+    override = getattr(spec, name)
+    expected = COMPONENT_EXPECTATIONS[name]
+    if override:
+        selection = f"The {name} override is invalid: {path}."
+    else:
+        selection = (
+            f"No {name} override is selected. The native partition fallback is invalid: {path}."
+        )
+    guidance = (
+        f"Select {expected}, or install a native {name} component at the fallback path."
+    )
+    if name == "transformer" and override is None:
+        guidance += (
+            " The logical component name 'transformer' does not require renaming a shared "
+            "physical folder named 'transformers'."
+        )
+    return f"{selection} {guidance} Details: {error}"
+
+
 def _aligned_frames(duration_seconds: float) -> int:
     frames = int(round(duration_seconds * 24))
     while frames % 17 != 5:
@@ -538,15 +598,27 @@ def preflight_components(
     )
 
     paths = spec.resolved_paths()
-    components = tuple(
-        _component_report(
-            name,
-            paths[name],
-            allow_text_only_processor=spec.task == "t2va",
-        )
-        for name in COMPONENT_NAMES
-    )
+    component_reports = []
+    for name in COMPONENT_NAMES:
+        try:
+            component_reports.append(
+                _component_report(
+                    name,
+                    paths[name],
+                    allow_text_only_processor=spec.task == "t2va",
+                )
+            )
+        except (FileNotFoundError, ValueError) as exc:
+            raise type(exc)(
+                _component_resolution_error(spec, name, paths[name], exc)
+            ) from exc
+    components = tuple(component_reports)
     by_name = {component.name: component for component in components}
+    if spec.task in {"fl2va", "ref2va"} and by_name["text_encoder"].paging_format:
+        raise ValueError(
+            "The selected paged text_encoder is text-only. FL2VA and Ref2VA require a "
+            "resident Qwen3-VL text encoder with vision weights."
+        )
 
     frames = _aligned_frames(request.duration_seconds)
     video_latent_frames = (frames - 5) // 17 * 5 + 2

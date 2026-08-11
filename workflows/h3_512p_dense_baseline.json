@@ -18,12 +18,13 @@
       "widgets_values": [
         "MiniMax-H3/FL2VA",
         "t2va",
-        "",
+        "MiniMax-H3/transformers/q8_extended_paged",
         "MiniMax-H3/text_encoders/q8-paged",
-        "",
-        "",
-        "",
-        ""
+        "MiniMax-H3/FL2VA/processor",
+        "MiniMax-H3/FL2VA/tokenizer",
+        "MiniMax-H3/vae/q8/video_vae_affine_q8.safetensors",
+        "MiniMax-H3/FL2VA/audio_vae",
+        false
       ]
     },
     {
@@ -53,7 +54,8 @@
         true,
         "normal",
         "automatic",
-        "mlx"
+        "mlx",
+        "euler"
       ]
     },
     {
@@ -93,7 +95,7 @@
         {"name": "preflight_report", "type": "STRING", "links": null, "slot_index": 1}
       ],
       "properties": {"Node name for S&R": "WeeToddH3Preflight"},
-      "widgets_values": [512, 0.0]
+      "widgets_values": [512, 0.0, ""]
     },
     {
       "id": 5,
@@ -128,8 +130,8 @@
         {"name": "components", "type": "WEETODD_H3_COMPONENTS", "link": 5},
         {"name": "conditioning", "type": "WEETODD_H3_CONDITIONING", "link": 6},
         {"name": "config", "type": "WEETODD_H3_CONFIG", "link": 7},
-        {"name": "loras", "type": "WEETODD_H3_LORAS", "link": 8},
-        {"name": "trajectory_forecast", "type": "WEETODD_H3_TRAJECTORY_FORECAST", "link": 9}
+        {"name": "trajectory_forecast", "type": "WEETODD_H3_TRAJECTORY_FORECAST", "link": 9},
+        {"name": "loras", "type": "WEETODD_H3_LORAS", "link": 8}
       ],
       "outputs": [
         {"name": "latents", "type": "WEETODD_H3_LATENTS", "links": [11], "slot_index": 0},
@@ -160,7 +162,8 @@
         "WeeTodd/H3_512p_Dense_Baseline",
         18,
         0.025,
-        "{\"workflow\": \"h3_512p_dense_baseline\", \"preset\": \"dense_baseline\"}"
+        "{\"workflow\": \"h3_512p_dense_baseline\", \"preset\": \"dense_baseline\"}",
+        ""
       ]
     }
   ],
@@ -172,8 +175,8 @@
     [5, 4, 0, 6, 0, "WEETODD_H3_COMPONENTS"],
     [6, 5, 0, 6, 1, "WEETODD_H3_CONDITIONING"],
     [7, 3, 0, 6, 2, "WEETODD_H3_CONFIG"],
-    [8, 3, 1, 6, 3, "WEETODD_H3_LORAS"],
-    [9, 3, 2, 6, 4, "WEETODD_H3_TRAJECTORY_FORECAST"],
+    [8, 3, 1, 6, 4, "WEETODD_H3_LORAS"],
+    [9, 3, 2, 6, 3, "WEETODD_H3_TRAJECTORY_FORECAST"],
     [10, 4, 0, 7, 0, "WEETODD_H3_COMPONENTS"],
     [11, 6, 0, 7, 1, "WEETODD_H3_LATENTS"],
     [12, 6, 1, 7, 2, "STRING"]

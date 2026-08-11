@@ -13,7 +13,7 @@
       "inputs": [],
       "outputs": [{"name": "components", "type": "WEETODD_H3_COMPONENTS", "links": [1], "slot_index": 0}],
       "properties": {"Node name for S&R": "WeeToddH3ComponentLoader"},
-      "widgets_values": ["MiniMax-H3/FL2VA", "t2va", "", "", "", "", "", ""]
+      "widgets_values": ["MiniMax-H3/FL2VA", "t2va", "MiniMax-H3/transformers/q8_extended_paged", "MiniMax-H3/text_encoders/q8-paged", "MiniMax-H3/FL2VA/processor", "MiniMax-H3/FL2VA/tokenizer", "MiniMax-H3/vae/q8/video_vae_affine_q8.safetensors", "MiniMax-H3/FL2VA/audio_vae", false]
     },
     {
       "id": 2,
@@ -32,7 +32,7 @@
         {"name": "preflight_report", "type": "STRING", "links": null, "slot_index": 1}
       ],
       "properties": {"Node name for S&R": "WeeToddH3Preflight"},
-      "widgets_values": [512, 0.0]
+      "widgets_values": [512, 0.0, ""]
     },
     {
       "id": 3,
@@ -48,7 +48,7 @@
         {"name": "resolved_resolution", "type": "STRING", "links": null, "slot_index": 1}
       ],
       "properties": {"Node name for S&R": "WeeToddH3GenerationConfig"},
-      "widgets_values": [5.0, 8, 0, "ratio + size", "384 px short edge — fast smoke", "16:9 — widescreen landscape", 384, 640, 384, true, "normal", "automatic", "mlx"]
+      "widgets_values": [5.0, 8, 0, "ratio + size", "384 px short edge — fast smoke", "16:9 — widescreen landscape", 384, 640, 384, true, "normal", "automatic", "mlx", "euler"]
     },
     {
       "id": 4,
@@ -145,7 +145,7 @@
         {"name": "generation_info", "type": "STRING", "links": null, "slot_index": 1}
       ],
       "properties": {"Node name for S&R": "WeeToddH3PublishVideoAudio"},
-      "widgets_values": ["WeeTodd/H3_T2VA_Smoke", 18, 0.025, "{\"workflow\": \"t2va_smoke\", \"quality_label\": \"off-distribution wiring test\"}"]
+      "widgets_values": ["WeeTodd/H3_T2VA_Smoke", 18, 0.025, "{\"workflow\": \"t2va_smoke\", \"quality_label\": \"off-distribution wiring test\"}", "", ""]
     },
     {
       "id": 9,

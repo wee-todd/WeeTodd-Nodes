@@ -4,12 +4,13 @@
     "inputs": {
       "checkpoint": "MiniMax-H3/FL2VA",
       "task": "t2va",
-      "transformer": "",
-      "text_encoder": "",
-      "processor": "",
-      "tokenizer": "",
-      "video_vae": "",
-      "audio_vae": ""
+      "transformer": "MiniMax-H3/transformers/q8_extended_paged",
+      "text_encoder": "MiniMax-H3/text_encoders/q8-paged",
+      "processor": "MiniMax-H3/FL2VA/processor",
+      "tokenizer": "MiniMax-H3/FL2VA/tokenizer",
+      "video_vae": "MiniMax-H3/vae/q8/video_vae_affine_q8.safetensors",
+      "audio_vae": "MiniMax-H3/FL2VA/audio_vae",
+      "allow_fl2va_weights_for_ref2va": false
     }
   },
   "2": {
@@ -27,7 +28,8 @@
       "drop_adaln": true,
       "memory_mode": "normal",
       "attention_chunk_size": "automatic",
-      "projection_backend": "mlx"
+      "projection_backend": "mlx",
+      "sampling_method": "euler"
     }
   },
   "3": {

@@ -318,6 +318,7 @@ class MiniMaxH3Pipeline:
         sampling_method: str = "euler",
         visual_condition_strength: float = KEYFRAME_NOISE_AUG,
         audio_condition_strength: float = 1.0,
+        terminal_target_only: bool = False,
     ) -> LatentResult:
         """Sample synchronized T2VA, FL2VA, or Ref2VA latents without loading a VAE."""
         run_started = time.perf_counter()
@@ -402,6 +403,7 @@ class MiniMaxH3Pipeline:
             raise ValueError(
                 "Continuation latent streams require a positive continuation frame count."
             )
+        layout_started = time.perf_counter()
         if references:
             if keyframe_anchors:
                 raise ValueError("Ref2VA references cannot be combined with FL2VA keyframes.")
@@ -485,6 +487,16 @@ class MiniMaxH3Pipeline:
                 continuation_audio_latents=(
                     audio_latent_num_frames(continuation_frames) if has_continuation else 0
                 ),
+            )
+        if diagnostics is not None and hasattr(diagnostics, "record_external"):
+            diagnostics.record_external(
+                "packing.layout",
+                time.perf_counter() - layout_started,
+                metadata={
+                    "sequence_rows": int(layout.sequence_length),
+                    "condition_video_rows": int(layout.num_condition_video_rows),
+                    "condition_audio_rows": int(layout.num_condition_audio_rows),
+                },
             )
 
         mx.random.seed(seed)
@@ -653,6 +665,9 @@ class MiniMaxH3Pipeline:
                         forecast_coordinate=float(timestep),
                         trajectory_video_row_start=trajectory_video_row_start,
                         trajectory_audio_row_start=trajectory_audio_row_start,
+                        terminal_target_only=terminal_target_only,
+                        terminal_video_row_start=condition_video_count,
+                        terminal_audio_row_start=condition_audio_count,
                         step_index=index,
                         total_steps=total_steps,
                         diagnostics=diagnostics,
@@ -673,6 +688,7 @@ class MiniMaxH3Pipeline:
                         easycache.update(video_input, audio_input, video_pred, audio_pred)
                 else:
                     video_pred, audio_pred = reused
+                scheduler_started = time.perf_counter()
                 stepped_video = video_sched.step(
                     video_pred[0, condition_video_count:].astype(mx.float32),
                     float(timestep),
@@ -694,6 +710,15 @@ class MiniMaxH3Pipeline:
                     else stepped_audio
                 )
                 mx.eval(current_video_rows, current_audio_rows)
+                if diagnostics is not None and hasattr(diagnostics, "record_external"):
+                    diagnostics.record_external(
+                        "scheduler.step_and_repack",
+                        time.perf_counter() - scheduler_started,
+                        metadata={
+                            "condition_video_rows": int(condition_video_count),
+                            "condition_audio_rows": int(condition_audio_count),
+                        },
+                    )
                 elapsed = time.perf_counter() - started
                 step_times.append(elapsed)
                 forecast_hit = bool(
