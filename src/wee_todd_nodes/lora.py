@@ -32,6 +32,7 @@ class H3LoRASpec:
     profile: str = "auto"
     adaln_input_grid: str | None = None
     qkv_layout: str = "auto"
+    start_after_evaluations: int = 0
 
     def validate(self) -> None:
         path = Path(self.path).expanduser()
@@ -47,6 +48,8 @@ class H3LoRASpec:
             raise ValueError(
                 "MiniMax H3 LoRA QKV layout must be auto, native_interleaved, or contiguous_qkv."
             )
+        if self.start_after_evaluations < 0:
+            raise ValueError("MiniMax H3 LoRA start_after_evaluations must be zero or greater.")
 
         header = read_safetensors_header(path)
         names = header.tensor_names
@@ -64,6 +67,11 @@ class H3LoRASpec:
             }
             if not a_names.intersection(names) or not b_names.intersection(names):
                 raise ValueError(f"LoRA target {target!r} does not contain a complete A/B pair.")
+        if self.start_after_evaluations and any("adaln_proj" in target for target in targets):
+            raise ValueError(
+                "Staged MiniMax H3 LoRA activation does not support AdaLN adapter targets. "
+                "Use an adapter without AdaLN targets or apply the LoRA for the full schedule."
+            )
 
         if self.adaln_input_grid is not None:
             grid = Path(self.adaln_input_grid).expanduser()
@@ -101,6 +109,7 @@ class H3LoRASpec:
                 if self.adaln_input_grid is not None
                 else None
             ),
+            "start_after_evaluations": self.start_after_evaluations,
         }
 
 
@@ -117,12 +126,19 @@ class H3LoRAStack:
         return H3LoRAStack((*self.adapters, spec))
 
     def validate_for_steps(self, steps: int) -> None:
+        evaluations = max(int(steps) - 1, 0)
         for spec in self.adapters:
             spec.validate()
-            if spec.resolved_profile == "turbo" and steps < 5:
+            if spec.start_after_evaluations >= evaluations:
                 raise ValueError(
-                    "MiniMax H3 Turbo LoRAs require at least five requested schedule points, "
-                    "which produce four transformer evaluations."
+                    "MiniMax H3 LoRA activation must begin before the final transformer "
+                    "evaluation."
+                )
+            active_evaluations = evaluations - spec.start_after_evaluations
+            if spec.resolved_profile == "turbo" and active_evaluations < 4:
+                raise ValueError(
+                    "MiniMax H3 Turbo LoRAs require at least four active transformer "
+                    "evaluations after the configured activation point."
                 )
 
     @property
@@ -147,6 +163,7 @@ class H3LoRAStack:
                 "adaln_input_grid": (
                     Path(spec.adaln_input_grid).name if spec.adaln_input_grid else None
                 ),
+                "start_after_evaluations": spec.start_after_evaluations,
             }
             for spec in self.adapters
         ]

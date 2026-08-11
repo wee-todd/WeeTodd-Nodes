@@ -5,7 +5,12 @@ import mlx.nn as nn
 import pytest
 
 from minimax_h3_mlx.dit import MiniMaxH3DiT, projection_weight_shape
-from minimax_h3_mlx.lora import LoRARequest, apply_lora, prepare_lora_timesteps
+from minimax_h3_mlx.lora import (
+    LoRARequest,
+    apply_lora,
+    lora_evaluation,
+    prepare_lora_timesteps,
+)
 from tests.test_dit_smoke import tiny_config
 from wee_todd_nodes.lora import H3LoRASpec, H3LoRAStack
 
@@ -40,6 +45,38 @@ def test_generic_lora_runs_as_activation_space_update(tmp_path):
     assert projection_weight_shape(model.blocks[0].attn.out_proj) == list(layer.weight.shape)
     assert report.adaln_targets == 0
     assert report.qkv_permuted_targets == 0
+
+
+def test_generic_lora_can_activate_after_base_evaluations(tmp_path):
+    model = MiniMaxH3DiT(tiny_config())
+    layer = model.blocks[0].attn.out_proj
+    value = mx.arange(2 * 64, dtype=mx.float32).reshape(2, 64) / 128
+    base = layer(value)
+    a = mx.full((2, 64), 0.01, dtype=mx.bfloat16)
+    b = mx.full((64, 2), 0.02, dtype=mx.bfloat16)
+    path = tmp_path / "staged.safetensors"
+    _save(
+        path,
+        {
+            "blocks.0.attn.out_proj.lora_A.weight": a,
+            "blocks.0.attn.out_proj.lora_B.weight": b,
+        },
+    )
+
+    report = apply_lora(model, LoRARequest(str(path), start_after_evaluations=2))
+    expected_active = base + ((value.astype(a.dtype) @ a.T) @ b.T).astype(base.dtype)
+    with lora_evaluation(0, 6):
+        first = model.blocks[0].attn.out_proj(value)
+    with lora_evaluation(1, 6):
+        second = model.blocks[0].attn.out_proj(value)
+    with lora_evaluation(2, 6):
+        third = model.blocks[0].attn.out_proj(value)
+    mx.eval(first, second, third, expected_active)
+
+    assert mx.array_equal(first, base)
+    assert mx.array_equal(second, base)
+    assert mx.array_equal(third, expected_active)
+    assert report.start_after_evaluations == 2
 
 
 def test_turbo_qkv_lora_converts_contiguous_rows_to_native_head_layout(tmp_path):
@@ -174,6 +211,44 @@ def test_lazy_lora_stack_validates_headers_and_turbo_steps(tmp_path):
     assert spec.engine_request()["qkv_layout"] == "contiguous_qkv"
     assert stack.metadata()[0]["file"] == path.name
     assert stack.metadata()[0]["qkv_layout"] == "contiguous_qkv"
-    with pytest.raises(ValueError, match="at least five"):
+    with pytest.raises(ValueError, match="at least four active"):
         stack.validate_for_steps(4)
     stack.validate_for_steps(5)
+
+
+def test_staged_turbo_stack_requires_four_active_evaluations(tmp_path):
+    path = tmp_path / "minimax_h3_turbo_staged.safetensors"
+    _save(
+        path,
+        {
+            "blocks.0.attn.out_proj.lora_A.weight": mx.zeros((2, 64)),
+            "blocks.0.attn.out_proj.lora_B.weight": mx.zeros((64, 2)),
+        },
+    )
+    spec = H3LoRASpec(
+        str(path),
+        strength=1.0,
+        profile="turbo",
+        start_after_evaluations=2,
+    )
+    stack = H3LoRAStack().append(spec)
+
+    with pytest.raises(ValueError, match="at least four active"):
+        stack.validate_for_steps(6)
+    stack.validate_for_steps(7)
+    assert spec.engine_request()["start_after_evaluations"] == 2
+    assert stack.metadata()[0]["start_after_evaluations"] == 2
+
+
+def test_staged_lora_rejects_adaln_targets(tmp_path):
+    path = tmp_path / "minimax_h3_turbo_adaln.safetensors"
+    _save(
+        path,
+        {
+            "blocks.0.adaln_proj.linear.lora_A.weight": mx.zeros((2, 64)),
+            "blocks.0.adaln_proj.linear.lora_B.weight": mx.zeros((64, 2)),
+        },
+    )
+
+    with pytest.raises(ValueError, match="does not support AdaLN"):
+        H3LoRASpec(str(path), start_after_evaluations=2).validate()

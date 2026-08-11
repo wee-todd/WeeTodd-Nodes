@@ -119,6 +119,10 @@ class H3Latents:
     projection_backend_runtime: dict[str, Any] | None = None
     paging_report: dict[str, Any] | None = None
     text_encoder_paging_report: dict[str, Any] | None = None
+    refinement_source_width: int | None = None
+    refinement_source_height: int | None = None
+    refinement_strength: float | None = None
+    refinement_audio_preserved: bool = False
 
 
 SamplerFactory = Callable[[H3TransformerSpec], Any]
@@ -170,6 +174,9 @@ class H3TransformerCache:
         blockcache=None,
         trajectory_forecast=None,
         continuation: H3ContinuationContext | None = None,
+        refinement_source: H3Latents | None = None,
+        refinement_strength: float = 1.0,
+        refinement_resize_method: str = "bilinear",
         loras: H3LoRAStack | None = None,
         prepare_stage: Callable[[], None] | None = None,
     ) -> H3Latents:
@@ -200,6 +207,28 @@ class H3TransformerCache:
             raise ValueError("Ref2VA conditioning cannot contain first/last-frame anchors.")
         if continuation is not None:
             validate_continuation_for_sample(continuation, spec, config)
+        if refinement_source is not None:
+            if continuation is not None:
+                raise ValueError("H3 Hi Res Fix cannot be combined with motion continuation.")
+            if refinement_source.transformer_spec != spec:
+                raise ValueError("H3 Hi Res Fix source latents use a different transformer.")
+            from minimax_h3_mlx.packing import align_num_frames
+
+            expected_frames = align_num_frames(round(config.duration_seconds * 24))
+            if refinement_source.num_frames != expected_frames:
+                raise ValueError(
+                    "H3 Hi Res Fix duration does not match the source latent frame count."
+                )
+            if refinement_source.fps != 24 or refinement_source.sample_rate != 32000:
+                raise ValueError("H3 Hi Res Fix requires native 24 fps and 32 kHz H3 latents.")
+            if config.width <= refinement_source.width or config.height <= refinement_source.height:
+                raise ValueError(
+                    "H3 Hi Res Fix target dimensions must exceed the source dimensions."
+                )
+            if not 0.0 < refinement_strength <= 1.0:
+                raise ValueError(
+                    "H3 Hi Res Fix refinement strength must be greater than 0 and at most 1."
+                )
         expected_encoder = H3TextEncoderSpec(
             text_encoder=spec.text_encoder,
             processor=spec.processor,
@@ -213,6 +242,8 @@ class H3TransformerCache:
             )
         condition_schedule_key = (
             continuation is not None,
+            refinement_source is not None,
+            round(float(refinement_strength), 6) if refinement_source is not None else None,
             conditioning.condition_video_rows is not None,
             conditioning.condition_audio_rows is not None,
             float(conditioning.visual_condition_strength),
@@ -228,6 +259,14 @@ class H3TransformerCache:
         )
         loras = loras or H3LoRAStack()
         loras.validate_for_steps(config.steps)
+        staged_lora = any(spec.start_after_evaluations > 0 for spec in loras.adapters)
+        if staged_lora and any(
+            value is not None for value in (easycache, blockcache, trajectory_forecast)
+        ):
+            raise ValueError(
+                "Staged LoRA activation requires dense transformer evaluations. Disconnect "
+                "EasyCache, BlockCache, and Trajectory Forecast before sampling."
+            )
         if loras.has_turbo and easycache is not None:
             raise ValueError(
                 "Turbo LoRA sampling does not support EasyCache. Disconnect the cache node "
@@ -300,6 +339,21 @@ class H3TransformerCache:
                     raise
             try:
                 self._sampler.dit.set_attention_query_chunk_size(config.attention_query_chunk_size)
+                initial_video_latents = None
+                initial_audio_latents = None
+                if refinement_source is not None:
+                    from minimax_h3_mlx.hires_fix import resize_video_latents
+
+                    initial_video_latents = resize_video_latents(
+                        refinement_source.video,
+                        config.height // 16,
+                        config.width // 16,
+                        method=refinement_resize_method,
+                    )
+                    initial_audio_latents = refinement_source.audio
+                    import mlx.core as mx
+
+                    mx.eval(initial_video_latents, initial_audio_latents)
                 result = self._sampler.sample_latents(
                     conditioning.embeddings,
                     conditioning.token_tags,
@@ -329,6 +383,10 @@ class H3TransformerCache:
                     sampling_method=config.sampling_method,
                     visual_condition_strength=conditioning.visual_condition_strength,
                     audio_condition_strength=conditioning.audio_condition_strength,
+                    initial_video_latents=initial_video_latents,
+                    initial_audio_latents=initial_audio_latents,
+                    refinement_strength=refinement_strength,
+                    preserve_initial_audio=refinement_source is not None,
                 )
                 from minimax_h3_mlx.projection import mpp_runtime_status
 
@@ -391,6 +449,16 @@ class H3TransformerCache:
                     projection_backend_runtime=mpp_runtime_status(),
                     paging_report=paged.report() if paged is not None else None,
                     text_encoder_paging_report=conditioning.paging_report,
+                    refinement_source_width=(
+                        refinement_source.width if refinement_source is not None else None
+                    ),
+                    refinement_source_height=(
+                        refinement_source.height if refinement_source is not None else None
+                    ),
+                    refinement_strength=getattr(result, "refinement_strength", None),
+                    refinement_audio_preserved=getattr(
+                        result, "refinement_audio_preserved", False
+                    ),
                     seconds_per_evaluation=result.seconds_per_evaluation,
                     total_seconds=result.total_seconds,
                     transformer_spec=spec,

@@ -7,11 +7,12 @@ __pycache__/
 .ruff_cache/
 dist/
 build/
-backups/
+/backups
+*-source-backups/
 docs/
 knowledge/
-output/
-outputs/
+/output
+/outputs
 models/
 checkpoints/
 cache/
@@ -23,9 +24,9 @@ cache/
 *.mov
 *.wav
 *.m4a
-benchmarks/artifacts/media/
+/benchmarks/artifacts/media
 algorithm_search_captures/
-benchmarks/algorithm_search/
+/benchmarks/algorithm_search
 .env
 .env.*
 !.env.example

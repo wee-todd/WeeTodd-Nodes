@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -17,6 +19,7 @@ class LoRARequest:
     strength: float = 1.0
     adaln_input_grid: str | None = None
     qkv_layout: str = "native_interleaved"
+    start_after_evaluations: int = 0
 
 
 @dataclass(frozen=True)
@@ -29,16 +32,50 @@ class LoRAApplyReport:
     adaln_targets: int
     qkv_permuted_targets: int
     tensor_bytes: int
+    start_after_evaluations: int
+
+
+_LORA_EVALUATION: ContextVar[tuple[int, int] | None] = ContextVar(
+    "minimax_h3_lora_evaluation",
+    default=None,
+)
+
+
+@contextmanager
+def lora_evaluation(index: int, total: int):
+    """Select the LoRA activation state for one transformer evaluation."""
+    if not 0 <= index < total:
+        raise ValueError(f"LoRA evaluation index {index} is outside a {total}-evaluation run.")
+    token = _LORA_EVALUATION.set((int(index), int(total)))
+    try:
+        yield
+    finally:
+        _LORA_EVALUATION.reset(token)
 
 
 class _LoRAProjection(nn.Module):
-    def __init__(self, a: mx.array, b: mx.array, scale: float, source_grid=None):
+    def __init__(
+        self,
+        a: mx.array,
+        b: mx.array,
+        scale: float,
+        source_grid=None,
+        start_after_evaluations: int = 0,
+    ):
         super().__init__()
         self.a = a
         self.b = b
         self.scale = float(scale)
         self.source_grid = source_grid
         self.prepared_input = None
+        self.start_after_evaluations = int(start_after_evaluations)
+
+    def active(self) -> bool:
+        evaluation = _LORA_EVALUATION.get()
+        if evaluation is None:
+            return True
+        index, _ = evaluation
+        return index >= self.start_after_evaluations
 
     def prepare(self, timesteps: mx.array) -> None:
         if self.source_grid is None:
@@ -71,7 +108,8 @@ class LoRALinear(nn.Module):
     def __call__(self, value: mx.array) -> mx.array:
         output = self.base(value)
         for adapter in self.adapters:
-            output = output + adapter.delta(value).astype(output.dtype)
+            if adapter.active():
+                output = output + adapter.delta(value).astype(output.dtype)
         return output
 
     def prepare(self, timesteps: mx.array) -> None:
@@ -224,6 +262,8 @@ def _load_input_grid(path: str | Path, expected_width: int) -> mx.array:
 
 def apply_lora(dit, request: LoRARequest) -> LoRAApplyReport:
     """Apply a generic LoRA safetensors file to a loaded H3 transformer."""
+    if request.start_after_evaluations < 0:
+        raise ValueError("LoRA start_after_evaluations must be zero or greater.")
     if getattr(dit, "paged_blocks", None) is not None:
         return _apply_paged_lora(dit, request)
     path = Path(request.path).expanduser()
@@ -280,7 +320,23 @@ def apply_lora(dit, request: LoRARequest) -> LoRAApplyReport:
             )
         alpha = float(values.get("alpha", mx.array(a.shape[0])).item())
         scale = request.strength * alpha / max(int(a.shape[0]), 1)
-        prepared.append((target, _LoRAProjection(a, b, scale, grid)))
+        if request.start_after_evaluations and is_adaln:
+            raise ValueError(
+                "Staged LoRA activation does not support AdaLN adapter targets because the "
+                "current H3 modulation cache is shared by the complete sampling schedule."
+            )
+        prepared.append(
+            (
+                target,
+                _LoRAProjection(
+                    a,
+                    b,
+                    scale,
+                    grid,
+                    request.start_after_evaluations,
+                ),
+            )
+        )
         adaln_targets += int(is_adaln)
         qkv_permuted_targets += int(qkv_permuted)
 
@@ -300,6 +356,7 @@ def apply_lora(dit, request: LoRARequest) -> LoRAApplyReport:
         adaln_targets=adaln_targets,
         qkv_permuted_targets=qkv_permuted_targets,
         tensor_bytes=sum(value.nbytes for value in tensors.values()),
+        start_after_evaluations=request.start_after_evaluations,
     )
 
 
@@ -327,6 +384,8 @@ def _apply_paged_lora(dit, request: LoRARequest) -> LoRAApplyReport:
     from .dit import TransformerBlock
 
     path = Path(request.path).expanduser()
+    if request.start_after_evaluations < 0:
+        raise ValueError("LoRA start_after_evaluations must be zero or greater.")
     if not path.is_file():
         raise FileNotFoundError(f"MiniMax H3 LoRA file not found: {path}")
     tensors = dict(mx.load(str(path)))
@@ -365,6 +424,11 @@ def _apply_paged_lora(dit, request: LoRARequest) -> LoRAApplyReport:
             )
         output_width, input_width = _logical_shape(layer)
         is_adaln = ".adaln_proj.linear" in f".{target}"
+        if request.start_after_evaluations and is_adaln:
+            raise ValueError(
+                "Staged LoRA activation does not support AdaLN adapter targets because the "
+                "current H3 modulation cache is shared by the complete sampling schedule."
+            )
         grid = None
         if a.shape[1] != input_width:
             if not is_adaln or dit.config.adaln_curve_grid is None:
@@ -392,6 +456,7 @@ def _apply_paged_lora(dit, request: LoRARequest) -> LoRAApplyReport:
             b,
             request.strength * alpha / max(int(a.shape[0]), 1),
             grid,
+            request.start_after_evaluations,
         )
         if not is_block:
             fixed.append((target, adapter))
@@ -418,6 +483,7 @@ def _apply_paged_lora(dit, request: LoRARequest) -> LoRAApplyReport:
         adaln_targets=adaln_targets,
         qkv_permuted_targets=qkv_permuted_targets,
         tensor_bytes=tensor_bytes,
+        start_after_evaluations=request.start_after_evaluations,
     )
 
 
@@ -448,6 +514,7 @@ def apply_paged_loras_to_block(
                 b,
                 request.strength * alpha / max(int(a.shape[0]), 1),
                 grid,
+                request.start_after_evaluations,
             )
             if grid is not None:
                 if timesteps is None:

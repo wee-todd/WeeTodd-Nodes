@@ -198,6 +198,36 @@ def test_transformer_only_continuation_sampling_shapes():
     assert result.transformer_evaluations == 2
 
 
+def test_h3_native_refinement_preserves_original_audio_bit_exactly():
+    cfg = tiny_config()
+    mx.random.seed(51)
+    pipeline = MiniMaxH3Pipeline(MiniMaxH3DiT(cfg), None, None, None)
+    initial_video = mx.random.normal((1, cfg.latents_dim, 37, 4, 4))
+    initial_audio = mx.random.normal((2, cfg.audio_latents_dim, 207))
+    mx.eval(initial_video, initial_audio)
+
+    result = pipeline.sample_latents(
+        mx.random.normal((1, 3, cfg.text_dim)),
+        np.full((3,), TAG_TEXT, dtype=np.int32),
+        duration_seconds=5.0,
+        num_inference_steps=5,
+        height=64,
+        width=64,
+        drop_adaln=False,
+        verbose=False,
+        initial_video_latents=initial_video,
+        initial_audio_latents=initial_audio,
+        refinement_strength=0.5,
+        preserve_initial_audio=True,
+    )
+
+    assert result.video_latents.shape == initial_video.shape
+    assert result.transformer_evaluations == 2
+    assert result.refinement_strength == 0.5
+    assert result.refinement_audio_preserved is True
+    assert mx.array_equal(result.audio_latents, initial_audio).item()
+
+
 def test_continuation_target_only_trajectory_forecast_excludes_fixed_rows():
     cfg = tiny_config()
     mx.random.seed(6)

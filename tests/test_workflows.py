@@ -228,6 +228,56 @@ def test_h3_to_ltx23_upscale_api_preserves_comfy_image_and_audio_contracts():
     assert prompt["1"]["inputs"] == PORTABLE_T2VA_INPUTS
 
 
+def test_h3_native_hires_fix_api_preserves_audio_and_publishes_refined_latents():
+    prompt = json.loads(
+        (ROOT / "examples" / "h3_native_hires_fix_1p5x_api.json").read_text()
+    )
+
+    assert prompt["3"]["inputs"]["steps"] == 8
+    assert prompt["5"]["inputs"]["unload_after_sample"] is False
+    assert prompt["6"]["class_type"] == "WeeToddH3LatentHiresFix"
+    assert prompt["6"]["inputs"]["source_latents"] == ["5", 0]
+    assert prompt["6"]["inputs"]["scale"] == "1.5x — balanced"
+    assert prompt["6"]["inputs"]["latent_resize_method"] == "bilinear"
+    assert prompt["7"]["inputs"]["latents"] == ["6", 0]
+    assert prompt["7"]["inputs"]["sampling_info"] == ["6", 2]
+
+
+def test_h3_768p_staged_turbo_workflow_uses_one_continuous_schedule():
+    prompt = json.loads(
+        (ROOT / "examples" / "h3_768p_fl2va_staged_turbo_drbaph_v4_api.json").read_text()
+    )
+    workflow = json.loads(
+        (ROOT / "workflows" / "h3_768p_fl2va_staged_turbo_drbaph_v4.json").read_text()
+    )
+    ui_nodes = {node["id"]: node for node in workflow["nodes"]}
+
+    assert prompt["1"]["inputs"]["task"] == "fl2va"
+    assert prompt["2"]["inputs"]["steps"] == 7
+    assert prompt["2"]["inputs"]["custom_width"] == 1344
+    assert prompt["2"]["inputs"]["custom_height"] == 768
+    assert prompt["2"]["inputs"]["sampling_method"] == "euler"
+    assert prompt["5"]["inputs"]["config"] == ["6", 0]
+    assert prompt["6"]["class_type"] == "WeeToddH3ValidatedSamplingPreset"
+    assert prompt["6"]["inputs"] == {
+        "config": ["2", 0],
+        "preset": (
+            "Staged Turbo — drbaph v4 step-600 — "
+            "2 base + 4 Turbo evaluations"
+        ),
+    }
+    assert prompt["7"]["inputs"]["config"] == ["6", 0]
+    assert prompt["7"]["inputs"]["loras"] == ["6", 1]
+    assert prompt["7"]["inputs"]["trajectory_forecast"] == ["6", 2]
+    assert "easycache" not in prompt["7"]["inputs"]
+    assert "blockcache" not in prompt["7"]["inputs"]
+    assert prompt["7"]["inputs"]["unload_after_sample"] is True
+    assert ui_nodes[8]["type"] == "WeeToddH3ValidatedSamplingPreset"
+    assert ui_nodes[8]["widgets_values"] == [prompt["6"]["inputs"]["preset"]]
+    assert ui_nodes[6]["inputs"][3]["name"] == "trajectory_forecast"
+    assert ui_nodes[6]["inputs"][4]["name"] == "loras"
+
+
 def test_t2va_api_prompt_uses_registered_nodes_and_staged_unloading():
     prompt = json.loads((ROOT / "examples" / "t2va_smoke_api.json").read_text())
 

@@ -11,7 +11,7 @@ from wee_todd_nodes.conditioning import H3Conditioning, H3TextEncoderSpec
 from wee_todd_nodes.continuation import H3ContinuationContext
 from wee_todd_nodes.lora import H3LoRASpec, H3LoRAStack
 from wee_todd_nodes.runtime import H3GenerationConfig
-from wee_todd_nodes.sampling import H3TransformerCache, H3TransformerSpec
+from wee_todd_nodes.sampling import H3Latents, H3TransformerCache, H3TransformerSpec
 
 
 class FakeDiT:
@@ -187,6 +187,53 @@ def test_transformer_cache_forwards_dense_continuation(tmp_path: Path):
     assert kwargs["continuation_video_latents"] == "context-video"
     assert kwargs["continuation_audio_latents"] == "context-audio"
     assert kwargs["continuation_frames"] == 22
+
+
+def test_transformer_cache_forwards_h3_native_refinement_and_preserved_audio(tmp_path: Path):
+    from minimax_h3_mlx.hires_fix import resize_video_latents_bicubic
+
+    created = []
+
+    def factory(spec):
+        sampler = FakeSampler(spec)
+        created.append(sampler)
+        return sampler
+
+    spec = _spec(tmp_path)
+    source_config = H3GenerationConfig(steps=8, width=640, height=384)
+    source_video = mx.arange(24 * 37 * 24 * 40, dtype=mx.float32).reshape(1, 24, 37, 24, 40)
+    source = H3Latents(
+        video=source_video,
+        audio=mx.zeros((2, 32, 207)),
+        num_frames=124,
+        width=640,
+        height=384,
+        fps=24,
+        sample_rate=32000,
+        transformer_evaluations=7,
+        seconds_per_evaluation=1.0,
+        total_seconds=7.0,
+        transformer_spec=spec,
+        generation_config=source_config,
+    )
+
+    H3TransformerCache(factory).sample(
+        spec,
+        _conditioning(spec),
+        H3GenerationConfig(steps=5, width=960, height=576),
+        refinement_source=source,
+        refinement_strength=0.35,
+        refinement_resize_method="bicubic",
+    )
+
+    kwargs = created[0].calls[0][2]
+    assert tuple(kwargs["initial_video_latents"].shape) == (1, 24, 37, 36, 60)
+    expected_video = resize_video_latents_bicubic(source_video, 36, 60)
+    mx.eval(kwargs["initial_video_latents"], expected_video)
+    assert bool(mx.allclose(kwargs["initial_video_latents"], expected_video).item())
+    assert kwargs["initial_audio_latents"] is source.audio
+    assert kwargs["refinement_strength"] == 0.35
+    assert kwargs["preserve_initial_audio"] is True
 
 
 def test_transformer_cache_accepts_target_only_forecast_with_continuation(tmp_path: Path):
@@ -368,6 +415,19 @@ def _turbo_lora_stack(tmp_path: Path) -> H3LoRAStack:
     return H3LoRAStack((H3LoRASpec(stack.adapters[0].path, profile="turbo"),))
 
 
+def _staged_turbo_lora_stack(tmp_path: Path) -> H3LoRAStack:
+    stack = _lora_stack(tmp_path)
+    return H3LoRAStack(
+        (
+            H3LoRASpec(
+                stack.adapters[0].path,
+                profile="turbo",
+                start_after_evaluations=2,
+            ),
+        )
+    )
+
+
 def test_transformer_cache_reloads_when_lora_stack_changes(tmp_path: Path, monkeypatch):
     created = []
     applied = []
@@ -457,6 +517,27 @@ def test_turbo_trajectory_forecast_is_supported_and_exclusive(tmp_path: Path, mo
             trajectory_forecast=forecast,
             blockcache=H3BlockCacheConfig(),
         )
+
+
+def test_staged_turbo_requires_dense_evaluations(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr("minimax_h3_mlx.lora.apply_lora_stack", lambda dit, requests: ())
+    cache = H3TransformerCache(lambda spec: FakeSampler(spec))
+    spec = _spec(tmp_path)
+    conditioning = _conditioning(spec)
+    config = H3GenerationConfig(steps=7)
+    staged = _staged_turbo_lora_stack(tmp_path)
+
+    with pytest.raises(ValueError, match="requires dense transformer evaluations"):
+        cache.sample(
+            spec,
+            conditioning,
+            config,
+            loras=staged,
+            trajectory_forecast=H3TrajectoryForecastConfig(),
+        )
+
+    result = cache.sample(spec, conditioning, config, loras=staged)
+    assert result.transformer_evaluations == 2
 
 
 def test_transformer_failure_releases_sampler(tmp_path: Path):

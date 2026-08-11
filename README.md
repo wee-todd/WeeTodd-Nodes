@@ -13,6 +13,50 @@ The measured low-memory profile reduced complete ComfyUI process peak by approxi
 while increasing workflow time by approximately 5 to 16 percent. See
 [Validated sampling presets](#validated-sampling-presets) for the measurement boundary.
 
+## Recommended 768p quality/performance workflow
+
+[`h3_768p_fl2va_staged_turbo_drbaph_v4.json`](workflows/h3_768p_fl2va_staged_turbo_drbaph_v4.json)
+is the recommended first-frame workflow when output quality per transformer evaluation matters more
+than minimum memory. It generates 1344 by 768 video with one continuous seven-point Euler schedule:
+two base-model evaluations establish the composition, then the drbaph v4 step-600 Turbo LoRA runs
+for the final four evaluations. The switch does not add noise or start a second sampler. This is a
+good balance of native-resolution detail and six-evaluation sampling, but 768p H3 remains expensive:
+the measured five-second Q8-paged run completed in 23 minutes 35 seconds on the test system.
+
+Install the
+[v4 step-600 EMA adapter file](https://huggingface.co/drbaph/MiniMax-H3-Turbo-Lora-ComfyUI/blob/main/minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors)
+from [drbaph/MiniMax-H3-Turbo-Lora-ComfyUI](https://huggingface.co/drbaph/MiniMax-H3-Turbo-Lora-ComfyUI)
+at this exact relative path:
+
+```text
+ComfyUI/models/loras/minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors
+```
+
+```bash
+COMFYUI_ROOT=/path/to/ComfyUI
+
+"$COMFYUI_ROOT/.venv/bin/hf" download drbaph/MiniMax-H3-Turbo-Lora-ComfyUI \
+  minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors \
+  --local-dir "$COMFYUI_ROOT/models/loras"
+```
+
+The workflow uses the following portable Component Loader values. They resolve through every
+ComfyUI model root, including `extra_model_paths.yaml`; do not replace them with machine-specific
+absolute paths.
+
+| Component | Loader value | Source |
+| --- | --- | --- |
+| FL2VA partition, vision text encoder, processor, tokenizer, and audio VAE | `MiniMax-H3/FL2VA` and its component subdirectories | [MiniMaxAI/MiniMax-H3](https://huggingface.co/MiniMaxAI/MiniMax-H3) |
+| Q8-extended paged transformer | `MiniMax-H3/transformers/q8_extended_paged` | [Vayden/MiniMax-H3-MLX-q8-extended-paged](https://huggingface.co/Vayden/MiniMax-H3-MLX-q8-extended-paged) |
+| Q8 video VAE | `MiniMax-H3/vae/q8/video_vae_affine_q8.safetensors` | [Vayden/MiniMax-H3-Video-VAE-MLX-Q8](https://huggingface.co/Vayden/MiniMax-H3-Video-VAE-MLX-Q8) |
+
+FL2VA requires the official partition's vision-capable `text_encoder`; the text-only paged Qwen
+artifact cannot encode the first frame. The official partition also supplies `model_index.json`,
+processor and tokenizer assets, and the audio VAE. The complete download commands and directory
+tree are in [Obtain the model components](#obtain-the-model-components). Replace the workflow's
+placeholder `first_frame.png` before queuing. The matching API prompt is
+[`h3_768p_fl2va_staged_turbo_drbaph_v4_api.json`](examples/h3_768p_fl2va_staged_turbo_drbaph_v4_api.json).
+
 ## Current scope
 
 - Apple Silicon and macOS
@@ -22,9 +66,11 @@ while increasing workflow time by approximately 5 to 16 percent. See
 - Experimental first-frame, last-frame, and combined first/last-frame (`fl2va`) conditioning
 - Experimental ordered image, video, soundtrack, and audio reference (`ref2va`) conditioning
 - Experimental latent-native motion continuation for dense T2VA sampling
+- Experimental 2.5-to-5-second short windows for chained-generation tests
+- Experimental H3-native 1.5x or 2x latent Hi Res Fix with original-audio preservation
 - Independent visual and audio reference-strength control
 - Synchronized H.264 video and 32 kHz stereo AAC audio
-- 34 composable nodes under `WeeTodd/H3`
+- 35 composable nodes under `WeeTodd/H3`
 - Optional standalone LTX 2.3 T2VA and I2VA pipelines under `WeeTodd/LTX 2.3`
 - Learned LTX latent upscaling for decoded H3 `IMAGE` plus `AUDIO`
 
@@ -58,7 +104,12 @@ ordered image reference. Replace the placeholder input image and edit the prompt
 
 Use **Motion Continuation Context** to copy a synchronized video-and-audio latent tail from one H3
 generation. Connect the continuation output to the next **Sample Video + Audio Latents** node. The
-recommended overlap is 22 frames, or approximately 0.92 seconds at 24 fps.
+quality-first default is 22 frames, or approximately 0.92 seconds at 24 fps. Shorter context is
+faster but can weaken motion and identity continuity at the join.
+
+A 2.5-second request is experimental and aligns to 73 frames. Two such windows with a 22-frame
+overlap produce 124 assembled frames: 73 frames from the first window and 51 new frames from the
+second window, or approximately 5.17 seconds total at 24 fps.
 
 Decode the second generation, then connect its `IMAGE`, `AUDIO`, and continuation outputs to
 **Trim Continuation Overlap**. The trim node removes the repeated video head, removes the matching
@@ -115,6 +166,46 @@ The graph keeps the transformer resident between windows and unloads it after th
 Install the named Turbo adapter before running the dense Turbo graph. Join the four published MP4
 files with a media-concatenation node or external editor; WeeTodd does not assume a specific
 third-party ComfyUI video-node package.
+
+## H3 latent Hi Res Fix
+
+Connect completed **Sample Video + Audio Latents** output to **Latent Hi Res Fix** to enlarge the
+video in H3 latent space and run a partial second H3 denoise pass. The node reuses the suite's
+existing conditioning and reference objects, so a source generated with first/last frames or
+Ref2VA can retain the same conditioning during refinement. It does not decode and re-encode the
+source video.
+
+The balanced option enlarges each axis by approximately 1.5x, rounded to H3-compatible multiples
+of 32. For example, 640 by 384 becomes 960 by 576. The experimental 2x option processes four times
+the source spatial latent area and is more likely to alter lettering, thin lines, composition, or
+small details. The target remains subject to the 1920-pixel axis and 1088-pixel short-edge limits.
+
+Select **bilinear**, **nearest exact**, **bicubic**, or **lanczos-3** latent resizing. Bilinear is
+the compatibility default. Nearest exact preserves source latent vectors without averaging.
+Bicubic uses MLX-native Catmull-Rom interpolation. Lanczos-3 uses normalized, separable six-tap
+weights for sharper band-limited interpolation without a dense resize matrix. Bicubic and Lanczos
+can overshoot latent values and must be validated for the selected denoise strength. All methods
+resize only the spatial video latent axes; temporal and audio latents remain unchanged.
+
+H3 evaluates video and audio jointly, so the refinement pass uses a temporary audio working latent
+to preserve the transformer's audiovisual contract. That temporary result is discarded. The node
+returns the original first-pass audio latent unchanged and records `audio_preserved: true` in its
+metadata. Decode and publish the refined latent normally; no LTX model or pixel-space stretcher is
+used. When using separate video/audio decode nodes, connect the Hi Res Fix `refined_config` output
+to **Publish Video + Audio** so its dimension checks use the enlarged canvas. **Direct Publish
+Latents** reads the refined configuration from the latent object automatically.
+
+Start with 1.5x, five requested refinement schedule points, and strength 0.35. Increasing strength
+uses an earlier, noisier suffix of the schedule and permits more reconstruction, but can drift
+farther from the source. Spatial token and activation work scales approximately with pixel area:
+1.5x is about 2.25x the source area, while 2x is 4x. Use staged unloading or low-memory BF16 when
+the target would otherwise exceed unified memory. This path is experimental until real-checkpoint
+visual comparisons establish stronger defaults.
+
+The composable API example
+[`h3_native_hires_fix_1p5x_api.json`](examples/h3_native_hires_fix_1p5x_api.json) runs an eight-point
+640 by 384 source pass, refines its video latent at 960 by 576, preserves the source audio latent,
+and publishes directly without retaining a full ComfyUI `IMAGE` tensor.
 
 ## Install
 
@@ -535,6 +626,7 @@ the Euler schedule and loads a required Turbo adapter only when sampling starts.
 | Ref2VA four-reference BF16 with Forward Attention replay | 20 | Up to 11 | Four ordered image references, normal-memory BF16 sampling, guarded replay |
 | Turbo, Larry EMA-850 | 5 | 4 | Matching Turbo LoRA |
 | Turbo, Larry v4 step-600 | 5 | 4 | Matching Turbo LoRA |
+| Staged Turbo, drbaph v4 step-600 | 7 | 6 | Two base evaluations, then four LoRA evaluations |
 | Turbo, LightX2V full rank | 5 | 4 | Matching Turbo LoRA |
 | Turbo, LightX2V dynamic rank 21 | 5 | 4 | Matching Turbo LoRA |
 
@@ -550,6 +642,13 @@ The single-window preset workflows are:
 - [`h3_512p_turbo_larry_v4.json`](workflows/h3_512p_turbo_larry_v4.json)
 - [`h3_512p_turbo_lightx2v_full.json`](workflows/h3_512p_turbo_lightx2v_full.json)
 - [`h3_512p_turbo_lightx2v_dynamic_rank21.json`](workflows/h3_512p_turbo_lightx2v_dynamic_rank21.json)
+- [`h3_768p_fl2va_staged_turbo_drbaph_v4.json`](workflows/h3_768p_fl2va_staged_turbo_drbaph_v4.json)
+  is a measured 1344 by 768 first-frame workflow for the drbaph v4 step-600 EMA adapter. It uses
+  seven requested schedule points: two base-model transformer evaluations followed by four
+  Turbo-enabled evaluations on the same latent trajectory. The workflow does not add fresh noise
+  at the activation boundary. The five-second Q8 paged validation completed in 23 minutes 35
+  seconds. Sampling used six real evaluations at a 210.89-second mean. The output contained 124
+  H.264 frames and stereo 32-kHz audio with 8.3 milliseconds of recorded drift.
 
 Use [`t2va_smoke_workflow.json`](examples/t2va_smoke_workflow.json) for a basic composable wiring
 check. Use the low-memory workflow described above for the recommended first generation.
@@ -585,6 +684,21 @@ Turbo adapters that use contiguous Q, K, and V output rows require conversion to
 per-head interleaved row layout. The `auto` QKV layout selects this conversion for the Turbo
 profile. Generation metadata reports the resolved layout and the number of converted QKV targets.
 Use `native_interleaved` only when the adapter publisher confirms that layout.
+
+Set **start after evaluations** to delay a LoRA within one generation. A value of `2` keeps the
+adapter disabled for the first two transformer evaluations and enables it for every later
+evaluation. The staged six-evaluation recipe therefore uses seven requested schedule points. This
+is WeeTodd's native equivalent of splitting one sigma schedule; it does not require a separate
+Split Sigmas node, a second sampler, or a second noise draw.
+
+The [drbaph MiniMax H3 Turbo LoRA](https://huggingface.co/drbaph/MiniMax-H3-Turbo-Lora-ComfyUI)
+v4 step-600 EMA pruned adapter contains 208 QKV and transformer-projection targets with no AdaLN
+targets. The adapter can therefore use staged activation with the pruned BF16 transformer. Install
+`minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors` in a ComfyUI LoRA model folder before
+loading the staged 768p workflow. The workflow uses strength 1.0, Euler sampling, and WeeTodd's
+native H3 video and audio schedules. The first native-resolution smoke test completed without a
+cache, forecast, fallback, or resident transformer after sampling. Treat the workflow as
+experimental until a same-seed base-only comparison and perceptual audio review are complete.
 
 The four tested Turbo adapter variants contain 52 fused-QKV targets. The two full Turbo variants
 also contain 51 AdaLN targets. The two lighter FL variants omit AdaLN.
@@ -651,14 +765,26 @@ failure.
 
 ## Development validation
 
+Before a risky local change, create a bounded source snapshot:
+
+```bash
+./.venv/bin/python scripts/create_source_backup.py --name before-change
+```
+
+The command writes to the sibling `WeeTodd-Nodes-source-backups` directory by default. It never
+walks ignored local state, applies `.source-backupignore`, and refuses an unexpectedly large file
+or source set before copying. Large local backups, benchmark captures, and render output may live
+under `WeeTodd-Nodes-local` with symbolic links at their familiar checkout paths. Do not use a
+generic recursive repository copy for source backups.
+
 Run inexpensive validation with the project environment:
 
 ```bash
-python -m compileall -q src __init__.py
-python -m pytest -q \
+./.venv/bin/python -m compileall -q src __init__.py
+./.venv/bin/python -m pytest -q \
   tests/test_nodes.py tests/test_runtime.py tests/test_readme.py tests/test_workflows.py
-python -m ruff check src/wee_todd_nodes tests
-python scripts/lint_docs.py
+./.venv/bin/ruff check src/wee_todd_nodes tests
+./.venv/bin/python scripts/lint_docs.py
 ```
 
 The published artifacts were also tested by a complete authenticated download into a clean

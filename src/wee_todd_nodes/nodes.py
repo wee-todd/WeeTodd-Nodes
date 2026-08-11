@@ -1,6 +1,7 @@
 """Classic ComfyUI node contracts backed by the MLX MiniMax H3 pipeline."""
 
 import json
+import math
 import platform
 from dataclasses import asdict, replace
 from importlib.metadata import PackageNotFoundError, version
@@ -26,15 +27,19 @@ from .residency import prepare_low_memory_stage
 from .runtime import RUNTIME, H3GenerationConfig, H3ModelSpec
 from .sampling import TRANSFORMER_RUNTIME, H3TransformerSpec
 
+_PORTABLE_H3_LORA_NAMES = (
+    "minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors",
+)
+
 
 def _lora_choices():
     try:
         import folder_paths
 
-        choices = folder_paths.get_filename_list("loras")
-        return choices or [""]
+        discovered = folder_paths.get_filename_list("loras")
+        return list(dict.fromkeys((*_PORTABLE_H3_LORA_NAMES, *discovered)))
     except ImportError:
-        return [""]
+        return list(_PORTABLE_H3_LORA_NAMES)
 
 
 def _resolve_lora_path(name: str) -> Path:
@@ -277,6 +282,23 @@ _H3_VALIDATED_SAMPLING_PRESETS = {
         "steps": 5,
         "policy": "turbo",
         "lora": "minimax_h3_turbo_v4_step600_ema.safetensors",
+    },
+    "Staged Turbo — drbaph v4 step-600 — 2 base + 4 Turbo evaluations": {
+        "steps": 7,
+        "policy": "turbo",
+        "lora": "minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors",
+        "start_after_evaluations": 2,
+        "measurement": {
+            "task": "fl2va",
+            "canvas": [1344, 768],
+            "duration_seconds": 5.0,
+            "transformer_evaluations": 6,
+            "base_evaluations": 2,
+            "lora_evaluations": 4,
+            "sampling_seconds": 1275.5262,
+            "complete_workflow_seconds": 1415.689,
+            "av_drift_seconds": 0.0083333,
+        },
     },
     "Turbo — LightX2V full rank — 5 points / 4 evaluations": {
         "steps": 5,
@@ -1098,7 +1120,16 @@ class WeeToddH3ContinuationContext:
         return {
             "required": {
                 "latents": ("WEETODD_H3_LATENTS",),
-                "context_frames": ([str(value) for value in SUPPORTED_CONTEXT_FRAMES],),
+                "context_frames": (
+                    [str(value) for value in SUPPORTED_CONTEXT_FRAMES],
+                    {
+                        "default": "22",
+                        "tooltip": (
+                            "22 frames is the quality-first default. Shorter context is faster "
+                            "but can weaken motion and identity continuity at the join."
+                        ),
+                    },
+                ),
             }
         }
 
@@ -1305,6 +1336,164 @@ class WeeToddH3Sample:
         return latents, json.dumps(info, indent=2, sort_keys=True)
 
 
+class WeeToddH3LatentHiresFix:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "components": ("WEETODD_H3_COMPONENTS",),
+                "conditioning": ("WEETODD_H3_CONDITIONING",),
+                "source_latents": ("WEETODD_H3_LATENTS",),
+                "scale": (
+                    ["1.5x — balanced", "2.0x — experimental"],
+                    {"default": "1.5x — balanced"},
+                ),
+                "refinement_schedule_points": (
+                    "INT",
+                    {
+                        "default": 5,
+                        "min": 2,
+                        "max": 20,
+                        "tooltip": "Requested H3 schedule points for the second visual pass.",
+                    },
+                ),
+                "refinement_strength": (
+                    "FLOAT",
+                    {
+                        "default": 0.35,
+                        "min": 0.05,
+                        "max": 1.0,
+                        "step": 0.05,
+                        "tooltip": (
+                            "Fraction of the refinement schedule used to noise and reconstruct "
+                            "the enlarged video latent. Higher values can change composition."
+                        ),
+                    },
+                ),
+                "unload_after_refine": ("BOOLEAN", {"default": True}),
+            },
+            "optional": {
+                "loras": ("WEETODD_H3_LORAS",),
+                "trajectory_forecast": ("WEETODD_H3_TRAJECTORY_FORECAST",),
+                "latent_resize_method": (
+                    ["bilinear", "nearest exact", "bicubic", "lanczos-3"],
+                    {
+                        "default": "bilinear",
+                        "tooltip": (
+                            "Select the MLX-native spatial interpolation used to enlarge the "
+                            "video latent before refinement. Audio is not resized."
+                        ),
+                    },
+                ),
+            },
+        }
+
+    RETURN_TYPES = ("WEETODD_H3_LATENTS", "WEETODD_H3_CONFIG", "STRING")
+    RETURN_NAMES = ("refined_latents", "refined_config", "refinement_info")
+    FUNCTION = "refine"
+    CATEGORY = "WeeTodd/H3/sampling"
+    DESCRIPTION = (
+        "Enlarge an H3 video latent and run a second H3 visual refinement pass. "
+        "The original synchronized audio latent is returned unchanged."
+    )
+
+    def refine(
+        self,
+        components,
+        conditioning,
+        source_latents,
+        scale,
+        refinement_schedule_points,
+        refinement_strength,
+        unload_after_refine,
+        loras=None,
+        trajectory_forecast=None,
+        latent_resize_method="bilinear",
+    ):
+        from minimax_h3_mlx.hires_fix import resolve_hires_canvas
+
+        scale_value = 1.5 if scale.startswith("1.5") else 2.0
+        target_width, target_height = resolve_hires_canvas(
+            source_latents.width,
+            source_latents.height,
+            scale_value,
+        )
+        config = replace(
+            source_latents.generation_config,
+            width=target_width,
+            height=target_height,
+            steps=int(refinement_schedule_points),
+            resolution_mode="custom",
+            resolution_tier=f"H3 Hi Res Fix {scale_value:g}x",
+            aspect_ratio="custom",
+        )
+        config.validate()
+
+        progress = None
+        check_interrupted = None
+        try:
+            import comfy.model_management
+            import comfy.utils
+
+            active_steps = max(
+                1,
+                int(math.ceil((config.steps - 1) * float(refinement_strength))),
+            )
+            progress = comfy.utils.ProgressBar(active_steps)
+            check_interrupted = comfy.model_management.throw_exception_if_processing_interrupted
+        except ImportError:
+            pass
+
+        def on_step(completed, total):
+            if check_interrupted is not None:
+                check_interrupted()
+            if progress is not None:
+                progress.update_absolute(completed, total)
+
+        refined = TRANSFORMER_RUNTIME.sample(
+            H3TransformerSpec.from_components(components),
+            conditioning,
+            config,
+            unload_after=unload_after_refine,
+            step_callback=on_step,
+            refinement_source=source_latents,
+            refinement_strength=float(refinement_strength),
+            refinement_resize_method=str(latent_resize_method),
+            loras=loras,
+            trajectory_forecast=trajectory_forecast,
+        )
+        info = {
+            "mode": "h3_native_latent_hires_fix",
+            "source_canvas": [source_latents.width, source_latents.height],
+            "target_canvas": [target_width, target_height],
+            "requested_scale": scale_value,
+            "resolved_scale": [
+                target_width / source_latents.width,
+                target_height / source_latents.height,
+            ],
+            "refinement_schedule_points": config.steps,
+            "refinement_strength": refinement_strength,
+            "latent_resize_method": latent_resize_method,
+            "transformer_evaluations": refined.transformer_evaluations,
+            "trajectory_forecasts": refined.trajectory_forecasts,
+            "trajectory_fallbacks": refined.trajectory_fallbacks,
+            "trajectory_offline_replay": refined.trajectory_offline_replay,
+            "trajectory_replay_steps": refined.trajectory_replay_steps,
+            "trajectory_replay_anchor_steps": refined.trajectory_replay_anchor_steps,
+            "trajectory_replay_smoothed_steps": refined.trajectory_replay_smoothed_steps,
+            "trajectory_replay_seconds": refined.trajectory_replay_seconds,
+            "trajectory_replay_fallback_reason": refined.trajectory_replay_fallback_reason,
+            "trajectory_forecast": (
+                asdict(trajectory_forecast) if trajectory_forecast is not None else None
+            ),
+            "audio_preserved": refined.refinement_audio_preserved,
+            "audio_identity": "original H3 audio latent; second-pass audio discarded",
+            "transformer_resident": TRANSFORMER_RUNTIME.loaded,
+            "loras": loras.metadata() if loras is not None else [],
+        }
+        return refined, config, json.dumps(info, indent=2, sort_keys=True)
+
+
 class WeeToddH3LoRALoader:
     @classmethod
     def INPUT_TYPES(cls):
@@ -1337,7 +1526,23 @@ class WeeToddH3LoRALoader:
                     },
                 ),
             },
-            "optional": {"previous_loras": ("WEETODD_H3_LORAS",)},
+            "optional": {
+                "start_after_evaluations": (
+                    "INT",
+                    {
+                        "default": 0,
+                        "min": 0,
+                        "max": 100,
+                        "step": 1,
+                        "tooltip": (
+                            "Keep this LoRA disabled for the first N transformer evaluations, "
+                            "then activate it for the rest of the same noise schedule. Use 2 for "
+                            "the staged two-base-plus-four-Turbo recipe."
+                        ),
+                    },
+                ),
+                "previous_loras": ("WEETODD_H3_LORAS",),
+            },
         }
 
     RETURN_TYPES = ("WEETODD_H3_LORAS", "STRING")
@@ -1356,6 +1561,7 @@ class WeeToddH3LoRALoader:
         profile,
         adaln_input_grid="",
         qkv_layout="auto",
+        start_after_evaluations=0,
         previous_loras=None,
     ):
         from .lora import H3LoRASpec, H3LoRAStack
@@ -1371,6 +1577,7 @@ class WeeToddH3LoRALoader:
             profile=profile,
             adaln_input_grid=str(grid) if grid is not None else None,
             qkv_layout=qkv_layout,
+            start_after_evaluations=start_after_evaluations,
         )
         stack = (previous_loras or H3LoRAStack()).append(spec)
         info = {
@@ -1382,6 +1589,7 @@ class WeeToddH3LoRALoader:
             "adaln_input_grid": grid.name if grid is not None else None,
             "stack_size": len(stack.adapters),
             "loads_at_sampling": True,
+            "start_after_evaluations": start_after_evaluations,
         }
         return stack, json.dumps(info, indent=2, sort_keys=True)
 
@@ -1434,12 +1642,14 @@ class WeeToddH3ValidatedSamplingPreset:
 
         if policy == "turbo":
             lora_name = str(selected["lora"])
+            start_after_evaluations = int(selected.get("start_after_evaluations", 0))
             try:
                 loras, _ = WeeToddH3LoRALoader().load(
                     lora_name,
                     1.0,
                     "turbo",
                     qkv_layout="auto",
+                    start_after_evaluations=start_after_evaluations,
                 )
             except FileNotFoundError as exc:
                 raise FileNotFoundError(
@@ -1474,6 +1684,11 @@ class WeeToddH3ValidatedSamplingPreset:
             "sampling_method": configured.sampling_method,
             "lora_file": lora_file,
             "lora_strength": 1.0 if lora_file is not None else None,
+            "lora_start_after_evaluations": (
+                int(selected.get("start_after_evaluations", 0))
+                if lora_file is not None
+                else None
+            ),
             "trajectory_offline_replay": bool(
                 trajectory_forecast is not None and trajectory_forecast.offline_smoothing_replay
             ),
@@ -2386,7 +2601,16 @@ class WeeToddH3GenerationConfig:
             "required": {
                 "duration_seconds": (
                     "FLOAT",
-                    {"default": 5.0, "min": 5.0, "max": 15.0, "step": 0.1},
+                    {
+                        "default": 5.0,
+                        "min": 2.5,
+                        "max": 15.0,
+                        "step": 0.1,
+                        "tooltip": (
+                            "Durations below 5 seconds are experimental and snap upward to the "
+                            "H3 17n+5 frame grid."
+                        ),
+                    },
                 ),
                 "steps": ("INT", {"default": 16, "min": 2, "max": 100}),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xFFFFFFFFFFFFFFFF}),
@@ -2632,6 +2856,7 @@ NODE_CLASS_MAPPINGS = {
     "WeeToddH3UnloadTextEncoder": WeeToddH3UnloadTextEncoder,
     "WeeToddH3ContinuationContext": WeeToddH3ContinuationContext,
     "WeeToddH3Sample": WeeToddH3Sample,
+    "WeeToddH3LatentHiresFix": WeeToddH3LatentHiresFix,
     "WeeToddH3LoRALoader": WeeToddH3LoRALoader,
     "WeeToddH3ValidatedSamplingPreset": WeeToddH3ValidatedSamplingPreset,
     "WeeToddH3EasyCache": WeeToddH3EasyCache,
@@ -2668,6 +2893,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "WeeToddH3UnloadTextEncoder": "WeeTodd H3 Unload Qwen3-VL",
     "WeeToddH3ContinuationContext": "WeeTodd H3 Motion Continuation Context",
     "WeeToddH3Sample": "WeeTodd H3 Sample Video + Audio Latents",
+    "WeeToddH3LatentHiresFix": "WeeTodd H3 Latent Hi Res Fix",
     "WeeToddH3LoRALoader": "WeeTodd H3 LoRA Loader (MLX)",
     "WeeToddH3ValidatedSamplingPreset": "WeeTodd H3 Validated Sampling Preset",
     "WeeToddH3EasyCache": "WeeTodd H3 EasyCache (MLX)",

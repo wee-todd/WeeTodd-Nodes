@@ -14,6 +14,7 @@ from wee_todd_nodes.nodes import (
     WeeToddH3GenerationConfig,
     WeeToddH3KeyframeEncode,
     WeeToddH3LastFrame,
+    WeeToddH3LatentHiresFix,
     WeeToddH3LoRALoader,
     WeeToddH3QuantizedTransformerLoader,
     WeeToddH3ReferenceAudio,
@@ -98,8 +99,88 @@ def test_sampling_metadata_preserves_exact_prompt(monkeypatch):
     }
 
 
+def test_hires_fix_resolves_target_and_preserves_audio_contract(monkeypatch):
+    from minimax_h3_mlx.trajectory_forecast import H3TrajectoryForecastConfig
+    from wee_todd_nodes.runtime import H3GenerationConfig
+
+    inputs = WeeToddH3LatentHiresFix.INPUT_TYPES()
+    resize_input = inputs["optional"]["latent_resize_method"]
+    assert "latent_resize_method" not in inputs["required"]
+    assert resize_input[0] == ["bilinear", "nearest exact", "bicubic", "lanczos-3"]
+    assert resize_input[1]["default"] == "bilinear"
+
+    source = SimpleNamespace(
+        width=640,
+        height=384,
+        generation_config=H3GenerationConfig(
+            width=640,
+            height=384,
+            duration_seconds=5.0,
+            steps=8,
+        ),
+    )
+    refined = SimpleNamespace(
+        transformer_evaluations=2,
+        refinement_audio_preserved=True,
+        trajectory_forecasts=2,
+        trajectory_fallbacks=0,
+        trajectory_offline_replay=True,
+        trajectory_replay_steps=6,
+        trajectory_replay_anchor_steps=4,
+        trajectory_replay_smoothed_steps=2,
+        trajectory_replay_seconds=0.125,
+        trajectory_replay_fallback_reason=None,
+    )
+    forecast = H3TrajectoryForecastConfig(
+        mode="automatic_speed",
+        offline_smoothing_replay=True,
+    )
+    calls = []
+
+    def sample(*args, **kwargs):
+        calls.append((args, kwargs))
+        return refined
+
+    monkeypatch.setattr(
+        "wee_todd_nodes.nodes.H3TransformerSpec.from_components",
+        lambda components: "transformer-spec",
+    )
+    monkeypatch.setattr(
+        "wee_todd_nodes.nodes.TRANSFORMER_RUNTIME",
+        SimpleNamespace(sample=sample, loaded=False),
+    )
+
+    result, refined_config, metadata = WeeToddH3LatentHiresFix().refine(
+        "components",
+        "conditioning",
+        source,
+        "1.5x — balanced",
+        5,
+        0.35,
+        True,
+        trajectory_forecast=forecast,
+        latent_resize_method="bicubic",
+    )
+
+    assert result is refined
+    config = calls[0][0][2]
+    assert refined_config is config
+    assert (config.width, config.height, config.steps) == (960, 576, 5)
+    assert calls[0][1]["refinement_source"] is source
+    assert calls[0][1]["refinement_strength"] == 0.35
+    assert calls[0][1]["refinement_resize_method"] == "bicubic"
+    assert calls[0][1]["trajectory_forecast"] is forecast
+    parsed = json.loads(metadata)
+    assert parsed["audio_preserved"] is True
+    assert parsed["latent_resize_method"] == "bicubic"
+    assert parsed["trajectory_forecasts"] == 2
+    assert parsed["transformer_evaluations"] == 2
+    assert parsed["trajectory_replay_seconds"] == 0.125
+    assert parsed["trajectory_replay_fallback_reason"] is None
+
+
 def test_expected_nodes_are_registered():
-    assert len(NODE_CLASS_MAPPINGS) == 41
+    assert len(NODE_CLASS_MAPPINGS) == 42
     assert "WeeToddH3ComponentLoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3QuantizedTransformerLoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3Preflight" in NODE_CLASS_MAPPINGS
@@ -117,6 +198,7 @@ def test_expected_nodes_are_registered():
     assert "WeeToddH3UnloadTextEncoder" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3ContinuationContext" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3Sample" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3LatentHiresFix" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3EasyCache" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3BlockCache" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3HierarchicalBlockCache" in NODE_CLASS_MAPPINGS
@@ -139,7 +221,15 @@ def test_expected_nodes_are_registered():
     assert "WeeToddLTX23Unload" in NODE_CLASS_MAPPINGS
 
 
-def test_lora_loader_exposes_and_reports_turbo_qkv_layout(tmp_path):
+def test_continuation_context_defaults_to_quality_first_22_frames():
+    node_class = NODE_CLASS_MAPPINGS["WeeToddH3ContinuationContext"]
+    specification = node_class.INPUT_TYPES()["required"]["context_frames"]
+
+    assert specification[0] == ["5", "22", "39", "56"]
+    assert specification[1]["default"] == "22"
+
+
+def test_lora_loader_exposes_qkv_layout_and_staged_activation(tmp_path):
     path = tmp_path / "example_turbo.safetensors"
     mx.save_safetensors(
         str(path),
@@ -150,7 +240,13 @@ def test_lora_loader_exposes_and_reports_turbo_qkv_layout(tmp_path):
     )
     inputs = WeeToddH3LoRALoader.INPUT_TYPES()
 
-    stack, raw_info = WeeToddH3LoRALoader().load(str(path), 1.0, "turbo", qkv_layout="auto")
+    stack, raw_info = WeeToddH3LoRALoader().load(
+        str(path),
+        1.0,
+        "turbo",
+        qkv_layout="auto",
+        start_after_evaluations=2,
+    )
     info = json.loads(raw_info)
 
     assert inputs["required"]["qkv_layout"][0] == [
@@ -159,7 +255,10 @@ def test_lora_loader_exposes_and_reports_turbo_qkv_layout(tmp_path):
         "contiguous_qkv",
     ]
     assert stack.adapters[0].resolved_qkv_layout == "contiguous_qkv"
+    assert stack.adapters[0].start_after_evaluations == 2
     assert info["qkv_layout"] == "contiguous_qkv"
+    assert info["start_after_evaluations"] == 2
+    assert inputs["optional"]["start_after_evaluations"][1]["default"] == 0
 
 
 def test_validated_sampling_preset_applies_dense_and_trajectory_policies():
@@ -285,6 +384,10 @@ def test_validated_chained_context_presets_match_measured_policies(tmp_path, mon
             "minimax_h3_turbo_v4_step600_ema.safetensors",
         ),
         (
+            "Staged Turbo — drbaph v4 step-600 — 2 base + 4 Turbo evaluations",
+            "minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors",
+        ),
+        (
             "Turbo — LightX2V full rank — 5 points / 4 evaluations",
             "minimax_h3_fl2v_lightx2v_turbo_4step_v0.1_comfy.safetensors",
         ),
@@ -317,7 +420,6 @@ def test_validated_sampling_preset_builds_each_lazy_turbo_stack(
     )
     info = json.loads(raw_info)
 
-    assert config.steps == 5
     assert config.sampling_method == "euler"
     assert forecast is None
     assert len(loras.adapters) == 1
@@ -325,7 +427,17 @@ def test_validated_sampling_preset_builds_each_lazy_turbo_stack(
     assert loras.adapters[0].resolved_qkv_layout == "contiguous_qkv"
     assert loras.adapters[0].strength == 1.0
     assert info["lora_file"] == filename
-    assert info["transformer_evaluations_without_forecast"] == 4
+    if preset.startswith("Staged Turbo"):
+        assert config.steps == 7
+        assert loras.adapters[0].start_after_evaluations == 2
+        assert info["lora_start_after_evaluations"] == 2
+        assert info["transformer_evaluations_without_forecast"] == 6
+        assert info["measurement"]["base_evaluations"] == 2
+        assert info["measurement"]["lora_evaluations"] == 4
+    else:
+        assert config.steps == 5
+        assert info["lora_start_after_evaluations"] == 0
+        assert info["transformer_evaluations_without_forecast"] == 4
 
 
 def test_reference_strength_node_preserves_defaults_and_warns_for_weak_fl2va():

@@ -28,7 +28,7 @@ from dataclasses import dataclass
 import mlx.core as mx
 import numpy as np
 
-from .config import TAG_AUDIO, TAG_TEXT, TAG_VIDEO
+from .config import TAG_AUDIO, TAG_VIDEO
 
 # MiniMax-H3 generates at a fixed 24 fps and was released for a 768-pixel short edge only, with a
 # soft area cap of 768x1344 and both axes rounded to a multiple of 32.
@@ -38,7 +38,7 @@ MAX_PIXELS = 768 * 1344
 CANVAS_MULTIPLE = 32
 MIN_ASPECT_RATIO = 1 / 4
 MAX_ASPECT_RATIO = 4
-MIN_DURATION = 5.0
+MIN_DURATION = 2.5
 MAX_DURATION = 15.0
 
 # The video VAE encodes 17 pixel frames per chunk and drops the 3 trailing latent frames of every
@@ -159,7 +159,10 @@ def prepare_keyframe_image(image, height: int, width: int, stretch: bool):
         return image.resize((width, height), Image.Resampling.LANCZOS)
 
     scale = max(width / image.size[0], height / image.size[1])
-    resized_size = (max(width, round(image.size[0] * scale)), max(height, round(image.size[1] * scale)))
+    resized_size = (
+        max(width, round(image.size[0] * scale)),
+        max(height, round(image.size[1] * scale)),
+    )
     left = max(0, (resized_size[0] - width) // 2)
     top = max(0, (resized_size[1] - height) // 2)
     resized = image.resize(resized_size, Image.Resampling.LANCZOS)
@@ -174,7 +177,9 @@ def patchify_video_latents(latents: mx.array, patch_size: tuple[int, int, int]) 
     pt, ph, pw = patch_size
     b, c, f, h, w = latents.shape
     if f % pt or h % ph or w % pw:
-        raise ValueError(f"Latents of shape {latents.shape} are not divisible by the patch {patch_size}.")
+        raise ValueError(
+            f"Latents of shape {latents.shape} are not divisible by the patch {patch_size}."
+        )
 
     x = latents.reshape(b, c, f // pt, pt, h // ph, ph, w // pw, pw)
     x = x.transpose(0, 2, 4, 6, 1, 3, 5, 7)

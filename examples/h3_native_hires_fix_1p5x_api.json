@@ -1,0 +1,93 @@
+{
+  "1": {
+    "class_type": "WeeToddH3ComponentLoader",
+    "inputs": {
+      "audio_vae": "MiniMax-H3/FL2VA/audio_vae",
+      "checkpoint": "MiniMax-H3/FL2VA",
+      "processor": "MiniMax-H3/FL2VA/processor",
+      "task": "t2va",
+      "text_encoder": "MiniMax-H3/text_encoders/q8-paged",
+      "tokenizer": "MiniMax-H3/FL2VA/tokenizer",
+      "transformer": "MiniMax-H3/transformers/q8_extended_paged",
+      "video_vae": "MiniMax-H3/vae/q8/video_vae_affine_q8.safetensors",
+      "allow_fl2va_weights_for_ref2va": false
+    },
+    "_meta": {"title": "H3 Component Loader"}
+  },
+  "2": {
+    "class_type": "WeeToddH3Preflight",
+    "inputs": {
+      "components": ["1", 0],
+      "config": ["3", 0],
+      "prompt_tokens": 512,
+      "available_memory_gb": 0.0
+    },
+    "_meta": {"title": "H3 Source Preflight"}
+  },
+  "3": {
+    "class_type": "WeeToddH3GenerationConfig",
+    "inputs": {
+      "duration_seconds": 5.0,
+      "steps": 8,
+      "seed": 0,
+      "resolution_mode": "ratio + size",
+      "resolution_tier": "384 px short edge — fast smoke",
+      "aspect_ratio": "16:9 — widescreen landscape",
+      "short_edge": 384,
+      "custom_width": 640,
+      "custom_height": 384,
+      "drop_adaln": true,
+      "memory_mode": "low_memory_bf16",
+      "attention_chunk_size": "automatic",
+      "projection_backend": "mlx",
+      "sampling_method": "euler"
+    },
+    "_meta": {"title": "H3 Source Generation Config"}
+  },
+  "4": {
+    "class_type": "WeeToddH3TextEncode",
+    "inputs": {
+      "components": ["2", 0],
+      "prompt": "integrated_multimodal_description: [Shot 1] Live-action cinematic medium-wide eye-level shot of a small red wind-up robot on a worn wooden workbench in a warm sunlit repair workshop. The robot walks left to right with clear alternating steps, its silver key turning, arms swinging, and head briefly pivoting toward camera. The camera trucks right slowly to follow. Near the workbench edge, the robot stops, plants both feet, raises its right hand, and gives one deliberate wave while holding a stable final pose. Fine brushed metal, small screws, worn red paint, wood grain, natural shadows, realistic physical motion.\n\noverall_soundscape: Quiet workshop room tone. Light metal footsteps tap on wood, the winding mechanism clicks in sync with the turning key, and the raised arm ends with a soft mechanical stop.\n\nnon_diegetic_music: N/A",
+      "unload_after_encode": true
+    },
+    "_meta": {"title": "H3 Text Encode"}
+  },
+  "5": {
+    "class_type": "WeeToddH3Sample",
+    "inputs": {
+      "components": ["2", 0],
+      "conditioning": ["4", 0],
+      "config": ["3", 0],
+      "unload_after_sample": false
+    },
+    "_meta": {"title": "H3 Source Sample — 8 Points"}
+  },
+  "6": {
+    "class_type": "WeeToddH3LatentHiresFix",
+    "inputs": {
+      "components": ["2", 0],
+      "conditioning": ["4", 0],
+      "source_latents": ["5", 0],
+      "scale": "1.5x — balanced",
+      "latent_resize_method": "bilinear",
+      "refinement_schedule_points": 5,
+      "refinement_strength": 0.35,
+      "unload_after_refine": true
+    },
+    "_meta": {"title": "H3 Native Latent Hi Res Fix — 1.5x"}
+  },
+  "7": {
+    "class_type": "WeeToddH3DirectPublishLatents",
+    "inputs": {
+      "components": ["2", 0],
+      "latents": ["6", 0],
+      "filename_prefix": "WeeTodd/H3_native_hires_fix_1p5x",
+      "crf": 18,
+      "max_av_drift_seconds": 0.025,
+      "generation_metadata": "{\"workflow\": \"h3_native_hires_fix_1p5x\", \"status\": \"experimental\"}",
+      "sampling_info": ["6", 2]
+    },
+    "_meta": {"title": "H3 Direct Publish Refined Latents"}
+  }
+}

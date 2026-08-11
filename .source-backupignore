@@ -1,0 +1,13 @@
+# Heavy or private local state must never enter a WeeTodd source snapshot.
+.agents/
+.venv/
+backups/
+benchmarks/algorithm_search/
+benchmarks/artifacts/media/
+cache/
+checkpoints/
+docs/
+knowledge/
+models/
+output/
+outputs/

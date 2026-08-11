@@ -227,6 +227,23 @@ def test_preflight_validates_complete_stack_and_estimates_stages(tmp_path: Path)
     }
 
 
+def test_preflight_accepts_experimental_two_and_a_half_second_window(tmp_path: Path):
+    root = _component_tree(tmp_path)
+
+    report = preflight_components(
+        H3ComponentSetSpec(str(root), task="t2va"),
+        H3PreflightRequest(
+            duration_seconds=2.5,
+            steps=8,
+            width=640,
+            height=384,
+            prompt_tokens=64,
+        ),
+    )
+
+    assert report.frames == 73
+
+
 def test_preflight_validates_portable_optimized_component_layout(tmp_path: Path):
     spec = _portable_optimized_spec(tmp_path)
 

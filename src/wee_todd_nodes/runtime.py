@@ -39,8 +39,11 @@ class H3GenerationConfig:
     sampling_method: str = "euler"
 
     def validate(self) -> None:
-        if not 5.0 <= self.duration_seconds <= 15.0:
-            raise ValueError("MiniMax H3 duration must be between 5 and 15 seconds")
+        if not 2.5 <= self.duration_seconds <= 15.0:
+            raise ValueError(
+                "MiniMax H3 duration must be between 2.5 and 15 seconds; "
+                "durations below 5 seconds are experimental"
+            )
         if self.steps < 2:
             raise ValueError("steps must be at least 2")
         if self.width < 32 or self.height < 32:

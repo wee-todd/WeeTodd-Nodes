@@ -111,8 +111,11 @@ class H3PreflightRequest:
     available_memory_gb: float = 0.0
 
     def validate(self) -> None:
-        if not 5.0 <= self.duration_seconds <= 15.0:
-            raise ValueError("Duration must be between 5 and 15 seconds.")
+        if not 2.5 <= self.duration_seconds <= 15.0:
+            raise ValueError(
+                "Duration must be between 2.5 and 15 seconds; "
+                "durations below 5 seconds are experimental."
+            )
         if self.steps < 2:
             raise ValueError("Sampling steps must be at least 2.")
         if self.width < 32 or self.height < 32:

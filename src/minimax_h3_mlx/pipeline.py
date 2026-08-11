@@ -16,6 +16,7 @@ the 13B of `adaln_proj` is then dropped — see :mod:`minimax_h3_mlx.adaln`.
 
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -30,6 +31,8 @@ from .packing import (
     AUDIO_CHANNELS,
     FPS,
     KEYFRAME_NOISE_AUG,
+    MAX_DURATION,
+    MIN_DURATION,
     PIXEL_MEAN,
     PIXEL_STD,
     align_num_frames,
@@ -145,6 +148,8 @@ class LatentResult:
     trajectory_conditioned_row_policy: str | None = None
     trajectory_excluded_video_rows: int = 0
     trajectory_excluded_audio_rows: int = 0
+    refinement_strength: float | None = None
+    refinement_audio_preserved: bool = False
     seconds_per_evaluation: float = 0.0
     total_seconds: float = 0.0
 
@@ -319,11 +324,18 @@ class MiniMaxH3Pipeline:
         visual_condition_strength: float = KEYFRAME_NOISE_AUG,
         audio_condition_strength: float = 1.0,
         terminal_target_only: bool = False,
+        initial_video_latents: mx.array | None = None,
+        initial_audio_latents: mx.array | None = None,
+        refinement_strength: float = 1.0,
+        preserve_initial_audio: bool = False,
     ) -> LatentResult:
         """Sample synchronized T2VA, FL2VA, or Ref2VA latents without loading a VAE."""
         run_started = time.perf_counter()
-        if not 5.0 <= duration_seconds <= 15.0:
-            raise ValueError("`duration_seconds` must be between 5 and 15 seconds.")
+        if not MIN_DURATION <= duration_seconds <= MAX_DURATION:
+            raise ValueError(
+                f"`duration_seconds` must be between {MIN_DURATION:g} and "
+                f"{MAX_DURATION:g} seconds. Durations below 5 seconds are experimental."
+            )
         if num_inference_steps < 2:
             raise ValueError("`num_inference_steps` must be at least 2.")
         if height < 32 or width < 32 or height % 32 or width % 32:
@@ -336,6 +348,15 @@ class MiniMaxH3Pipeline:
         ):
             if not 0.0 <= value <= 1.0:
                 raise ValueError(f"`{name}` must be between 0 and 1, got {value}.")
+        has_initial_latents = initial_video_latents is not None or initial_audio_latents is not None
+        if has_initial_latents and (
+            initial_video_latents is None or initial_audio_latents is None
+        ):
+            raise ValueError("H3 refinement requires both initial video and audio latents.")
+        if has_initial_latents and not 0.0 < refinement_strength <= 1.0:
+            raise ValueError("`refinement_strength` must be greater than 0 and no more than 1.")
+        if preserve_initial_audio and not has_initial_latents:
+            raise ValueError("Preserving initial audio requires H3 refinement latents.")
 
         tags = np.asarray(text_token_tags, dtype=np.int32)
         if tags.ndim != 1 or tags.size == 0:
@@ -366,6 +387,36 @@ class MiniMaxH3Pipeline:
         num_audio_latents = audio_latent_num_frames(num_frames)
         patch_size = self.dit.config.patch_size
         has_continuation = continuation_frames > 0
+        if has_initial_latents and has_continuation:
+            raise ValueError("H3 refinement cannot be combined with motion continuation.")
+        expected_initial_video_shape = (
+            1,
+            self.dit.config.latents_dim,
+            num_latent_frames,
+            latent_height,
+            latent_width,
+        )
+        expected_initial_audio_shape = (
+            AUDIO_CHANNELS,
+            self.dit.config.audio_latents_dim,
+            num_audio_latents,
+        )
+        if initial_video_latents is not None and tuple(initial_video_latents.shape) != (
+            expected_initial_video_shape
+        ):
+            raise ValueError(
+                "Initial H3 video latent shape does not match the refinement canvas: "
+                f"expected {expected_initial_video_shape}, got "
+                f"{tuple(initial_video_latents.shape)}."
+            )
+        if initial_audio_latents is not None and tuple(initial_audio_latents.shape) != (
+            expected_initial_audio_shape
+        ):
+            raise ValueError(
+                "Initial H3 audio latent shape does not match the refinement duration: "
+                f"expected {expected_initial_audio_shape}, got "
+                f"{tuple(initial_audio_latents.shape)}."
+            )
         if has_continuation:
             if references or keyframe_anchors or condition_video_rows is not None:
                 raise ValueError(
@@ -499,6 +550,17 @@ class MiniMaxH3Pipeline:
                 },
             )
 
+        video_sched, audio_sched = self._build_schedules(
+            num_inference_steps, sampling_method=sampling_method
+        )
+        if has_initial_latents and refinement_strength < 1.0:
+            full_steps = len(video_sched.timesteps)
+            active_steps = max(1, min(full_steps, int(math.ceil(full_steps * refinement_strength))))
+            video_sigmas = video_sched.sigmas.tolist()[-(active_steps + 1) :]
+            audio_sigmas = audio_sched.sigmas.tolist()[-(active_steps + 1) :]
+            video_sched.set_timesteps(sigmas=video_sigmas)
+            audio_sched.set_timesteps(sigmas=audio_sigmas)
+
         mx.random.seed(seed)
         if has_continuation:
             condition_video_rows = patchify_video_latents(
@@ -517,21 +579,28 @@ class MiniMaxH3Pipeline:
             condition_video_rows = MiniMaxH3Scheduler(
                 shift=self.config.sigma_shift_video
             ).scale_noise(condition_video_rows, visual_condition_strength, condition_noise)
-        video_latents = mx.random.normal(
-            (
-                1,
-                self.dit.config.latents_dim,
-                num_latent_frames,
-                latent_height,
-                latent_width,
+        video_noise = mx.random.normal(expected_initial_video_shape).astype(mx.float32)
+        video_latents = video_noise
+        if initial_video_latents is not None:
+            video_latents = video_sched.scale_noise(
+                initial_video_latents.astype(mx.float32),
+                float(video_sched.timesteps[0].item()),
+                video_noise,
             )
-        ).astype(mx.float32)
         video_rows = patchify_video_latents(video_latents, patch_size)
         if condition_video_rows is not None:
             video_rows = mx.concatenate([condition_video_rows, video_rows])
-        audio_rows = mx.random.normal(
-            (num_audio_latents * AUDIO_CHANNELS, self.dit.config.audio_latents_dim)
-        ).astype(mx.float32)
+        audio_noise = mx.random.normal(expected_initial_audio_shape).astype(mx.float32)
+        audio_latents_working = audio_noise
+        if initial_audio_latents is not None:
+            audio_latents_working = audio_sched.scale_noise(
+                initial_audio_latents.astype(mx.float32),
+                float(audio_sched.timesteps[0].item()),
+                audio_noise,
+            )
+        audio_rows = audio_latents_working.transpose(0, 2, 1).reshape(
+            num_audio_latents * AUDIO_CHANNELS, self.dit.config.audio_latents_dim
+        )
         if condition_audio_rows is not None:
             condition_audio_rows = condition_audio_rows.astype(mx.float32)
             if audio_condition_strength < 1.0:
@@ -548,9 +617,6 @@ class MiniMaxH3Pipeline:
                 )
             audio_rows = mx.concatenate([condition_audio_rows, audio_rows])
 
-        video_sched, audio_sched = self._build_schedules(
-            num_inference_steps, sampling_method=sampling_method
-        )
         timestep_table, plan = self._row_timestep_plan(
             layout,
             video_sched.timesteps,
@@ -623,6 +689,8 @@ class MiniMaxH3Pipeline:
         def run_pass(start_video_rows, start_audio_rows, progress_offset, progress_total):
             nonlocal transformer_evaluations
 
+            from .lora import lora_evaluation
+
             current_video_rows = start_video_rows
             current_audio_rows = start_audio_rows
             for index, timestep in enumerate(video_sched.timesteps.tolist()):
@@ -648,30 +716,31 @@ class MiniMaxH3Pipeline:
                             timestep=float(timestep),
                             audio_timestep=float(audio_sched.timesteps[index].item()),
                         )
-                    video_pred, audio_pred = self.dit(
-                        video_input,
-                        audio_input,
-                        embeds,
-                        timestep_table,
-                        plan[index],
-                        layout.token_tags,
-                        layout.position_ids,
-                        layout.video_indices,
-                        layout.audio_indices,
-                        layout.text_indices,
-                        modulation_cache=self._cache,
-                        blockcache=blockcache,
-                        trajectory_forecast=trajectory_forecast,
-                        forecast_coordinate=float(timestep),
-                        trajectory_video_row_start=trajectory_video_row_start,
-                        trajectory_audio_row_start=trajectory_audio_row_start,
-                        terminal_target_only=terminal_target_only,
-                        terminal_video_row_start=condition_video_count,
-                        terminal_audio_row_start=condition_audio_count,
-                        step_index=index,
-                        total_steps=total_steps,
-                        diagnostics=diagnostics,
-                    )
+                    with lora_evaluation(index, total_steps):
+                        video_pred, audio_pred = self.dit(
+                            video_input,
+                            audio_input,
+                            embeds,
+                            timestep_table,
+                            plan[index],
+                            layout.token_tags,
+                            layout.position_ids,
+                            layout.video_indices,
+                            layout.audio_indices,
+                            layout.text_indices,
+                            modulation_cache=self._cache,
+                            blockcache=blockcache,
+                            trajectory_forecast=trajectory_forecast,
+                            forecast_coordinate=float(timestep),
+                            trajectory_video_row_start=trajectory_video_row_start,
+                            trajectory_audio_row_start=trajectory_audio_row_start,
+                            terminal_target_only=terminal_target_only,
+                            terminal_video_row_start=condition_video_count,
+                            terminal_audio_row_start=condition_audio_count,
+                            step_index=index,
+                            total_steps=total_steps,
+                            diagnostics=diagnostics,
+                        )
                     actual_transformer = not replaying and (
                         hierarchical_blockcache
                         or (
@@ -833,6 +902,8 @@ class MiniMaxH3Pipeline:
             patch_size,
         )
         audio_latents = unpack_audio_tokens(audio_rows[condition_audio_count:], num_audio_latents)
+        if preserve_initial_audio:
+            audio_latents = initial_audio_latents
         mx.eval(video_latents, audio_latents)
         return LatentResult(
             video_latents=video_latents,
@@ -884,6 +955,8 @@ class MiniMaxH3Pipeline:
             ),
             trajectory_excluded_video_rows=trajectory_video_row_start,
             trajectory_excluded_audio_rows=trajectory_audio_row_start,
+            refinement_strength=(refinement_strength if has_initial_latents else None),
+            refinement_audio_preserved=bool(preserve_initial_audio),
             seconds_per_evaluation=(sum(transformer_times) / max(len(transformer_times), 1)),
             total_seconds=time.perf_counter() - run_started,
         )
@@ -908,7 +981,8 @@ class MiniMaxH3Pipeline:
         """Generate a clip.
 
         Args:
-            duration_seconds: 5 to 15; snapped up to the ``17n + 5`` frame grid the VAE encodes.
+            duration_seconds: 2.5 to 15; snapped up to the ``17n + 5`` frame grid the VAE encodes.
+                Durations below 5 seconds are experimental.
             num_inference_steps: the weights are CFG-distilled, so each step is one forward.
             keyframe_anchors: ``"first"`` / ``"last"`` per conditioning keyframe, in packed order.
             height, width: override the canvas ``aspect`` would resolve to. Both must be multiples

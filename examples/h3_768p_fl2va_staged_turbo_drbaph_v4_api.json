@@ -1,0 +1,125 @@
+{
+  "1": {
+    "class_type": "WeeToddH3ComponentLoader",
+    "inputs": {
+      "checkpoint": "MiniMax-H3/FL2VA",
+      "task": "fl2va",
+      "transformer": "MiniMax-H3/transformers/q8_extended_paged",
+      "text_encoder": "MiniMax-H3/FL2VA/text_encoder",
+      "processor": "MiniMax-H3/FL2VA/processor",
+      "tokenizer": "MiniMax-H3/FL2VA/tokenizer",
+      "video_vae": "MiniMax-H3/vae/q8/video_vae_affine_q8.safetensors",
+      "audio_vae": "MiniMax-H3/FL2VA/audio_vae",
+      "allow_fl2va_weights_for_ref2va": false
+    }
+  },
+  "2": {
+    "class_type": "WeeToddH3GenerationConfig",
+    "inputs": {
+      "duration_seconds": 5,
+      "steps": 7,
+      "seed": 0,
+      "resolution_mode": "ratio + size",
+      "resolution_tier": "768 px short edge — native",
+      "aspect_ratio": "16:9 — widescreen landscape",
+      "short_edge": 768,
+      "custom_width": 1344,
+      "custom_height": 768,
+      "drop_adaln": true,
+      "memory_mode": "normal",
+      "attention_chunk_size": "automatic",
+      "projection_backend": "mlx",
+      "sampling_method": "euler"
+    }
+  },
+  "3": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "first_frame.png"
+    }
+  },
+  "4": {
+    "class_type": "WeeToddH3FirstFrame",
+    "inputs": {
+      "first_frame": [
+        "3",
+        0
+      ]
+    }
+  },
+  "5": {
+    "class_type": "WeeToddH3KeyframeEncode",
+    "inputs": {
+      "components": [
+        "1",
+        0
+      ],
+      "config": [
+        "6",
+        0
+      ],
+      "keyframes": [
+        "4",
+        0
+      ],
+      "prompt": "For the target video, at 0.00 seconds into the target video, <Picture 1> from [Shot 1] is fully referenced.\n\nintegrated_multimodal_description: [Shot 1] Live-action cinematic realism. Preserve the person, red raincoat, clothing details, wet alley, lighting direction, and camera height from <Picture 1>. The person immediately sprints from left to right through the rain-soaked alley, takes three clear accelerating steps, plants one boot beside a deep puddle, and jumps across it. Water sprays outward beneath the boot while the raincoat twists naturally behind the body. The person lands on the opposite foot, takes one short recovery step, and stops in a stable three-quarter stance. The camera trucks smoothly beside the person, arcs inward slightly during the jump, and settles without a cut. Reflected amber and blue shop lights ripple across the wet pavement.\n\noverall_soundscape: Steady rainfall and distant city traffic continue throughout. Fast boot strikes slap against wet pavement, the takeoff produces one heavy splash, airborne fabric snaps in the wind, and the landing makes a sharp wet impact. Breathing is forceful and synchronized with the sprint and landing.\n\nnon_diegetic_music: N/A"
+    }
+  },
+  "6": {
+    "class_type": "WeeToddH3ValidatedSamplingPreset",
+    "inputs": {
+      "config": [
+        "2",
+        0
+      ],
+      "preset": "Staged Turbo — drbaph v4 step-600 — 2 base + 4 Turbo evaluations"
+    }
+  },
+  "7": {
+    "class_type": "WeeToddH3Sample",
+    "inputs": {
+      "components": [
+        "1",
+        0
+      ],
+      "conditioning": [
+        "5",
+        0
+      ],
+      "config": [
+        "6",
+        0
+      ],
+      "unload_after_sample": true,
+      "loras": [
+        "6",
+        1
+      ],
+      "trajectory_forecast": [
+        "6",
+        2
+      ]
+    }
+  },
+  "8": {
+    "class_type": "WeeToddH3DirectPublishLatents",
+    "inputs": {
+      "components": [
+        "1",
+        0
+      ],
+      "latents": [
+        "7",
+        0
+      ],
+      "sampling_info": [
+        "7",
+        1
+      ],
+      "filename_prefix": "WeeTodd/H3_768p_FL2VA_Staged_Turbo_drbaph_v4",
+      "crf": 18,
+      "max_av_drift_seconds": 0.025,
+      "generation_metadata": "{\"workflow\":\"h3_768p_fl2va_staged_turbo_drbaph_v4\",\"schedule\":\"2 base evaluations + 4 Turbo evaluations\",\"lora\":\"minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors\"}"
+    }
+  }
+}

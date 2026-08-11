@@ -27,6 +27,11 @@ through MLX.
 - Use `.agents/skills/wee-todd-h3-mlx/SKILL.md` for H3 implementation work.
 - Before any pip, Python, venv, MLX, or dependency change, use
   `.agents/skills/python-environment-preflight/SKILL.md`. Run its preflight before mutation.
+- Before risky edits, use `python3 scripts/create_source_backup.py --name <short-name>`.
+  Do not pass the repository root to a generic recursive snapshot tool: ignored local state may be
+  many gigabytes. The source-backup command uses Git's tracked/unignored file set, applies the
+  protected prefixes in `.source-backupignore`, writes outside the checkout by default, and rejects
+  unexpectedly large inputs before copying.
 - Before every commit, use `.agents/skills/readme-workflow-commit-gate/SKILL.md`. Audit the complete
   `README.md` and every shipped UI/API workflow, then record the review for the exact staged
   snapshot. Do not commit when the gate or its local pre-commit hook fails.

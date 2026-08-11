@@ -9,6 +9,15 @@ def test_config_accepts_small_wiring_canvas():
     H3GenerationConfig(width=640, height=384, steps=8).validate()
 
 
+def test_config_accepts_experimental_two_and_a_half_second_window():
+    H3GenerationConfig(duration_seconds=2.5).validate()
+
+
+def test_config_rejects_duration_below_experimental_window():
+    with pytest.raises(ValueError, match="between 2.5 and 15"):
+        H3GenerationConfig(duration_seconds=2.4).validate()
+
+
 def test_low_memory_mode_selects_query_chunks_without_quantization():
     config = H3GenerationConfig(memory_mode="low_memory_bf16")
     config.validate()

@@ -67,6 +67,37 @@ def test_speed_bootstrap_keeps_twenty_step_forecast_budget():
     assert state.bootstrap_forecasts == 1
 
 
+@pytest.mark.parametrize(
+    ("logical_steps", "expected_actual", "expected_forecast"),
+    ((20, 11, 9), (14, 8, 6), (6, 4, 2)),
+)
+def test_speed_offline_replay_resolves_exact_hires_forward_budgets(
+    logical_steps,
+    expected_actual,
+    expected_forecast,
+):
+    state = H3TrajectoryForecastState(
+        H3TrajectoryForecastConfig(
+            mode="automatic_speed",
+            offline_smoothing_replay=True,
+            offline_video_blend=0.5,
+            offline_audio_blend=0.0,
+        )
+    )
+    state.begin_capture(logical_steps)
+    actual = 0
+    for index in range(logical_steps):
+        coordinate = float(logical_steps - index)
+        predicted = state.try_predict(coordinate, index=index, total_steps=logical_steps)
+        if predicted is None:
+            state.update(coordinate, *_features(float(index)))
+            actual += 1
+
+    assert actual == expected_actual
+    assert state.forecasts == expected_forecast
+    assert state.fallbacks == 0
+
+
 def test_bootstrap_rejects_non_speed_policy():
     with pytest.raises(ValueError, match="automatic_speed"):
         H3TrajectoryForecastConfig(
