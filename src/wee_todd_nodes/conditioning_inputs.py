@@ -205,6 +205,73 @@ class H3KeyframeConditioning:
 
 
 @dataclass(frozen=True)
+class H3TimedKeyframe:
+    """One image anchored to a requested local or chained-timeline timestamp."""
+
+    image: Any
+    timestamp_seconds: float
+    global_timestamp_seconds: float | None = None
+
+    def validate(self) -> None:
+        _validate_image(self.image, "H3 timed keyframe")
+        if self.timestamp_seconds < 0:
+            raise ValueError("A timed H3 keyframe timestamp cannot be negative.")
+
+
+@dataclass(frozen=True)
+class H3TimedKeyframeStack:
+    """Ordered, composable timed keyframes for one FL2VA generation window."""
+
+    keyframes: tuple[H3TimedKeyframe, ...] = ()
+
+    def append(self, keyframe: H3TimedKeyframe) -> H3TimedKeyframeStack:
+        keyframe.validate()
+        return H3TimedKeyframeStack((*self.keyframes, keyframe))
+
+    def resolve(self, num_frames: int, fps: int = 24) -> tuple[tuple[int, ...], list[Any]]:
+        if not self.keyframes:
+            raise ValueError("Timed FL2VA conditioning requires at least one keyframe.")
+        if len(self.keyframes) > 8:
+            raise ValueError("Timed FL2VA supports at most eight keyframes per window.")
+        resolved = []
+        for keyframe in self.keyframes:
+            keyframe.validate()
+            frame = round(keyframe.timestamp_seconds * fps)
+            if not 0 <= frame < num_frames:
+                raise ValueError(
+                    f"Timed keyframe at {keyframe.timestamp_seconds:g}s resolves to frame "
+                    f"{frame}, outside this window's 0..{num_frames - 1} frame range."
+                )
+            resolved.append((frame, keyframe))
+        resolved.sort(key=lambda item: item[0])
+        frames = [item[0] for item in resolved]
+        if len(set(frames)) != len(frames):
+            raise ValueError("Two timed keyframes resolve to the same 24 fps frame.")
+        images = [
+            comfy_image_to_pil(item[1].image, "H3 timed keyframe") for item in resolved
+        ]
+        return tuple(frames), images
+
+    def metadata(self, num_frames: int | None = None, fps: int = 24) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "task": "fl2va",
+            "keyframes": [
+                {
+                    "local_timestamp_seconds": item.timestamp_seconds,
+                    "global_timestamp_seconds": item.global_timestamp_seconds,
+                    "shape": list(_shape(item.image, "H3 timed keyframe")),
+                }
+                for item in self.keyframes
+            ],
+        }
+        if num_frames is not None:
+            anchors, _ = self.resolve(num_frames, fps)
+            payload["resolved_frames"] = list(anchors)
+            payload["rope_times"] = [frame * (5.0 / 3.0) for frame in anchors]
+        return payload
+
+
+@dataclass(frozen=True)
 class H3ReferenceInput:
     """One ordered image, video, or audio reference for Ref2VA."""
 

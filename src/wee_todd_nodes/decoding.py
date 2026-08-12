@@ -184,8 +184,8 @@ class H3VideoVAECache:
         """Encode normalized FL2VA keyframe rows with staged VAE residency."""
         if not images:
             raise ValueError("FL2VA keyframe encoding requires at least one image.")
-        if len(images) > 2:
-            raise ValueError("FL2VA supports at most a first frame and a last frame.")
+        if len(images) > 8:
+            raise ValueError("Timed FL2VA supports at most eight keyframes per window.")
         spec.validate()
         if prepare_stage is not None:
             prepare_stage()

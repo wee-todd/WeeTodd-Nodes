@@ -1,0 +1,142 @@
+{
+  "1": {
+    "class_type": "WeeToddH3ComponentLoader",
+    "inputs": {
+      "checkpoint": "MiniMax-H3/FL2VA",
+      "task": "fl2va",
+      "transformer": "MiniMax-H3/transformers/q8_extended_paged",
+      "text_encoder": "MiniMax-H3/FL2VA/text_encoder",
+      "processor": "MiniMax-H3/FL2VA/processor",
+      "tokenizer": "MiniMax-H3/FL2VA/tokenizer",
+      "video_vae": "MiniMax-H3/vae/q8/video_vae_affine_q8.safetensors",
+      "audio_vae": "MiniMax-H3/FL2VA/audio_vae",
+      "allow_fl2va_weights_for_ref2va": false
+    }
+  },
+  "2": {
+    "class_type": "WeeToddH3GenerationConfig",
+    "inputs": {
+      "duration_seconds": 4.0,
+      "steps": 7,
+      "seed": 8112026,
+      "resolution_mode": "exact dimensions",
+      "resolution_tier": "512 px short edge — balanced preview",
+      "aspect_ratio": "16:9 — widescreen landscape",
+      "short_edge": 512,
+      "custom_width": 896,
+      "custom_height": 512,
+      "drop_adaln": true,
+      "memory_mode": "normal",
+      "attention_chunk_size": "automatic",
+      "projection_backend": "mlx",
+      "sampling_method": "euler"
+    }
+  },
+  "3": {
+    "class_type": "WeeToddH3ChainedTimeline",
+    "inputs": {
+      "window_duration_seconds": 4.0,
+      "window_count": 2,
+      "context_frames": "22",
+      "target_duration_seconds": 8.0
+    }
+  },
+  "4": {"class_type": "LoadImage", "inputs": {"image": "first_frame.png"}},
+  "5": {
+    "class_type": "WeeToddH3TimedKeyframe",
+    "inputs": {
+      "image": ["4", 0],
+      "timestamp_seconds": 0.0,
+      "timestamp_scope": "local window",
+      "window_index": 1,
+      "timeline": ["3", 0]
+    }
+  },
+  "6": {
+    "class_type": "WeeToddH3TimedKeyframeEncode",
+    "inputs": {
+      "components": ["1", 0],
+      "config": ["7", 0],
+      "keyframes": ["5", 0],
+      "prompt": "For the target video, at 0.00 seconds into the target video, <Picture 1> from [Shot 1] is fully referenced.\n\nintegrated_multimodal_description: [Shot 1] Live-action cinematic realism in one continuous shot. Preserve the same adult runner, glossy deep-red hooded raincoat, black trousers, black boots, rain-soaked brick alley, amber and blue practical lights, wet pavement reflections, camera height, and nighttime weather from <Picture 1>. The runner rises from the low starting stance, drives forward from left to right, and accelerates through three forceful strides. The camera tracks beside the runner at waist height with restrained handheld movement. A boot strikes the edge of a broad puddle, sending a physically realistic fan of water outward. The raincoat pulls and folds naturally around the moving body. End while the runner is still moving steadily across the alley; do not cut, fade, teleport, reverse direction, or change identity.\n\noverall_soundscape: Continuous heavy rainfall, distant city traffic, wet boot strikes synchronized to each step, one strong puddle splash, raincoat fabric snapping softly, and increasingly forceful breathing. The ambience remains spatially consistent and contains no music or dialogue.\n\nnon_diegetic_music: N/A"
+    }
+  },
+  "7": {
+    "class_type": "WeeToddH3ValidatedSamplingPreset",
+    "inputs": {
+      "config": ["2", 0],
+      "preset": "Staged Turbo — drbaph v4 step-600 — 2 base + 4 Turbo evaluations"
+    }
+  },
+  "8": {
+    "class_type": "WeeToddH3Sample",
+    "inputs": {
+      "components": ["1", 0],
+      "conditioning": ["6", 0],
+      "config": ["7", 0],
+      "unload_after_sample": false,
+      "loras": ["7", 1]
+    }
+  },
+  "9": {
+    "class_type": "WeeToddH3ChainAppend",
+    "inputs": {"timeline": ["3", 0], "latents": ["8", 0]}
+  },
+  "10": {
+    "class_type": "WeeToddH3ContinuationContext",
+    "inputs": {"latents": ["8", 0], "context_frames": "22"}
+  },
+  "11": {
+    "class_type": "LoadImage",
+    "inputs": {"image": "timed_chain_validation/raincoat_anchor_late.png"}
+  },
+  "12": {
+    "class_type": "WeeToddH3TimedKeyframe",
+    "inputs": {
+      "image": ["11", 0],
+      "timestamp_seconds": 5.5,
+      "timestamp_scope": "global timeline",
+      "window_index": 2,
+      "timeline": ["3", 0]
+    }
+  },
+  "13": {
+    "class_type": "WeeToddH3TimedKeyframeEncode",
+    "inputs": {
+      "components": ["1", 0],
+      "config": ["7", 0],
+      "keyframes": ["12", 0],
+      "prompt": "For the target video, at 1.96 seconds into the target video, <Picture 1> from [Shot 1] is fully referenced.\n\nintegrated_multimodal_description: [Shot 1] Continue the same unbroken live-action tracking shot from the supplied latent context. Preserve the same adult runner, deep-red hooded raincoat, black trousers, black boots, wet brick alley, amber and blue practical lights, rainfall, screen direction, camera height, and forward momentum. The opening overlap continues the runner's existing stride without restarting the action. The runner passes through the body position and alley composition shown in <Picture 1> at 1.96 seconds, plants the forward boot beyond the puddle, takes two controlled decelerating steps, turns the torso slightly toward camera while still moving, and settles into a stable three-quarter stance. The camera continues tracking, eases into a small inward arc, and settles with the runner framed against the reflective pavement. Do not cut, fade, teleport, reverse direction, duplicate the runner, or reset the rain.\n\noverall_soundscape: Continue the same rainfall and distant traffic without an audible reset. Wet footsteps remain synchronized through the overlap, the final two steps soften as the runner decelerates, fabric movement settles naturally, and breathing slows but remains audible. No music and no dialogue.\n\nnon_diegetic_music: N/A"
+    }
+  },
+  "14": {
+    "class_type": "WeeToddH3Sample",
+    "inputs": {
+      "components": ["1", 0],
+      "conditioning": ["13", 0],
+      "config": ["7", 0],
+      "unload_after_sample": true,
+      "continuation": ["10", 0],
+      "loras": ["7", 1]
+    }
+  },
+  "15": {
+    "class_type": "WeeToddH3ChainAppend",
+    "inputs": {
+      "timeline": ["3", 0],
+      "latents": ["14", 0],
+      "previous_chain": ["9", 0]
+    }
+  },
+  "16": {
+    "class_type": "WeeToddH3DirectPublishChain",
+    "inputs": {
+      "components": ["1", 0],
+      "chain": ["15", 0],
+      "filename_prefix": "WeeTodd/H3_512p_Timed_Two_Window_Staged_Turbo",
+      "crf": 18,
+      "max_av_drift_seconds": 0.025,
+      "generation_metadata": "{\"workflow\":\"h3_512p_timed_two_window_staged_turbo\",\"global_anchor_seconds\":5.5,\"schedule\":\"2 base evaluations + 4 Turbo evaluations per window\"}"
+    }
+  }
+}

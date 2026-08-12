@@ -278,6 +278,65 @@ def test_h3_768p_staged_turbo_workflow_uses_one_continuous_schedule():
     assert ui_nodes[6]["inputs"][4]["name"] == "loras"
 
 
+def test_h3_15_second_one_shot_workflow_is_the_portable_quality_control():
+    prompt = json.loads(
+        (ROOT / "examples" / "h3_768p_15s_one_clip_staged_turbo_api.json").read_text()
+    )
+
+    assert prompt["1"]["inputs"] == PORTABLE_T2VA_INPUTS
+    assert prompt["2"]["inputs"]["duration_seconds"] == 15.0
+    assert prompt["2"]["inputs"]["custom_width"] == 1344
+    assert prompt["2"]["inputs"]["custom_height"] == 768
+    assert prompt["3"]["inputs"]["preset"] == (
+        "One-shot staged Turbo — drbaph v4 step-600 — 15-second quality baseline"
+    )
+    assert prompt["6"]["inputs"]["loras"] == ["3", 1]
+    assert prompt["6"]["inputs"]["unload_after_sample"] is True
+    assert prompt["7"]["class_type"] == "WeeToddH3DirectPublishLatents"
+    assert prompt["7"]["inputs"]["sampling_info"] == ["6", 1]
+
+
+def test_h3_15_second_chain_uses_four_windows_and_direct_join_repair():
+    prompt = json.loads(
+        (ROOT / "examples" / "h3_768p_15s_four_window_join_repair_api.json").read_text()
+    )
+
+    assert prompt["1"]["inputs"] == PORTABLE_T2VA_INPUTS
+    assert prompt["2"]["inputs"]["duration_seconds"] == 4.0
+    assert prompt["3"]["inputs"]["preset"] == (
+        "Chained staged Turbo — drbaph v4 step-600 — 4 windows / 22-frame context"
+    )
+    assert prompt["5"]["inputs"] == {
+        "window_duration_seconds": 4.0,
+        "window_count": 4,
+        "context_frames": "22",
+        "target_duration_seconds": 15.0,
+    }
+    samples = [
+        node for node in prompt.values() if node["class_type"] == "WeeToddH3Sample"
+    ]
+    contexts = [
+        node
+        for node in prompt.values()
+        if node["class_type"] == "WeeToddH3ContinuationContext"
+    ]
+    appends = [
+        node for node in prompt.values() if node["class_type"] == "WeeToddH3ChainAppend"
+    ]
+    assert len(samples) == len(appends) == 4
+    assert len(contexts) == 3
+    assert all(node["inputs"]["context_frames"] == "22" for node in contexts)
+    assert [node["inputs"]["unload_after_sample"] for node in samples] == [
+        False,
+        False,
+        False,
+        True,
+    ]
+    assert prompt["21"]["class_type"] == "WeeToddH3DirectPublishChain"
+    metadata = json.loads(prompt["21"]["inputs"]["generation_metadata"])
+    assert metadata["join_policy"].startswith("motion-matched overlap")
+
+
 def test_t2va_api_prompt_uses_registered_nodes_and_staged_unloading():
     prompt = json.loads((ROOT / "examples" / "t2va_smoke_api.json").read_text())
 

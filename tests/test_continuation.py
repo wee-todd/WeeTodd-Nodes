@@ -71,6 +71,37 @@ def test_continuation_packing_overlaps_target_timeline():
     assert layout.num_condition_audio_rows == 74
 
 
+def test_continuation_and_timed_keyframes_keep_separate_positions_and_timesteps():
+    layout = build_packed_sequence(
+        [1, 0],
+        num_latent_frames=32,
+        latent_height=4,
+        latent_width=6,
+        num_audio_latents=168,
+        patch_size=(1, 2, 2),
+        keyframe_anchors=(0, 60),
+        continuation_video_frames=7,
+        continuation_audio_latents=37,
+    )
+    positions = np.asarray(layout.position_ids)
+    video_indices = np.asarray(layout.video_indices)
+    rows_per_frame = 6
+    first_timed = 7 * rows_per_frame
+    second_timed = first_timed + rows_per_frame
+
+    assert layout.num_continuation_video_rows == 42
+    assert layout.num_condition_video_rows == 54
+    assert positions[video_indices[first_timed], 0] == pytest.approx(2.0)
+    assert positions[video_indices[second_timed], 0] == pytest.approx(102.0)
+
+    distinct, inverse = __import__(
+        "minimax_h3_mlx.packing", fromlist=["build_row_timesteps"]
+    ).build_row_timesteps(layout, 0.4, 0.6, 0.999, 1.0)
+    row_values = np.asarray(distinct)[np.asarray(inverse)]
+    assert np.all(row_values[video_indices[:42]] == 1.0)
+    assert np.all(row_values[video_indices[42:54]] == 0.999)
+
+
 def test_trim_continuation_overlap_keeps_exact_audio_duration():
     images = np.zeros((124, 16, 16, 3), dtype=np.float32)
     waveform = np.zeros((1, 2, 166_000), dtype=np.float32)

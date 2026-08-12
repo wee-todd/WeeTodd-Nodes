@@ -124,10 +124,10 @@
             8,
             12,
             15,
-            19,
-            22,
-            26,
-            29,
+            18,
+            21,
+            24,
+            27,
             45,
             57,
             70,
@@ -139,10 +139,10 @@
           "name": "loras",
           "type": "WEETODD_H3_LORAS",
           "links": [
-            9,
-            16,
-            23,
-            30
+            10,
+            31,
+            34,
+            37
           ],
           "slot_index": 1
         },
@@ -150,10 +150,10 @@
           "name": "trajectory_forecast",
           "type": "WEETODD_H3_TRAJECTORY_FORECAST",
           "links": [
-            10,
-            17,
-            24,
-            31
+            9,
+            16,
+            22,
+            28
           ],
           "slot_index": 2
         },
@@ -206,10 +206,10 @@
             6,
             11,
             13,
-            18,
-            20,
+            17,
+            19,
+            23,
             25,
-            27,
             38,
             40,
             44,
@@ -359,12 +359,12 @@
         {
           "name": "components",
           "type": "WEETODD_H3_COMPONENTS",
-          "link": 18
+          "link": 17
         },
         {
           "name": "config",
           "type": "WEETODD_H3_CONFIG",
-          "link": 19
+          "link": 18
         }
       ],
       "outputs": [
@@ -372,7 +372,7 @@
           "name": "conditioning",
           "type": "WEETODD_H3_CONDITIONING",
           "links": [
-            21
+            20
           ],
           "slot_index": 0
         },
@@ -409,12 +409,12 @@
         {
           "name": "components",
           "type": "WEETODD_H3_COMPONENTS",
-          "link": 25
+          "link": 23
         },
         {
           "name": "config",
           "type": "WEETODD_H3_CONFIG",
-          "link": 26
+          "link": 24
         }
       ],
       "outputs": [
@@ -422,7 +422,7 @@
           "name": "conditioning",
           "type": "WEETODD_H3_CONDITIONING",
           "links": [
-            28
+            26
           ],
           "slot_index": 0
         },
@@ -474,12 +474,12 @@
         {
           "name": "trajectory_forecast",
           "type": "WEETODD_H3_TRAJECTORY_FORECAST",
-          "link": 10
+          "link": 9
         },
         {
           "name": "loras",
           "type": "WEETODD_H3_LORAS",
-          "link": 9
+          "link": 10
         }
       ],
       "outputs": [
@@ -487,7 +487,7 @@
           "name": "latents",
           "type": "WEETODD_H3_LATENTS",
           "links": [
-            32,
+            29,
             39,
             41
           ],
@@ -542,17 +542,17 @@
         {
           "name": "trajectory_forecast",
           "type": "WEETODD_H3_TRAJECTORY_FORECAST",
-          "link": 17
+          "link": 16
         },
         {
           "name": "continuation",
           "type": "WEETODD_H3_CONTINUATION",
-          "link": 33
+          "link": 30
         },
         {
           "name": "loras",
           "type": "WEETODD_H3_LORAS",
-          "link": 16
+          "link": 31
         }
       ],
       "outputs": [
@@ -560,7 +560,7 @@
           "name": "latents",
           "type": "WEETODD_H3_LATENTS",
           "links": [
-            34,
+            32,
             48,
             50
           ],
@@ -600,32 +600,32 @@
         {
           "name": "components",
           "type": "WEETODD_H3_COMPONENTS",
-          "link": 20
+          "link": 19
         },
         {
           "name": "conditioning",
           "type": "WEETODD_H3_CONDITIONING",
-          "link": 21
+          "link": 20
         },
         {
           "name": "config",
           "type": "WEETODD_H3_CONFIG",
-          "link": 22
+          "link": 21
         },
         {
           "name": "trajectory_forecast",
           "type": "WEETODD_H3_TRAJECTORY_FORECAST",
-          "link": 24
+          "link": 22
         },
         {
           "name": "continuation",
           "type": "WEETODD_H3_CONTINUATION",
-          "link": 35
+          "link": 33
         },
         {
           "name": "loras",
           "type": "WEETODD_H3_LORAS",
-          "link": 23
+          "link": 34
         }
       ],
       "outputs": [
@@ -633,7 +633,7 @@
           "name": "latents",
           "type": "WEETODD_H3_LATENTS",
           "links": [
-            36,
+            35,
             61,
             63
           ],
@@ -673,32 +673,32 @@
         {
           "name": "components",
           "type": "WEETODD_H3_COMPONENTS",
-          "link": 27
+          "link": 25
         },
         {
           "name": "conditioning",
           "type": "WEETODD_H3_CONDITIONING",
-          "link": 28
+          "link": 26
         },
         {
           "name": "config",
           "type": "WEETODD_H3_CONFIG",
-          "link": 29
+          "link": 27
         },
         {
           "name": "trajectory_forecast",
           "type": "WEETODD_H3_TRAJECTORY_FORECAST",
-          "link": 31
+          "link": 28
         },
         {
           "name": "continuation",
           "type": "WEETODD_H3_CONTINUATION",
-          "link": 37
+          "link": 36
         },
         {
           "name": "loras",
           "type": "WEETODD_H3_LORAS",
-          "link": 30
+          "link": 37
         }
       ],
       "outputs": [
@@ -745,7 +745,7 @@
         {
           "name": "latents",
           "type": "WEETODD_H3_LATENTS",
-          "link": 32
+          "link": 29
         }
       ],
       "outputs": [
@@ -753,7 +753,7 @@
           "name": "continuation",
           "type": "WEETODD_H3_CONTINUATION",
           "links": [
-            33,
+            30,
             53
           ],
           "slot_index": 0
@@ -790,7 +790,7 @@
         {
           "name": "latents",
           "type": "WEETODD_H3_LATENTS",
-          "link": 34
+          "link": 32
         }
       ],
       "outputs": [
@@ -798,7 +798,7 @@
           "name": "continuation",
           "type": "WEETODD_H3_CONTINUATION",
           "links": [
-            35,
+            33,
             66
           ],
           "slot_index": 0
@@ -835,7 +835,7 @@
         {
           "name": "latents",
           "type": "WEETODD_H3_LATENTS",
-          "link": 36
+          "link": 35
         }
       ],
       "outputs": [
@@ -843,7 +843,7 @@
           "name": "continuation",
           "type": "WEETODD_H3_CONTINUATION",
           "links": [
-            37,
+            36,
             79
           ],
           "slot_index": 0
@@ -1789,18 +1789,18 @@
     [
       9,
       3,
-      1,
-      9,
-      4,
-      "WEETODD_H3_LORAS"
-    ],
-    [
-      10,
-      3,
       2,
       9,
       3,
       "WEETODD_H3_TRAJECTORY_FORECAST"
+    ],
+    [
+      10,
+      3,
+      1,
+      9,
+      4,
+      "WEETODD_H3_LORAS"
     ],
     [
       11,
@@ -1845,21 +1845,13 @@
     [
       16,
       3,
-      1,
-      10,
-      5,
-      "WEETODD_H3_LORAS"
-    ],
-    [
-      17,
-      3,
       2,
       10,
       3,
       "WEETODD_H3_TRAJECTORY_FORECAST"
     ],
     [
-      18,
+      17,
       4,
       0,
       7,
@@ -1867,7 +1859,7 @@
       "WEETODD_H3_COMPONENTS"
     ],
     [
-      19,
+      18,
       3,
       0,
       7,
@@ -1875,7 +1867,7 @@
       "WEETODD_H3_CONFIG"
     ],
     [
-      20,
+      19,
       4,
       0,
       11,
@@ -1883,7 +1875,7 @@
       "WEETODD_H3_COMPONENTS"
     ],
     [
-      21,
+      20,
       7,
       0,
       11,
@@ -1891,7 +1883,7 @@
       "WEETODD_H3_CONDITIONING"
     ],
     [
-      22,
+      21,
       3,
       0,
       11,
@@ -1899,47 +1891,39 @@
       "WEETODD_H3_CONFIG"
     ],
     [
-      23,
-      3,
-      1,
-      11,
-      5,
-      "WEETODD_H3_LORAS"
-    ],
-    [
-      24,
+      22,
       3,
       2,
       11,
       3,
       "WEETODD_H3_TRAJECTORY_FORECAST"
+    ],
+    [
+      23,
+      4,
+      0,
+      8,
+      0,
+      "WEETODD_H3_COMPONENTS"
+    ],
+    [
+      24,
+      3,
+      0,
+      8,
+      1,
+      "WEETODD_H3_CONFIG"
     ],
     [
       25,
       4,
       0,
-      8,
-      0,
-      "WEETODD_H3_COMPONENTS"
-    ],
-    [
-      26,
-      3,
-      0,
-      8,
-      1,
-      "WEETODD_H3_CONFIG"
-    ],
-    [
-      27,
-      4,
-      0,
       12,
       0,
       "WEETODD_H3_COMPONENTS"
     ],
     [
-      28,
+      26,
       8,
       0,
       12,
@@ -1947,7 +1931,7 @@
       "WEETODD_H3_CONDITIONING"
     ],
     [
-      29,
+      27,
       3,
       0,
       12,
@@ -1955,15 +1939,7 @@
       "WEETODD_H3_CONFIG"
     ],
     [
-      30,
-      3,
-      1,
-      12,
-      5,
-      "WEETODD_H3_LORAS"
-    ],
-    [
-      31,
+      28,
       3,
       2,
       12,
@@ -1971,7 +1947,7 @@
       "WEETODD_H3_TRAJECTORY_FORECAST"
     ],
     [
-      32,
+      29,
       9,
       0,
       13,
@@ -1979,7 +1955,7 @@
       "WEETODD_H3_LATENTS"
     ],
     [
-      33,
+      30,
       13,
       0,
       10,
@@ -1987,7 +1963,15 @@
       "WEETODD_H3_CONTINUATION"
     ],
     [
-      34,
+      31,
+      3,
+      1,
+      10,
+      5,
+      "WEETODD_H3_LORAS"
+    ],
+    [
+      32,
       10,
       0,
       14,
@@ -1995,7 +1979,7 @@
       "WEETODD_H3_LATENTS"
     ],
     [
-      35,
+      33,
       14,
       0,
       11,
@@ -2003,7 +1987,15 @@
       "WEETODD_H3_CONTINUATION"
     ],
     [
-      36,
+      34,
+      3,
+      1,
+      11,
+      5,
+      "WEETODD_H3_LORAS"
+    ],
+    [
+      35,
       11,
       0,
       15,
@@ -2011,12 +2003,20 @@
       "WEETODD_H3_LATENTS"
     ],
     [
-      37,
+      36,
       15,
       0,
       12,
       4,
       "WEETODD_H3_CONTINUATION"
+    ],
+    [
+      37,
+      3,
+      1,
+      12,
+      5,
+      "WEETODD_H3_LORAS"
     ],
     [
       38,

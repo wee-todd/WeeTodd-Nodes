@@ -180,23 +180,27 @@ def test_hires_fix_resolves_target_and_preserves_audio_contract(monkeypatch):
 
 
 def test_expected_nodes_are_registered():
-    assert len(NODE_CLASS_MAPPINGS) == 42
+    assert len(NODE_CLASS_MAPPINGS) == 47
     assert "WeeToddH3ComponentLoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3QuantizedTransformerLoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3Preflight" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3FirstFrame" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3LastFrame" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3FirstLastFrame" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3ChainedTimeline" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3TimedKeyframe" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3ReferenceImage" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3ReferenceVideo" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3ReferenceAudio" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3KeyframeEncode" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3TimedKeyframeEncode" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3ReferenceEncode" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3ReferenceStrength" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3TextEncode" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3TrajectoryForecast" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3UnloadTextEncoder" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3ContinuationContext" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3ChainAppend" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3Sample" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3LatentHiresFix" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3EasyCache" in NODE_CLASS_MAPPINGS
@@ -212,6 +216,7 @@ def test_expected_nodes_are_registered():
     assert "WeeToddH3TrimContinuation" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3PublishVideoAudio" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3DirectPublishLatents" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3DirectPublishChain" in NODE_CLASS_MAPPINGS
     assert "WeeToddLTX23ModelLoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddLTX23GenerationConfig" in NODE_CLASS_MAPPINGS
     assert "WeeToddLTX23Preflight" in NODE_CLASS_MAPPINGS
@@ -388,6 +393,14 @@ def test_validated_chained_context_presets_match_measured_policies(tmp_path, mon
             "minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors",
         ),
         (
+            "One-shot staged Turbo — drbaph v4 step-600 — 15-second quality baseline",
+            "minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors",
+        ),
+        (
+            "Chained staged Turbo — drbaph v4 step-600 — 4 windows / 22-frame context",
+            "minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors",
+        ),
+        (
             "Turbo — LightX2V full rank — 5 points / 4 evaluations",
             "minimax_h3_fl2v_lightx2v_turbo_4step_v0.1_comfy.safetensors",
         ),
@@ -427,7 +440,7 @@ def test_validated_sampling_preset_builds_each_lazy_turbo_stack(
     assert loras.adapters[0].resolved_qkv_layout == "contiguous_qkv"
     assert loras.adapters[0].strength == 1.0
     assert info["lora_file"] == filename
-    if preset.startswith("Staged Turbo"):
+    if loras.adapters[0].start_after_evaluations == 2:
         assert config.steps == 7
         assert loras.adapters[0].start_after_evaluations == 2
         assert info["lora_start_after_evaluations"] == 2
@@ -438,6 +451,42 @@ def test_validated_sampling_preset_builds_each_lazy_turbo_stack(
         assert config.steps == 5
         assert info["lora_start_after_evaluations"] == 0
         assert info["transformer_evaluations_without_forecast"] == 4
+
+
+def test_validated_15_second_comparison_presets_record_measured_boundaries(
+    tmp_path, monkeypatch
+):
+    from wee_todd_nodes.runtime import H3GenerationConfig
+
+    filename = "minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors"
+    mx.save_safetensors(
+        str(tmp_path / filename),
+        {
+            "blocks.0.attn.qkv_proj.lora_A.weight": mx.zeros((1, 2)),
+            "blocks.0.attn.qkv_proj.lora_B.weight": mx.zeros((6, 1)),
+        },
+    )
+    monkeypatch.setattr("wee_todd_nodes.nodes._resolve_lora_path", lambda name: tmp_path / name)
+    node = WeeToddH3ValidatedSamplingPreset()
+    source = H3GenerationConfig(width=1344, height=768, duration_seconds=15.0)
+
+    _, _, _, one_shot_raw = node.apply(
+        source,
+        "One-shot staged Turbo — drbaph v4 step-600 — 15-second quality baseline",
+    )
+    _, _, _, chain_raw = node.apply(
+        source,
+        "Chained staged Turbo — drbaph v4 step-600 — 4 windows / 22-frame context",
+    )
+    one_shot = json.loads(one_shot_raw)["measurement"]
+    chain = json.loads(chain_raw)["measurement"]
+
+    assert one_shot["complete_workflow_seconds"] == pytest.approx(8207.699172)
+    assert one_shot["mlx_peak_bytes"] == 30783349650
+    assert chain["complete_workflow_seconds"] == 5089.0
+    assert chain["mlx_peak_bytes"] == 14453992534
+    assert chain["context_frames"] == 22
+    assert chain["join_policy"].startswith("motion-matched overlap")
 
 
 def test_reference_strength_node_preserves_defaults_and_warns_for_weak_fl2va():

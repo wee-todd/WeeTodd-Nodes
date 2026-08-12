@@ -1,0 +1,1504 @@
+{
+  "last_node_id": 21,
+  "last_link_id": 46,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "WeeToddH3ComponentLoader",
+      "pos": [
+        40,
+        60
+      ],
+      "size": [
+        400,
+        340
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "components",
+          "type": "WEETODD_H3_COMPONENTS",
+          "links": [
+            2
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3ComponentLoader"
+      },
+      "widgets_values": [
+        "MiniMax-H3/FL2VA",
+        "t2va",
+        "MiniMax-H3/transformers/q8_extended_paged",
+        "MiniMax-H3/text_encoders/q8-paged",
+        "MiniMax-H3/FL2VA/processor",
+        "MiniMax-H3/FL2VA/tokenizer",
+        "MiniMax-H3/vae/q8/video_vae_affine_q8.safetensors",
+        "MiniMax-H3/FL2VA/audio_vae",
+        false
+      ]
+    },
+    {
+      "id": 2,
+      "type": "WeeToddH3GenerationConfig",
+      "pos": [
+        40,
+        450
+      ],
+      "size": [
+        410,
+        420
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "config",
+          "type": "WEETODD_H3_CONFIG",
+          "links": [
+            1
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "resolved_resolution",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3GenerationConfig"
+      },
+      "widgets_values": [
+        4.0,
+        7,
+        20260812,
+        "ratio + size",
+        "768 px short edge \u2014 native",
+        "16:9 \u2014 widescreen landscape",
+        768,
+        1344,
+        768,
+        true,
+        "normal",
+        "automatic",
+        "mlx",
+        "euler"
+      ]
+    },
+    {
+      "id": 3,
+      "type": "WeeToddH3ValidatedSamplingPreset",
+      "pos": [
+        500,
+        470
+      ],
+      "size": [
+        500,
+        230
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "config",
+          "type": "WEETODD_H3_CONFIG",
+          "link": 1
+        }
+      ],
+      "outputs": [
+        {
+          "name": "config",
+          "type": "WEETODD_H3_CONFIG",
+          "links": [
+            3,
+            5,
+            8,
+            14,
+            17,
+            25,
+            28,
+            36,
+            39
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "loras",
+          "type": "WEETODD_H3_LORAS",
+          "links": [
+            9,
+            19,
+            30,
+            41
+          ],
+          "slot_index": 1
+        },
+        {
+          "name": "trajectory_forecast",
+          "type": "WEETODD_H3_TRAJECTORY_FORECAST",
+          "links": null,
+          "slot_index": 2
+        },
+        {
+          "name": "preset_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 3
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3ValidatedSamplingPreset"
+      },
+      "widgets_values": [
+        "Chained staged Turbo \u2014 drbaph v4 step-600 \u2014 4 windows / 22-frame context"
+      ]
+    },
+    {
+      "id": 4,
+      "type": "WeeToddH3Preflight",
+      "pos": [
+        500,
+        80
+      ],
+      "size": [
+        390,
+        260
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "components",
+          "type": "WEETODD_H3_COMPONENTS",
+          "link": 2
+        },
+        {
+          "name": "config",
+          "type": "WEETODD_H3_CONFIG",
+          "link": 3
+        }
+      ],
+      "outputs": [
+        {
+          "name": "components",
+          "type": "WEETODD_H3_COMPONENTS",
+          "links": [
+            4,
+            6,
+            13,
+            15,
+            24,
+            26,
+            35,
+            37,
+            45
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "preflight_report",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3Preflight"
+      },
+      "widgets_values": [
+        1024,
+        0.0,
+        ""
+      ]
+    },
+    {
+      "id": 5,
+      "type": "WeeToddH3ChainedTimeline",
+      "pos": [
+        500,
+        760
+      ],
+      "size": [
+        390,
+        250
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "timeline",
+          "type": "WEETODD_H3_TIMELINE",
+          "links": [
+            10,
+            20,
+            31,
+            42
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "timeline_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3ChainedTimeline"
+      },
+      "widgets_values": [
+        4.0,
+        4,
+        "22",
+        15.0
+      ]
+    },
+    {
+      "id": 6,
+      "type": "WeeToddH3TextEncode",
+      "pos": [
+        1080,
+        60
+      ],
+      "size": [
+        650,
+        410
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "components",
+          "type": "WEETODD_H3_COMPONENTS",
+          "link": 4
+        },
+        {
+          "name": "config",
+          "type": "WEETODD_H3_CONFIG",
+          "link": 5
+        }
+      ],
+      "outputs": [
+        {
+          "name": "conditioning",
+          "type": "WEETODD_H3_CONDITIONING",
+          "links": [
+            7
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "conditioning_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3TextEncode"
+      },
+      "widgets_values": [
+        "integrated_multimodal_description: [Shot 1] Live-action mockumentary crossover parody with realistic skin, clothing, soil, and natural handheld camera movement. In a barren desert excavation site under harsh afternoon sunlight, Jesse, a lean young white man with a shaved head wearing a dusty dark hoodie and work gloves, stands inside a deep grave-sized hole. He angrily throws several heavy shovelfuls of dirt over the edge. Each shovel strikes compact soil, dirt scatters realistically, and his breathing grows heavier. Dwight, a rigid middle-aged white man with neatly parted brown hair, wire-frame glasses, and a mustard-yellow short-sleeve shirt, suddenly walks into frame above the hole. Dwight studies the hole suspiciously, adjusts his glasses, looks down with a smug expression, and says <d>[English] Hello, little man. Digging your own grave? </d> The handheld camera makes small documentary-style corrections and ends with Jesse frozen mid-dig below Dwight.\n\noverall_soundscape: Dry desert wind, heavy breathing, shovel impacts against compact soil, loose dirt scattering, footsteps approaching on gravel, a faint clothing rustle as Dwight adjusts his glasses, and clean location-recorded dialogue synchronized to Dwight's mouth. No crowd and no machinery.\n\nnon_diegetic_music: N/A",
+        false
+      ]
+    },
+    {
+      "id": 7,
+      "type": "WeeToddH3Sample",
+      "pos": [
+        1800,
+        100
+      ],
+      "size": [
+        390,
+        260
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "components",
+          "type": "WEETODD_H3_COMPONENTS",
+          "link": 6
+        },
+        {
+          "name": "conditioning",
+          "type": "WEETODD_H3_CONDITIONING",
+          "link": 7
+        },
+        {
+          "name": "config",
+          "type": "WEETODD_H3_CONFIG",
+          "link": 8
+        },
+        {
+          "name": "loras",
+          "type": "WEETODD_H3_LORAS",
+          "link": 9
+        }
+      ],
+      "outputs": [
+        {
+          "name": "latents",
+          "type": "WEETODD_H3_LATENTS",
+          "links": [
+            11,
+            12
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "sampling_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3Sample"
+      },
+      "widgets_values": [
+        false
+      ]
+    },
+    {
+      "id": 8,
+      "type": "WeeToddH3ChainAppend",
+      "pos": [
+        2250,
+        90
+      ],
+      "size": [
+        390,
+        260
+      ],
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "timeline",
+          "type": "WEETODD_H3_TIMELINE",
+          "link": 10
+        },
+        {
+          "name": "latents",
+          "type": "WEETODD_H3_LATENTS",
+          "link": 11
+        }
+      ],
+      "outputs": [
+        {
+          "name": "chain",
+          "type": "WEETODD_H3_LATENT_CHAIN",
+          "links": [
+            22
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "chain_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3ChainAppend"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 9,
+      "type": "WeeToddH3ContinuationContext",
+      "pos": [
+        2250,
+        360
+      ],
+      "size": [
+        360,
+        190
+      ],
+      "flags": {},
+      "order": 8,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "latents",
+          "type": "WEETODD_H3_LATENTS",
+          "link": 12
+        }
+      ],
+      "outputs": [
+        {
+          "name": "continuation",
+          "type": "WEETODD_H3_CONTINUATION",
+          "links": [
+            18
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "continuation_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3ContinuationContext"
+      },
+      "widgets_values": [
+        "22"
+      ]
+    },
+    {
+      "id": 10,
+      "type": "WeeToddH3TextEncode",
+      "pos": [
+        1080,
+        560
+      ],
+      "size": [
+        650,
+        410
+      ],
+      "flags": {},
+      "order": 9,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "components",
+          "type": "WEETODD_H3_COMPONENTS",
+          "link": 13
+        },
+        {
+          "name": "config",
+          "type": "WEETODD_H3_CONFIG",
+          "link": 14
+        }
+      ],
+      "outputs": [
+        {
+          "name": "conditioning",
+          "type": "WEETODD_H3_CONDITIONING",
+          "links": [
+            16
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "conditioning_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3TextEncode"
+      },
+      "widgets_values": [
+        "integrated_multimodal_description: [Shot 1] Continue the same unbroken live-action mockumentary crossover shot at the same desert excavation site. Preserve Jesse's shaved head, dusty dark hoodie, gloves, shovel, position inside the deep hole, and Dwight's mustard-yellow shirt, brown parted hair, glasses, and position at the rim. Jesse immediately stops digging. He slowly turns his head and shoulders toward Dwight, plants his boots, and tightens both hands around the shovel handle. His face becomes cold and threatening. Looking directly up at Dwight, Jesse says <d>[English] No, no, no... I'm digging it for you. Just like I did for Michael. </d> Dwight's smug expression begins to fail as the sentence ends. The handheld camera subtly pushes closer without a cut and ends on both men holding tense eye contact.\n\noverall_soundscape: Continue the same dry wind and quiet desert ambience without an audible reset. The shovel movement stops with one final scrape, loose soil settles, Jesse's heavy breathing slows, his gloves tighten audibly against the wooden handle, and his clean threatening dialogue remains synchronized to his mouth.\n\nnon_diegetic_music: N/A",
+        false
+      ]
+    },
+    {
+      "id": 11,
+      "type": "WeeToddH3Sample",
+      "pos": [
+        1800,
+        600
+      ],
+      "size": [
+        390,
+        260
+      ],
+      "flags": {},
+      "order": 10,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "components",
+          "type": "WEETODD_H3_COMPONENTS",
+          "link": 15
+        },
+        {
+          "name": "conditioning",
+          "type": "WEETODD_H3_CONDITIONING",
+          "link": 16
+        },
+        {
+          "name": "config",
+          "type": "WEETODD_H3_CONFIG",
+          "link": 17
+        },
+        {
+          "name": "continuation",
+          "type": "WEETODD_H3_CONTINUATION",
+          "link": 18
+        },
+        {
+          "name": "loras",
+          "type": "WEETODD_H3_LORAS",
+          "link": 19
+        }
+      ],
+      "outputs": [
+        {
+          "name": "latents",
+          "type": "WEETODD_H3_LATENTS",
+          "links": [
+            21,
+            23
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "sampling_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3Sample"
+      },
+      "widgets_values": [
+        false
+      ]
+    },
+    {
+      "id": 12,
+      "type": "WeeToddH3ChainAppend",
+      "pos": [
+        2250,
+        590
+      ],
+      "size": [
+        390,
+        260
+      ],
+      "flags": {},
+      "order": 11,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "timeline",
+          "type": "WEETODD_H3_TIMELINE",
+          "link": 20
+        },
+        {
+          "name": "latents",
+          "type": "WEETODD_H3_LATENTS",
+          "link": 21
+        },
+        {
+          "name": "previous_chain",
+          "type": "WEETODD_H3_LATENT_CHAIN",
+          "link": 22
+        }
+      ],
+      "outputs": [
+        {
+          "name": "chain",
+          "type": "WEETODD_H3_LATENT_CHAIN",
+          "links": [
+            33
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "chain_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3ChainAppend"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 13,
+      "type": "WeeToddH3ContinuationContext",
+      "pos": [
+        2250,
+        860
+      ],
+      "size": [
+        360,
+        190
+      ],
+      "flags": {},
+      "order": 12,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "latents",
+          "type": "WEETODD_H3_LATENTS",
+          "link": 23
+        }
+      ],
+      "outputs": [
+        {
+          "name": "continuation",
+          "type": "WEETODD_H3_CONTINUATION",
+          "links": [
+            29
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "continuation_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3ContinuationContext"
+      },
+      "widgets_values": [
+        "22"
+      ]
+    },
+    {
+      "id": 14,
+      "type": "WeeToddH3TextEncode",
+      "pos": [
+        1080,
+        1060
+      ],
+      "size": [
+        650,
+        410
+      ],
+      "flags": {},
+      "order": 13,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "components",
+          "type": "WEETODD_H3_COMPONENTS",
+          "link": 24
+        },
+        {
+          "name": "config",
+          "type": "WEETODD_H3_CONFIG",
+          "link": 25
+        }
+      ],
+      "outputs": [
+        {
+          "name": "conditioning",
+          "type": "WEETODD_H3_CONDITIONING",
+          "links": [
+            27
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "conditioning_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3TextEncode"
+      },
+      "widgets_values": [
+        "integrated_multimodal_description: [Shot 1] Continue the same unbroken realistic handheld shot with the same Jesse and Dwight, unchanged clothing, excavation site, shovel, grave, sunlight, and screen positions. Dwight's confidence collapses. His eyes widen behind his glasses, his face fills with horror, and he begins crying and panicking dramatically. Dwight drops to his knees at the edge of the hole, reaches down, grabs Jesse by both shoulders, shakes him once, and screams <d>[English] No! What did you do to Michael?! Where is he? Tell me now! </d> Jesse remains completely emotionless and keeps one hand firmly around the shovel. The camera jolts with Dwight's movement, then pushes toward his terrified face while retaining Jesse in the background.\n\noverall_soundscape: Continue the same desert wind and roomless outdoor ambience. Dwight's knees hit loose soil, fabric pulls as he grabs Jesse, one brief shoulder shake rustles both men's clothing, Dwight cries and screams with synchronized mouth movement, and Jesse remains silent. The shovel gives one small wooden creak.\n\nnon_diegetic_music: N/A",
+        false
+      ]
+    },
+    {
+      "id": 15,
+      "type": "WeeToddH3Sample",
+      "pos": [
+        1800,
+        1100
+      ],
+      "size": [
+        390,
+        260
+      ],
+      "flags": {},
+      "order": 14,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "components",
+          "type": "WEETODD_H3_COMPONENTS",
+          "link": 26
+        },
+        {
+          "name": "conditioning",
+          "type": "WEETODD_H3_CONDITIONING",
+          "link": 27
+        },
+        {
+          "name": "config",
+          "type": "WEETODD_H3_CONFIG",
+          "link": 28
+        },
+        {
+          "name": "continuation",
+          "type": "WEETODD_H3_CONTINUATION",
+          "link": 29
+        },
+        {
+          "name": "loras",
+          "type": "WEETODD_H3_LORAS",
+          "link": 30
+        }
+      ],
+      "outputs": [
+        {
+          "name": "latents",
+          "type": "WEETODD_H3_LATENTS",
+          "links": [
+            32,
+            34
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "sampling_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3Sample"
+      },
+      "widgets_values": [
+        false
+      ]
+    },
+    {
+      "id": 16,
+      "type": "WeeToddH3ChainAppend",
+      "pos": [
+        2250,
+        1090
+      ],
+      "size": [
+        390,
+        260
+      ],
+      "flags": {},
+      "order": 15,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "timeline",
+          "type": "WEETODD_H3_TIMELINE",
+          "link": 31
+        },
+        {
+          "name": "latents",
+          "type": "WEETODD_H3_LATENTS",
+          "link": 32
+        },
+        {
+          "name": "previous_chain",
+          "type": "WEETODD_H3_LATENT_CHAIN",
+          "link": 33
+        }
+      ],
+      "outputs": [
+        {
+          "name": "chain",
+          "type": "WEETODD_H3_LATENT_CHAIN",
+          "links": [
+            44
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "chain_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3ChainAppend"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 17,
+      "type": "WeeToddH3ContinuationContext",
+      "pos": [
+        2250,
+        1360
+      ],
+      "size": [
+        360,
+        190
+      ],
+      "flags": {},
+      "order": 16,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "latents",
+          "type": "WEETODD_H3_LATENTS",
+          "link": 34
+        }
+      ],
+      "outputs": [
+        {
+          "name": "continuation",
+          "type": "WEETODD_H3_CONTINUATION",
+          "links": [
+            40
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "continuation_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3ContinuationContext"
+      },
+      "widgets_values": [
+        "22"
+      ]
+    },
+    {
+      "id": 18,
+      "type": "WeeToddH3TextEncode",
+      "pos": [
+        1080,
+        1560
+      ],
+      "size": [
+        650,
+        410
+      ],
+      "flags": {},
+      "order": 17,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "components",
+          "type": "WEETODD_H3_COMPONENTS",
+          "link": 35
+        },
+        {
+          "name": "config",
+          "type": "WEETODD_H3_CONFIG",
+          "link": 36
+        }
+      ],
+      "outputs": [
+        {
+          "name": "conditioning",
+          "type": "WEETODD_H3_CONDITIONING",
+          "links": [
+            38
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "conditioning_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3TextEncode"
+      },
+      "widgets_values": [
+        "integrated_multimodal_description: [Shot 1] Continue the same unbroken live-action mockumentary shot at the same desert grave. Preserve both men's faces, clothing, positions, lighting, and the shovel. The handheld camera completes its push into a tight close-up of Dwight's terrified face. Tears run down his cheeks, his eyes remain wide behind his glasses, and his breathing becomes rapid and uneven. Dwight looks from Jesse to the grave and back again. Jesse remains silent and completely emotionless in the shallow background, staring at Dwight while holding the shovel upright. Hold the dreadful silence for a beat, then end abruptly on Dwight's horrified face without a fade.\n\noverall_soundscape: Continue the same wind and location ambience without a reset. Dwight's panicked breathing and quiet sobbing dominate the close-up. Jesse makes no sound. A few grains of dirt fall into the hole, followed by an abrupt hard ending with no musical sting.\n\nnon_diegetic_music: N/A",
+        true
+      ]
+    },
+    {
+      "id": 19,
+      "type": "WeeToddH3Sample",
+      "pos": [
+        1800,
+        1600
+      ],
+      "size": [
+        390,
+        260
+      ],
+      "flags": {},
+      "order": 18,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "components",
+          "type": "WEETODD_H3_COMPONENTS",
+          "link": 37
+        },
+        {
+          "name": "conditioning",
+          "type": "WEETODD_H3_CONDITIONING",
+          "link": 38
+        },
+        {
+          "name": "config",
+          "type": "WEETODD_H3_CONFIG",
+          "link": 39
+        },
+        {
+          "name": "continuation",
+          "type": "WEETODD_H3_CONTINUATION",
+          "link": 40
+        },
+        {
+          "name": "loras",
+          "type": "WEETODD_H3_LORAS",
+          "link": 41
+        }
+      ],
+      "outputs": [
+        {
+          "name": "latents",
+          "type": "WEETODD_H3_LATENTS",
+          "links": [
+            43
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "sampling_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3Sample"
+      },
+      "widgets_values": [
+        true
+      ]
+    },
+    {
+      "id": 20,
+      "type": "WeeToddH3ChainAppend",
+      "pos": [
+        2250,
+        1590
+      ],
+      "size": [
+        390,
+        260
+      ],
+      "flags": {},
+      "order": 19,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "timeline",
+          "type": "WEETODD_H3_TIMELINE",
+          "link": 42
+        },
+        {
+          "name": "latents",
+          "type": "WEETODD_H3_LATENTS",
+          "link": 43
+        },
+        {
+          "name": "previous_chain",
+          "type": "WEETODD_H3_LATENT_CHAIN",
+          "link": 44
+        }
+      ],
+      "outputs": [
+        {
+          "name": "chain",
+          "type": "WEETODD_H3_LATENT_CHAIN",
+          "links": [
+            46
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "chain_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3ChainAppend"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 21,
+      "type": "WeeToddH3DirectPublishChain",
+      "pos": [
+        2790,
+        760
+      ],
+      "size": [
+        500,
+        330
+      ],
+      "flags": {},
+      "order": 20,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "components",
+          "type": "WEETODD_H3_COMPONENTS",
+          "link": 45
+        },
+        {
+          "name": "chain",
+          "type": "WEETODD_H3_LATENT_CHAIN",
+          "link": 46
+        }
+      ],
+      "outputs": [
+        {
+          "name": "video_path",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 0
+        },
+        {
+          "name": "generation_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3DirectPublishChain"
+      },
+      "widgets_values": [
+        "WeeTodd/H3_768p_15s_Chain_JoinRepair",
+        18,
+        0.025,
+        "{\"workflow\": \"h3_768p_15s_four_window_join_repair\", \"seed\": 20260812, \"lora\": \"minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors\", \"join_policy\": \"motion-matched overlap + 4-frame cosine blend + 50-ms audio crossfade\"}",
+        ""
+      ]
+    }
+  ],
+  "links": [
+    [
+      1,
+      2,
+      0,
+      3,
+      0,
+      "WEETODD_H3_CONFIG"
+    ],
+    [
+      2,
+      1,
+      0,
+      4,
+      0,
+      "WEETODD_H3_COMPONENTS"
+    ],
+    [
+      3,
+      3,
+      0,
+      4,
+      1,
+      "WEETODD_H3_CONFIG"
+    ],
+    [
+      4,
+      4,
+      0,
+      6,
+      0,
+      "WEETODD_H3_COMPONENTS"
+    ],
+    [
+      5,
+      3,
+      0,
+      6,
+      1,
+      "WEETODD_H3_CONFIG"
+    ],
+    [
+      6,
+      4,
+      0,
+      7,
+      0,
+      "WEETODD_H3_COMPONENTS"
+    ],
+    [
+      7,
+      6,
+      0,
+      7,
+      1,
+      "WEETODD_H3_CONDITIONING"
+    ],
+    [
+      8,
+      3,
+      0,
+      7,
+      2,
+      "WEETODD_H3_CONFIG"
+    ],
+    [
+      9,
+      3,
+      1,
+      7,
+      3,
+      "WEETODD_H3_LORAS"
+    ],
+    [
+      10,
+      5,
+      0,
+      8,
+      0,
+      "WEETODD_H3_TIMELINE"
+    ],
+    [
+      11,
+      7,
+      0,
+      8,
+      1,
+      "WEETODD_H3_LATENTS"
+    ],
+    [
+      12,
+      7,
+      0,
+      9,
+      0,
+      "WEETODD_H3_LATENTS"
+    ],
+    [
+      13,
+      4,
+      0,
+      10,
+      0,
+      "WEETODD_H3_COMPONENTS"
+    ],
+    [
+      14,
+      3,
+      0,
+      10,
+      1,
+      "WEETODD_H3_CONFIG"
+    ],
+    [
+      15,
+      4,
+      0,
+      11,
+      0,
+      "WEETODD_H3_COMPONENTS"
+    ],
+    [
+      16,
+      10,
+      0,
+      11,
+      1,
+      "WEETODD_H3_CONDITIONING"
+    ],
+    [
+      17,
+      3,
+      0,
+      11,
+      2,
+      "WEETODD_H3_CONFIG"
+    ],
+    [
+      18,
+      9,
+      0,
+      11,
+      3,
+      "WEETODD_H3_CONTINUATION"
+    ],
+    [
+      19,
+      3,
+      1,
+      11,
+      4,
+      "WEETODD_H3_LORAS"
+    ],
+    [
+      20,
+      5,
+      0,
+      12,
+      0,
+      "WEETODD_H3_TIMELINE"
+    ],
+    [
+      21,
+      11,
+      0,
+      12,
+      1,
+      "WEETODD_H3_LATENTS"
+    ],
+    [
+      22,
+      8,
+      0,
+      12,
+      2,
+      "WEETODD_H3_LATENT_CHAIN"
+    ],
+    [
+      23,
+      11,
+      0,
+      13,
+      0,
+      "WEETODD_H3_LATENTS"
+    ],
+    [
+      24,
+      4,
+      0,
+      14,
+      0,
+      "WEETODD_H3_COMPONENTS"
+    ],
+    [
+      25,
+      3,
+      0,
+      14,
+      1,
+      "WEETODD_H3_CONFIG"
+    ],
+    [
+      26,
+      4,
+      0,
+      15,
+      0,
+      "WEETODD_H3_COMPONENTS"
+    ],
+    [
+      27,
+      14,
+      0,
+      15,
+      1,
+      "WEETODD_H3_CONDITIONING"
+    ],
+    [
+      28,
+      3,
+      0,
+      15,
+      2,
+      "WEETODD_H3_CONFIG"
+    ],
+    [
+      29,
+      13,
+      0,
+      15,
+      3,
+      "WEETODD_H3_CONTINUATION"
+    ],
+    [
+      30,
+      3,
+      1,
+      15,
+      4,
+      "WEETODD_H3_LORAS"
+    ],
+    [
+      31,
+      5,
+      0,
+      16,
+      0,
+      "WEETODD_H3_TIMELINE"
+    ],
+    [
+      32,
+      15,
+      0,
+      16,
+      1,
+      "WEETODD_H3_LATENTS"
+    ],
+    [
+      33,
+      12,
+      0,
+      16,
+      2,
+      "WEETODD_H3_LATENT_CHAIN"
+    ],
+    [
+      34,
+      15,
+      0,
+      17,
+      0,
+      "WEETODD_H3_LATENTS"
+    ],
+    [
+      35,
+      4,
+      0,
+      18,
+      0,
+      "WEETODD_H3_COMPONENTS"
+    ],
+    [
+      36,
+      3,
+      0,
+      18,
+      1,
+      "WEETODD_H3_CONFIG"
+    ],
+    [
+      37,
+      4,
+      0,
+      19,
+      0,
+      "WEETODD_H3_COMPONENTS"
+    ],
+    [
+      38,
+      18,
+      0,
+      19,
+      1,
+      "WEETODD_H3_CONDITIONING"
+    ],
+    [
+      39,
+      3,
+      0,
+      19,
+      2,
+      "WEETODD_H3_CONFIG"
+    ],
+    [
+      40,
+      17,
+      0,
+      19,
+      3,
+      "WEETODD_H3_CONTINUATION"
+    ],
+    [
+      41,
+      3,
+      1,
+      19,
+      4,
+      "WEETODD_H3_LORAS"
+    ],
+    [
+      42,
+      5,
+      0,
+      20,
+      0,
+      "WEETODD_H3_TIMELINE"
+    ],
+    [
+      43,
+      19,
+      0,
+      20,
+      1,
+      "WEETODD_H3_LATENTS"
+    ],
+    [
+      44,
+      16,
+      0,
+      20,
+      2,
+      "WEETODD_H3_LATENT_CHAIN"
+    ],
+    [
+      45,
+      4,
+      0,
+      21,
+      0,
+      "WEETODD_H3_COMPONENTS"
+    ],
+    [
+      46,
+      20,
+      0,
+      21,
+      1,
+      "WEETODD_H3_LATENT_CHAIN"
+    ]
+  ],
+  "groups": [
+    {
+      "title": "15-second four-window H3 chain with repaired audiovisual joins",
+      "bounding": [
+        20,
+        20,
+        4100,
+        2250
+      ],
+      "color": "#3f789e",
+      "font_size": 24,
+      "flags": {}
+    }
+  ],
+  "config": {},
+  "extra": {
+    "ds": {
+      "scale": 0.5,
+      "offset": [
+        40,
+        70
+      ]
+    }
+  },
+  "version": 0.4
+}

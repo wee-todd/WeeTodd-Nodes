@@ -118,12 +118,13 @@ def build(filename: str, preset: str, label: str) -> None:
         [
             "MiniMax-H3/FL2VA",
             "t2va",
-            "",
+            "MiniMax-H3/transformers/q8_extended_paged",
             "MiniMax-H3/text_encoders/q8-paged",
-            "",
-            "",
-            "",
-            "",
+            "MiniMax-H3/FL2VA/processor",
+            "MiniMax-H3/FL2VA/tokenizer",
+            "MiniMax-H3/vae/q8/video_vae_affine_q8.safetensors",
+            "MiniMax-H3/FL2VA/audio_vae",
+            False,
         ],
     )
     workflow.add(
@@ -147,6 +148,7 @@ def build(filename: str, preset: str, label: str) -> None:
             "normal",
             "automatic",
             "mlx",
+            "euler",
         ],
     )
     workflow.add(
@@ -170,7 +172,7 @@ def build(filename: str, preset: str, label: str) -> None:
         (350, 300),
         3,
         [("components", "WEETODD_H3_COMPONENTS"), ("preflight_report", "STRING")],
-        [512, 0.0],
+        [512, 0.0, ""],
     )
     workflow.connect(1, 0, 4, "components", "WEETODD_H3_COMPONENTS")
     workflow.connect(2, 0, 3, "config", "WEETODD_H3_CONFIG")
@@ -209,7 +211,6 @@ def build(filename: str, preset: str, label: str) -> None:
         workflow.connect(4, 0, sample_id, "components", "WEETODD_H3_COMPONENTS")
         workflow.connect(text_id, 0, sample_id, "conditioning", "WEETODD_H3_CONDITIONING")
         workflow.connect(3, 0, sample_id, "config", "WEETODD_H3_CONFIG")
-        workflow.connect(3, 1, sample_id, "loras", "WEETODD_H3_LORAS")
         workflow.connect(
             3,
             2,
@@ -217,6 +218,8 @@ def build(filename: str, preset: str, label: str) -> None:
             "trajectory_forecast",
             "WEETODD_H3_TRAJECTORY_FORECAST",
         )
+        if index == 0:
+            workflow.connect(3, 1, sample_id, "loras", "WEETODD_H3_LORAS")
     for index, context_id in enumerate(context_ids):
         workflow.add(
             context_id,
@@ -234,6 +237,13 @@ def build(filename: str, preset: str, label: str) -> None:
             sample_ids[index + 1],
             "continuation",
             "WEETODD_H3_CONTINUATION",
+        )
+        workflow.connect(
+            3,
+            1,
+            sample_ids[index + 1],
+            "loras",
+            "WEETODD_H3_LORAS",
         )
 
     for index, (video_id, audio_id, publish_id) in enumerate(
@@ -277,6 +287,8 @@ def build(filename: str, preset: str, label: str) -> None:
                         "context_frames": 0 if index == 0 else 22,
                     }
                 ),
+                "",
+                *([""] if index == 0 else []),
             ],
         )
         workflow.connect(4, 0, video_id, "components", "WEETODD_H3_COMPONENTS")

@@ -318,7 +318,7 @@ class MiniMaxH3Pipeline:
         continuation_video_latents: mx.array | None = None,
         continuation_audio_latents: mx.array | None = None,
         continuation_frames: int = 0,
-        keyframe_anchors: tuple[str, ...] = (),
+        keyframe_anchors: tuple[str | int, ...] = (),
         references: tuple | list = (),
         sampling_method: str = "euler",
         visual_condition_strength: float = KEYFRAME_NOISE_AUG,
@@ -418,9 +418,9 @@ class MiniMaxH3Pipeline:
                 f"{tuple(initial_audio_latents.shape)}."
             )
         if has_continuation:
-            if references or keyframe_anchors or condition_video_rows is not None:
+            if references:
                 raise ValueError(
-                    "Initial H3 continuation cannot be combined with Ref2VA or FL2VA rows."
+                    "Initial H3 continuation cannot yet be combined with Ref2VA rows."
                 )
             if continuation_video_latents is None or continuation_audio_latents is None:
                 raise ValueError("Continuation requires both video and audio latent streams.")
@@ -491,10 +491,20 @@ class MiniMaxH3Pipeline:
             if condition_audio_rows is not None:
                 raise ValueError("Reference audio rows require a Ref2VA reference set.")
         else:
-            if not keyframe_anchors or len(keyframe_anchors) > 2:
-                raise ValueError("FL2VA requires one or two first/last keyframe anchors.")
-            if any(anchor not in {"first", "last"} for anchor in keyframe_anchors):
-                raise ValueError("FL2VA keyframe anchors must be 'first' or 'last'.")
+            if not keyframe_anchors or len(keyframe_anchors) > 8:
+                raise ValueError("FL2VA requires between one and eight keyframe anchors.")
+            for anchor in keyframe_anchors:
+                if anchor in {"first", "last"}:
+                    continue
+                if not isinstance(anchor, int) or isinstance(anchor, bool):
+                    raise ValueError(
+                        "FL2VA keyframe anchors must be 'first', 'last', or zero-based "
+                        "pixel-frame indices."
+                    )
+                if not 0 <= anchor < num_frames:
+                    raise ValueError(
+                        f"FL2VA timed keyframe {anchor} is outside 0..{num_frames - 1}."
+                    )
             if condition_video_rows.ndim != 2:
                 raise ValueError(
                     "FL2VA condition video rows must have shape (rows, video_patch_dim)."
@@ -562,23 +572,32 @@ class MiniMaxH3Pipeline:
             audio_sched.set_timesteps(sigmas=audio_sigmas)
 
         mx.random.seed(seed)
+        keyframe_video_rows = condition_video_rows
+        continuation_video_rows = None
+        continuation_audio_rows = None
         if has_continuation:
-            condition_video_rows = patchify_video_latents(
+            continuation_video_rows = patchify_video_latents(
                 continuation_video_latents.astype(mx.float32), patch_size
             )
-            condition_audio_rows = (
+            continuation_audio_rows = (
                 continuation_audio_latents.astype(mx.float32)
                 .transpose(0, 2, 1)
                 .reshape(-1, self.dit.config.audio_latents_dim)
             )
-            visual_condition_strength = 1.0
-            audio_condition_strength = 1.0
-        if condition_video_rows is not None:
-            condition_video_rows = condition_video_rows.astype(mx.float32)
-            condition_noise = mx.random.normal(condition_video_rows.shape).astype(mx.float32)
-            condition_video_rows = MiniMaxH3Scheduler(
+        if keyframe_video_rows is not None:
+            keyframe_video_rows = keyframe_video_rows.astype(mx.float32)
+            condition_noise = mx.random.normal(keyframe_video_rows.shape).astype(mx.float32)
+            keyframe_video_rows = MiniMaxH3Scheduler(
                 shift=self.config.sigma_shift_video
-            ).scale_noise(condition_video_rows, visual_condition_strength, condition_noise)
+            ).scale_noise(keyframe_video_rows, visual_condition_strength, condition_noise)
+        packed_condition_video_rows = [
+            rows for rows in (continuation_video_rows, keyframe_video_rows) if rows is not None
+        ]
+        condition_video_rows = (
+            mx.concatenate(packed_condition_video_rows)
+            if len(packed_condition_video_rows) > 1
+            else (packed_condition_video_rows[0] if packed_condition_video_rows else None)
+        )
         video_noise = mx.random.normal(expected_initial_video_shape).astype(mx.float32)
         video_latents = video_noise
         if initial_video_latents is not None:
@@ -601,6 +620,8 @@ class MiniMaxH3Pipeline:
         audio_rows = audio_latents_working.transpose(0, 2, 1).reshape(
             num_audio_latents * AUDIO_CHANNELS, self.dit.config.audio_latents_dim
         )
+        if continuation_audio_rows is not None:
+            condition_audio_rows = continuation_audio_rows
         if condition_audio_rows is not None:
             condition_audio_rows = condition_audio_rows.astype(mx.float32)
             if audio_condition_strength < 1.0:

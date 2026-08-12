@@ -6,6 +6,8 @@ from wee_todd_nodes.conditioning_inputs import (
     H3KeyframeConditioning,
     H3ReferenceInput,
     H3ReferenceStack,
+    H3TimedKeyframe,
+    H3TimedKeyframeStack,
     resolve_reference_image_canvas,
 )
 
@@ -38,6 +40,33 @@ def test_keyframe_contract_rejects_empty_or_invalid_image():
         H3KeyframeConditioning().validate()
     with pytest.raises(ValueError, match="ComfyUI IMAGE shape"):
         H3KeyframeConditioning(first_frame=_tensor(384, 640, 3)).validate()
+
+
+def test_timed_keyframes_sort_and_resolve_to_exact_24fps_frames():
+    import numpy as np
+
+    image = np.zeros((1, 32, 32, 3), dtype=np.float32)
+    stack = H3TimedKeyframeStack().append(H3TimedKeyframe(image, 2.0))
+    stack = stack.append(H3TimedKeyframe(image, 0.5, 4.0416666667))
+
+    anchors, images = stack.resolve(107)
+
+    assert anchors == (12, 48)
+    assert len(images) == 2
+    assert stack.metadata(107)["rope_times"] == [20.0, 80.0]
+
+
+def test_timed_keyframes_reject_duplicate_or_out_of_window_frames():
+    import numpy as np
+
+    image = np.zeros((1, 32, 32, 3), dtype=np.float32)
+    duplicate = H3TimedKeyframeStack(
+        (H3TimedKeyframe(image, 1.0), H3TimedKeyframe(image, 1.01))
+    )
+    with pytest.raises(ValueError, match="same 24 fps frame"):
+        duplicate.resolve(107)
+    with pytest.raises(ValueError, match="outside"):
+        H3TimedKeyframeStack((H3TimedKeyframe(image, 5.0),)).resolve(107)
 
 
 def test_reference_stack_preserves_semantic_order_and_prompt_labels():

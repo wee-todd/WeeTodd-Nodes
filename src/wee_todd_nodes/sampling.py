@@ -182,7 +182,13 @@ class H3TransformerCache:
     ) -> H3Latents:
         spec.validate()
         config.validate()
-        expected_vision = spec.task in {"fl2va", "ref2va"}
+        continuation_text_only_fl2va = bool(
+            spec.task == "fl2va"
+            and continuation is not None
+            and conditioning.condition_video_rows is None
+            and not conditioning.keyframe_anchors
+        )
+        expected_vision = spec.task in {"fl2va", "ref2va"} and not continuation_text_only_fl2va
         if conditioning.task != spec.task:
             raise ValueError(
                 f"Conditioning task {conditioning.task!r} does not match "
@@ -195,7 +201,7 @@ class H3TransformerCache:
             conditioning.condition_video_rows is not None or conditioning.keyframe_anchors
         ):
             raise ValueError("T2VA conditioning cannot contain first/last-frame rows.")
-        if spec.task == "fl2va" and (
+        if spec.task == "fl2va" and not continuation_text_only_fl2va and (
             conditioning.condition_video_rows is None or not conditioning.keyframe_anchors
         ):
             raise ValueError("FL2VA conditioning requires encoded first/last-frame rows.")

@@ -8,7 +8,13 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 from .conditioning import TEXT_ENCODER_RUNTIME, H3TextEncoderSpec
-from .conditioning_inputs import H3KeyframeConditioning, H3ReferenceInput, H3ReferenceStack
+from .conditioning_inputs import (
+    H3KeyframeConditioning,
+    H3ReferenceInput,
+    H3ReferenceStack,
+    H3TimedKeyframe,
+    H3TimedKeyframeStack,
+)
 from .continuation import (
     SUPPORTED_CONTEXT_FRAMES,
     continuation_context_from_latents,
@@ -20,12 +26,13 @@ from .decoding import (
     H3AudioVAESpec,
     H3VideoVAESpec,
 )
-from .direct_publishing import publish_latents_direct
+from .direct_publishing import publish_latent_chain_direct, publish_latents_direct
 from .preflight import H3ComponentSetSpec, H3PreflightRequest, preflight_components
 from .publishing import publish_synchronized_media
 from .residency import prepare_low_memory_stage
 from .runtime import RUNTIME, H3GenerationConfig, H3ModelSpec
 from .sampling import TRANSFORMER_RUNTIME, H3TransformerSpec
+from .timeline import H3ChainedTimeline, H3LatentChain
 
 _PORTABLE_H3_LORA_NAMES = (
     "minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors",
@@ -298,6 +305,50 @@ _H3_VALIDATED_SAMPLING_PRESETS = {
             "sampling_seconds": 1275.5262,
             "complete_workflow_seconds": 1415.689,
             "av_drift_seconds": 0.0083333,
+        },
+    },
+    "One-shot staged Turbo — drbaph v4 step-600 — 15-second quality baseline": {
+        "steps": 7,
+        "policy": "turbo",
+        "lora": "minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors",
+        "start_after_evaluations": 2,
+        "measurement": {
+            "task": "t2va",
+            "canvas": [1344, 768],
+            "duration_seconds": 15.083333333333334,
+            "transformer_evaluations": 6,
+            "base_evaluations": 2,
+            "lora_evaluations": 4,
+            "sampling_seconds": 7840.3384475,
+            "complete_workflow_seconds": 8207.699172,
+            "mlx_peak_bytes": 30783349650,
+            "av_drift_seconds": 0.0083333,
+        },
+    },
+    "Chained staged Turbo — drbaph v4 step-600 — 4 windows / 22-frame context": {
+        "steps": 7,
+        "policy": "turbo",
+        "lora": "minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors",
+        "start_after_evaluations": 2,
+        "measurement": {
+            "task": "t2va_continuation",
+            "canvas": [1344, 768],
+            "windows": 4,
+            "window_duration_seconds": 4.0,
+            "final_duration_seconds": 15.0,
+            "context_frames": 22,
+            "transformer_evaluations_per_window": 6,
+            "base_evaluations": 2,
+            "lora_evaluations": 4,
+            "base_evaluations_per_window": 2,
+            "lora_evaluations_per_window": 4,
+            "sampling_seconds": 4636.656131541,
+            "publication_seconds": 416.626592958,
+            "complete_workflow_seconds": 5089.0,
+            "mlx_peak_bytes": 14453992534,
+            "av_drift_seconds": 0.0,
+            "join_policy": "motion-matched overlap + 4-frame cosine blend + 50-ms audio crossfade",
+            "perceptual_status": "promising; review motion immediately after each join",
         },
     },
     "Turbo — LightX2V full rank — 5 points / 4 evaluations": {
@@ -641,6 +692,114 @@ class WeeToddH3FirstLastFrame:
         return conditioning, json.dumps(conditioning.metadata(), indent=2, sort_keys=True)
 
 
+class WeeToddH3ChainedTimeline:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "window_duration_seconds": (
+                    "FLOAT",
+                    {"default": 4.0, "min": 2.5, "max": 15.0, "step": 0.1},
+                ),
+                "window_count": ("INT", {"default": 4, "min": 2, "max": 16}),
+                "context_frames": (
+                    [str(value) for value in SUPPORTED_CONTEXT_FRAMES],
+                    {"default": "22"},
+                ),
+                "target_duration_seconds": (
+                    "FLOAT",
+                    {
+                        "default": 15.0,
+                        "min": 0.0,
+                        "max": 120.0,
+                        "step": 1.0 / 24.0,
+                        "tooltip": "Use 0 to publish the complete assembled timeline.",
+                    },
+                ),
+            }
+        }
+
+    RETURN_TYPES = ("WEETODD_H3_TIMELINE", "STRING")
+    RETURN_NAMES = ("timeline", "timeline_info")
+    FUNCTION = "configure"
+    CATEGORY = "WeeTodd/H3/continuation"
+    DESCRIPTION = (
+        "Map global timestamps onto equal-length H3 windows and define exact overlap trimming."
+    )
+
+    def configure(
+        self,
+        window_duration_seconds,
+        window_count,
+        context_frames,
+        target_duration_seconds,
+    ):
+        from minimax_h3_mlx.packing import align_num_frames
+
+        window_frames = align_num_frames(round(window_duration_seconds * 24))
+        target_frames = (
+            None if target_duration_seconds == 0 else round(target_duration_seconds * 24)
+        )
+        timeline = H3ChainedTimeline(
+            window_frames=window_frames,
+            window_count=window_count,
+            context_frames=int(context_frames),
+            target_frames=target_frames,
+        )
+        timeline.validate()
+        return timeline, json.dumps(timeline.metadata(), indent=2, sort_keys=True)
+
+
+class WeeToddH3TimedKeyframe:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image": ("IMAGE",),
+                "timestamp_seconds": (
+                    "FLOAT",
+                    {"default": 0.0, "min": 0.0, "max": 120.0, "step": 1.0 / 24.0},
+                ),
+                "timestamp_scope": (["local window", "global timeline"],),
+                "window_index": ("INT", {"default": 1, "min": 1, "max": 16}),
+            },
+            "optional": {
+                "timeline": ("WEETODD_H3_TIMELINE",),
+                "previous_keyframes": ("WEETODD_H3_TIMED_KEYFRAMES",),
+            },
+        }
+
+    RETURN_TYPES = ("WEETODD_H3_TIMED_KEYFRAMES", "STRING")
+    RETURN_NAMES = ("keyframes", "keyframe_info")
+    FUNCTION = "append"
+    CATEGORY = "WeeTodd/H3/conditioning"
+    DESCRIPTION = (
+        "Append an FL2VA image at an exact 24 fps local timestamp, or map a global chained "
+        "timeline timestamp into one window."
+    )
+
+    def append(
+        self,
+        image,
+        timestamp_seconds,
+        timestamp_scope,
+        window_index,
+        timeline=None,
+        previous_keyframes=None,
+    ):
+        global_seconds = None
+        local_seconds = timestamp_seconds
+        if timestamp_scope == "global timeline":
+            if timeline is None:
+                raise ValueError("Global timed keyframes require an H3 Chained Timeline.")
+            global_seconds = timestamp_seconds
+            local_seconds = timeline.local_timestamp(window_index, timestamp_seconds)
+        stack = (previous_keyframes or H3TimedKeyframeStack()).append(
+            H3TimedKeyframe(image, local_seconds, global_seconds)
+        )
+        return stack, json.dumps(stack.metadata(), indent=2, sort_keys=True)
+
+
 def _append_reference(previous_references, reference):
     stack = (previous_references or H3ReferenceStack()).append(reference)
     return stack, json.dumps(stack.metadata(), indent=2, sort_keys=True)
@@ -837,6 +996,107 @@ class WeeToddH3KeyframeEncode:
             "vision_loaded": True,
             "encoder_resident": TEXT_ENCODER_RUNTIME.loaded,
             "video_vae_resident": VIDEO_VAE_RUNTIME.loaded,
+            "staged_releases": {
+                "text_encoder": list(text_releases),
+                "video_vae": list(video_vae_releases),
+            },
+        }
+        return conditioning, json.dumps(info, indent=2, sort_keys=True)
+
+
+class WeeToddH3TimedKeyframeEncode:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "components": ("WEETODD_H3_COMPONENTS",),
+                "config": ("WEETODD_H3_CONFIG",),
+                "keyframes": ("WEETODD_H3_TIMED_KEYFRAMES",),
+                "prompt": ("STRING", {"multiline": True, "dynamicPrompts": True}),
+            }
+        }
+
+    RETURN_TYPES = ("WEETODD_H3_CONDITIONING", "STRING")
+    RETURN_NAMES = ("conditioning", "conditioning_info")
+    FUNCTION = "encode"
+    CATEGORY = "WeeTodd/H3/conditioning"
+    DESCRIPTION = (
+        "Encode up to eight sparse FL2VA images at exact 24 fps timestamps, unloading "
+        "Qwen3-VL before the video VAE stage."
+    )
+
+    def encode(self, components, config, keyframes, prompt):
+        if components.task != "fl2va":
+            raise ValueError("H3 timed keyframe encoding requires an FL2VA component set.")
+        config.validate()
+        from minimax_h3_mlx.packing import align_num_frames, prepare_keyframe_image
+
+        num_frames = align_num_frames(round(config.duration_seconds * 24))
+        anchors, source_images = keyframes.resolve(num_frames)
+        images = [
+            prepare_keyframe_image(
+                image,
+                config.height,
+                config.width,
+                stretch=anchor == 0,
+            )
+            for anchor, image in zip(anchors, source_images, strict=True)
+        ]
+        check_interrupted = None
+        try:
+            import comfy.model_management
+
+            check_interrupted = comfy.model_management.throw_exception_if_processing_interrupted
+        except ImportError:
+            pass
+        if check_interrupted is not None:
+            check_interrupted()
+
+        text_releases = ()
+        video_vae_releases = ()
+
+        def prepare_text_stage():
+            nonlocal text_releases
+            text_releases = prepare_low_memory_stage("text_encoder", config.memory_mode)
+
+        conditioning = TEXT_ENCODER_RUNTIME.encode(
+            H3TextEncoderSpec.from_components(components, load_vision=True),
+            prompt,
+            images=images,
+            task="fl2va",
+            unload_after=True,
+            prepare_stage=prepare_text_stage,
+        )
+        if check_interrupted is not None:
+            check_interrupted()
+
+        def prepare_video_vae_stage():
+            nonlocal video_vae_releases
+            video_vae_releases = prepare_low_memory_stage("video_vae", config.memory_mode)
+
+        rows = VIDEO_VAE_RUNTIME.encode_keyframes(
+            H3VideoVAESpec.from_components(components),
+            images,
+            height=config.height,
+            width=config.width,
+            unload_after=True,
+            check_interrupted=check_interrupted,
+            prepare_stage=prepare_video_vae_stage,
+        )
+        conditioning = replace(
+            conditioning,
+            condition_video_rows=rows,
+            keyframe_anchors=anchors,
+        )
+        info = {
+            "task": "fl2va",
+            "prompt": prompt,
+            "token_count": conditioning.token_count,
+            "anchors": list(anchors),
+            "anchor_seconds": [frame / 24 for frame in anchors],
+            "rope_times": [frame * (5.0 / 3.0) for frame in anchors],
+            "condition_video_rows": int(rows.shape[0]),
+            "vision_loaded": True,
             "staged_releases": {
                 "text_encoder": list(text_releases),
                 "video_vae": list(video_vae_releases),
@@ -1080,6 +1340,7 @@ class WeeToddH3TextEncode:
         conditioning = TEXT_ENCODER_RUNTIME.encode(
             H3TextEncoderSpec.from_components(components, load_vision=False),
             prompt,
+            task=components.task,
             unload_after=unload_after_encode or memory_mode == "low_memory_bf16",
             prepare_stage=prepare_stage,
         )
@@ -1157,6 +1418,39 @@ class WeeToddH3ContinuationContext:
             "transformer": Path(context.transformer_path).name,
         }
         return context, json.dumps(info, indent=2, sort_keys=True)
+
+
+class WeeToddH3ChainAppend:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "timeline": ("WEETODD_H3_TIMELINE",),
+                "latents": ("WEETODD_H3_LATENTS",),
+            },
+            "optional": {"previous_chain": ("WEETODD_H3_LATENT_CHAIN",)},
+        }
+
+    RETURN_TYPES = ("WEETODD_H3_LATENT_CHAIN", "STRING")
+    RETURN_NAMES = ("chain", "chain_info")
+    FUNCTION = "append"
+    CATEGORY = "WeeTodd/H3/continuation"
+    DESCRIPTION = "Append one synchronized latent window to a validated H3 chained timeline."
+
+    def append(self, timeline, latents, previous_chain=None):
+        chain = previous_chain or H3LatentChain(timeline)
+        if chain.timeline != timeline:
+            raise ValueError("The previous latent chain uses a different H3 timeline.")
+        chain = chain.append(latents)
+        info = {
+            **timeline.metadata(),
+            "windows_present": len(chain.windows),
+            "windows_complete": len(chain.windows) == timeline.window_count,
+            "transformer_evaluations": [
+                window.transformer_evaluations for window in chain.windows
+            ],
+        }
+        return chain, json.dumps(info, indent=2, sort_keys=True)
 
 
 class WeeToddH3Sample:
@@ -2573,6 +2867,130 @@ class WeeToddH3DirectPublishLatents:
         }
 
 
+class WeeToddH3DirectPublishChain:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "components": ("WEETODD_H3_COMPONENTS",),
+                "chain": ("WEETODD_H3_LATENT_CHAIN",),
+                "filename_prefix": ("STRING", {"default": "WeeTodd/H3_chain"}),
+                "crf": ("INT", {"default": 18, "min": 0, "max": 51}),
+                "max_av_drift_seconds": (
+                    "FLOAT",
+                    {"default": 0.025, "min": 0.0, "max": 0.25, "step": 0.001},
+                ),
+            },
+            "optional": {
+                "generation_metadata": ("STRING", {"default": "{}", "multiline": True}),
+                "ffmpeg_path": ("STRING", {"default": "", "advanced": True}),
+            },
+        }
+
+    RETURN_TYPES = ("STRING", "STRING")
+    RETURN_NAMES = ("video_path", "generation_info")
+    OUTPUT_NODE = True
+    FUNCTION = "publish"
+    CATEGORY = "WeeTodd/H3/output"
+    DESCRIPTION = (
+        "Decode an H3 latent chain by VAE stage, remove duplicated joins, force exact 24 fps / "
+        "32 kHz duration, and atomically publish one MP4."
+    )
+
+    def publish(
+        self,
+        components,
+        chain,
+        filename_prefix,
+        crf,
+        max_av_drift_seconds,
+        generation_metadata="{}",
+        ffmpeg_path="",
+    ):
+        chain.validate_complete()
+        first = chain.windows[0]
+        try:
+            supplied = json.loads(generation_metadata or "{}")
+        except json.JSONDecodeError as exc:
+            raise ValueError("Generation metadata must be a valid JSON object.") from exc
+        if not isinstance(supplied, dict):
+            raise ValueError("Generation metadata must be a JSON object.")
+        publication = _publication_environment(ffmpeg_path)
+        supplied.update(
+            {
+                "timeline": chain.timeline.metadata(),
+                "components": {
+                    "checkpoint": Path(components.checkpoint).name,
+                    "task": components.task,
+                    "transformer": Path(components.resolved_paths()["transformer"]).name,
+                },
+                "windows": [
+                    {
+                        "index": index,
+                        "seed": window.generation_config.seed,
+                        "steps": window.generation_config.steps,
+                        "transformer_evaluations": window.transformer_evaluations,
+                        "generation_seconds": window.total_seconds,
+                        "loras": list(window.lora_report),
+                    }
+                    for index, window in enumerate(chain.windows, start=1)
+                ],
+                "publication": publication,
+            }
+        )
+        check_interrupted = None
+        try:
+            import comfy.model_management
+
+            check_interrupted = comfy.model_management.throw_exception_if_processing_interrupted
+        except ImportError:
+            pass
+        video_releases = ()
+        audio_releases = ()
+
+        def prepare_video_stage():
+            nonlocal video_releases
+            video_releases = prepare_low_memory_stage(
+                "video_vae", first.generation_config.memory_mode
+            )
+
+        def prepare_audio_stage():
+            nonlocal audio_releases
+            audio_releases = prepare_low_memory_stage(
+                "audio_vae", first.generation_config.memory_mode
+            )
+
+        output_root = Path(publication["output_directory"])
+        target = _safe_output_target(output_root, filename_prefix, first.generation_config.seed)
+        result = publish_latent_chain_direct(
+            target,
+            components,
+            chain,
+            crf=crf,
+            max_av_drift_seconds=max_av_drift_seconds,
+            generation_metadata=json.dumps(supplied),
+            check_interrupted=check_interrupted,
+            prepare_video_stage=prepare_video_stage,
+            prepare_audio_stage=prepare_audio_stage,
+            metadata_updates=lambda: {
+                "staged_releases": {
+                    "video": list(video_releases),
+                    "audio": list(audio_releases),
+                }
+            },
+            ffmpeg_path=ffmpeg_path or None,
+        )
+        info = json.dumps(result.metadata, indent=2, sort_keys=True)
+        relative = result.video_path.resolve().relative_to(output_root)
+        preview = {
+            "filename": relative.name,
+            "subfolder": str(relative.parent) if str(relative.parent) != "." else "",
+            "type": "output",
+            "format": "video/mp4",
+        }
+        return {"ui": {"gifs": [preview]}, "result": (str(result.video_path), info)}
+
+
 class WeeToddH3ModelLoader:
     @classmethod
     def INPUT_TYPES(cls):
@@ -2846,15 +3264,19 @@ NODE_CLASS_MAPPINGS = {
     "WeeToddH3FirstFrame": WeeToddH3FirstFrame,
     "WeeToddH3LastFrame": WeeToddH3LastFrame,
     "WeeToddH3FirstLastFrame": WeeToddH3FirstLastFrame,
+    "WeeToddH3ChainedTimeline": WeeToddH3ChainedTimeline,
+    "WeeToddH3TimedKeyframe": WeeToddH3TimedKeyframe,
     "WeeToddH3ReferenceImage": WeeToddH3ReferenceImage,
     "WeeToddH3ReferenceVideo": WeeToddH3ReferenceVideo,
     "WeeToddH3ReferenceAudio": WeeToddH3ReferenceAudio,
     "WeeToddH3KeyframeEncode": WeeToddH3KeyframeEncode,
+    "WeeToddH3TimedKeyframeEncode": WeeToddH3TimedKeyframeEncode,
     "WeeToddH3ReferenceEncode": WeeToddH3ReferenceEncode,
     "WeeToddH3ReferenceStrength": WeeToddH3ReferenceStrength,
     "WeeToddH3TextEncode": WeeToddH3TextEncode,
     "WeeToddH3UnloadTextEncoder": WeeToddH3UnloadTextEncoder,
     "WeeToddH3ContinuationContext": WeeToddH3ContinuationContext,
+    "WeeToddH3ChainAppend": WeeToddH3ChainAppend,
     "WeeToddH3Sample": WeeToddH3Sample,
     "WeeToddH3LatentHiresFix": WeeToddH3LatentHiresFix,
     "WeeToddH3LoRALoader": WeeToddH3LoRALoader,
@@ -2871,6 +3293,7 @@ NODE_CLASS_MAPPINGS = {
     "WeeToddH3TrimContinuation": WeeToddH3TrimContinuation,
     "WeeToddH3PublishVideoAudio": WeeToddH3PublishVideoAudio,
     "WeeToddH3DirectPublishLatents": WeeToddH3DirectPublishLatents,
+    "WeeToddH3DirectPublishChain": WeeToddH3DirectPublishChain,
     "WeeToddH3ModelLoader": WeeToddH3ModelLoader,
     "WeeToddH3GenerationConfig": WeeToddH3GenerationConfig,
     "WeeToddH3Generate": WeeToddH3Generate,
@@ -2883,15 +3306,19 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "WeeToddH3FirstFrame": "WeeTodd H3 First Frame",
     "WeeToddH3LastFrame": "WeeTodd H3 Last Frame",
     "WeeToddH3FirstLastFrame": "WeeTodd H3 First + Last Frame",
+    "WeeToddH3ChainedTimeline": "WeeTodd H3 Chained Timeline",
+    "WeeToddH3TimedKeyframe": "WeeTodd H3 Timed Keyframe",
     "WeeToddH3ReferenceImage": "WeeTodd H3 Reference Image",
     "WeeToddH3ReferenceVideo": "WeeTodd H3 Reference Video",
     "WeeToddH3ReferenceAudio": "WeeTodd H3 Reference Audio",
     "WeeToddH3KeyframeEncode": "WeeTodd H3 Encode First / Last Frames",
+    "WeeToddH3TimedKeyframeEncode": "WeeTodd H3 Encode Timed Keyframes",
     "WeeToddH3ReferenceEncode": "WeeTodd H3 Encode References",
     "WeeToddH3ReferenceStrength": "WeeTodd H3 Reference Strength",
     "WeeToddH3TextEncode": "WeeTodd H3 Text Encode (Qwen3-VL)",
     "WeeToddH3UnloadTextEncoder": "WeeTodd H3 Unload Qwen3-VL",
     "WeeToddH3ContinuationContext": "WeeTodd H3 Motion Continuation Context",
+    "WeeToddH3ChainAppend": "WeeTodd H3 Append Latent Chain Window",
     "WeeToddH3Sample": "WeeTodd H3 Sample Video + Audio Latents",
     "WeeToddH3LatentHiresFix": "WeeTodd H3 Latent Hi Res Fix",
     "WeeToddH3LoRALoader": "WeeTodd H3 LoRA Loader (MLX)",
@@ -2908,6 +3335,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "WeeToddH3TrimContinuation": "WeeTodd H3 Trim Continuation Overlap",
     "WeeToddH3PublishVideoAudio": "WeeTodd H3 Publish Video + Audio",
     "WeeToddH3DirectPublishLatents": "WeeTodd H3 Direct Publish Latents (MLX)",
+    "WeeToddH3DirectPublishChain": "WeeTodd H3 Direct Publish Chained Timeline (MLX)",
     "WeeToddH3ModelLoader": "WeeTodd H3 Model Loader (MLX)",
     "WeeToddH3GenerationConfig": "WeeTodd H3 Generation Config",
     "WeeToddH3Generate": "WeeTodd H3 Generate Video + Audio",

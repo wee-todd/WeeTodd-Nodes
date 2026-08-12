@@ -86,6 +86,8 @@ class PackedSequence:
     text_indices: mx.array
     num_condition_video_rows: int
     num_condition_audio_rows: int
+    num_continuation_video_rows: int = 0
+    num_continuation_audio_rows: int = 0
 
 
 def resolve_canvas_size(aspect_width: float, aspect_height: float) -> tuple[int, int]:
@@ -261,7 +263,7 @@ def build_packed_sequence(
     latent_width: int,
     num_audio_latents: int,
     patch_size: tuple[int, int, int],
-    keyframe_anchors: tuple[str, ...] = (),
+    keyframe_anchors: tuple[str | int, ...] = (),
     continuation_video_frames: int = 0,
     continuation_audio_latents: int = 0,
 ) -> PackedSequence:
@@ -271,14 +273,13 @@ def build_packed_sequence(
         text_token_tags: modality tag of every text row. Text is tagged ``1``, except the rows of a
             keyframe's vision block, which MiniMax-H3 tags ``0`` (video).
         keyframe_anchors: one entry per keyframe conditioning block, in packed order; ``"first"``
-            anchors at the first latent frame, ``"last"`` at the last.
+            anchors at pixel frame zero, ``"last"`` at the final pixel frame, and an integer
+            anchors at that exact zero-based pixel-frame timestamp.
     """
     _, ph, pw = patch_size
     text_tags = np.asarray(text_token_tags, dtype=np.int64)
     rows_per_frame = (latent_height // ph) * (latent_width // pw)
     num_text = int(text_tags.shape[0])
-    if continuation_video_frames and keyframe_anchors:
-        raise ValueError("Continuation rows cannot be combined with keyframe anchors.")
     num_keyframe_rows = len(keyframe_anchors) * rows_per_frame
     num_continuation_rows = continuation_video_frames * rows_per_frame
     num_condition_rows = num_keyframe_rows + num_continuation_rows
@@ -321,8 +322,23 @@ def build_packed_sequence(
             anchor_time = (
                 float(num_text) + _temporal_position_span(num_latent_frames) - _ROPE_FRAME_RESCALE
             )
+        elif isinstance(anchor, int) and not isinstance(anchor, bool):
+            pixel_frame = anchor
+            max_pixel_frame = max(
+                0,
+                round(_temporal_position_span(num_latent_frames) / _ROPE_FRAME_RESCALE) - 1,
+            )
+            if not 0 <= pixel_frame <= max_pixel_frame:
+                raise ValueError(
+                    f"Timed keyframe {pixel_frame} is outside the generated timeline "
+                    f"0..{max_pixel_frame}."
+                )
+            anchor_time = float(num_text) + _ROPE_FRAME_RESCALE * pixel_frame
         else:
-            raise ValueError(f"A keyframe anchor must be 'first' or 'last', got {anchor!r}.")
+            raise ValueError(
+                f"A keyframe anchor must be 'first', 'last', or a zero-based frame index; "
+                f"got {anchor!r}."
+            )
         lo = condition_start + num_continuation_rows + index * rows_per_frame
         hi = condition_start + num_continuation_rows + (index + 1) * rows_per_frame
         position_ids[lo:hi, 0] = anchor_time
@@ -384,6 +400,8 @@ def build_packed_sequence(
         text_indices=mx.array(text_idx.astype(np.int32)),
         num_condition_video_rows=num_condition_rows,
         num_condition_audio_rows=num_condition_audio_rows,
+        num_continuation_video_rows=num_continuation_rows,
+        num_continuation_audio_rows=num_condition_audio_rows,
     )
 
 
@@ -393,6 +411,8 @@ def build_row_timesteps(
     audio_timestep: float,
     condition_video_timestep: float,
     condition_audio_timestep: float,
+    continuation_video_timestep: float = 1.0,
+    continuation_audio_timestep: float = 1.0,
 ) -> tuple[mx.array, mx.array]:
     """Assign a timestep to every row and reduce to the transformer's ``(timestep, indices)`` pair.
 
@@ -410,10 +430,14 @@ def build_row_timesteps(
     audio_idx = np.asarray(layout.audio_indices.tolist(), dtype=np.int64)
     n_cond_v = layout.num_condition_video_rows
     n_cond_a = layout.num_condition_audio_rows
+    n_cont_v = layout.num_continuation_video_rows
+    n_cont_a = layout.num_continuation_audio_rows
 
     rows[video_idx[:n_cond_v]] = float(condition_video_timestep)
+    rows[video_idx[:n_cont_v]] = float(continuation_video_timestep)
     rows[audio_idx[n_cond_a:]] = float(audio_timestep)
     rows[audio_idx[:n_cond_a]] = float(condition_audio_timestep)
+    rows[audio_idx[:n_cont_a]] = float(continuation_audio_timestep)
 
     distinct, inverse = np.unique(rows, return_inverse=True)
     return mx.array(distinct.astype(np.float32)), mx.array(inverse.astype(np.int32))

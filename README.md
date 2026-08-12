@@ -57,6 +57,13 @@ tree are in [Obtain the model components](#obtain-the-model-components). Replace
 placeholder `first_frame.png` before queuing. The matching API prompt is
 [`h3_768p_fl2va_staged_turbo_drbaph_v4_api.json`](examples/h3_768p_fl2va_staged_turbo_drbaph_v4_api.json).
 
+For a complete 15-second T2VA comparison, load either the
+[`one-shot staged-Turbo workflow`](workflows/h3_768p_15s_one_clip_staged_turbo.json) or the
+[`four-window repaired-chain workflow`](workflows/h3_768p_15s_four_window_join_repair.json).
+Both use the same 1344 by 768 canvas, staged adapter, six transformer evaluations per sampling
+window, portable component paths, and seed. The one-shot graph is the quality baseline. The chain
+is the faster and lower-peak experimental option and includes one-pass synchronized publication.
+
 ## Current scope
 
 - Apple Silicon and macOS
@@ -65,12 +72,14 @@ placeholder `first_frame.png` before queuing. The matching API prompt is
 - Text-to-video-plus-audio (`t2va`)
 - Experimental first-frame, last-frame, and combined first/last-frame (`fl2va`) conditioning
 - Experimental ordered image, video, soundtrack, and audio reference (`ref2va`) conditioning
-- Experimental latent-native motion continuation for dense T2VA sampling
+- Experimental latent-native motion continuation for dense T2VA and FL2VA sampling
+- Sparse timed FL2VA keyframes with local-window or global chained-timeline timestamps
+- Direct staged publication of complete latent chains with synchronized overlap removal
 - Experimental 2.5-to-5-second short windows for chained-generation tests
 - Experimental H3-native 1.5x or 2x latent Hi Res Fix with original-audio preservation
 - Independent visual and audio reference-strength control
 - Synchronized H.264 video and 32 kHz stereo AAC audio
-- 35 composable nodes under `WeeTodd/H3`
+- 40 composable nodes under `WeeTodd/H3`
 - Optional standalone LTX 2.3 T2VA and I2VA pipelines under `WeeTodd/LTX 2.3`
 - Learned LTX latent upscaling for decoded H3 `IMAGE` plus `AUDIO`
 
@@ -107,6 +116,25 @@ generation. Connect the continuation output to the next **Sample Video + Audio L
 quality-first default is 22 frames, or approximately 0.92 seconds at 24 fps. Shorter context is
 faster but can weaken motion and identity continuity at the join.
 
+Use **Chained Timeline** to define equal-length windows, overlap, and an exact final duration. Add
+one or more **Timed Keyframe** nodes before **Encode Timed Keyframes**. A keyframe can use a local
+window timestamp or a global timeline timestamp plus its one-based window index; the node maps the
+global value to an exact zero-based 24 fps frame. The engine places that image at
+`text_origin + 5/3 × frame` on H3's shared rotary clock. Continuation rows remain a separate,
+fully trusted group, so adding a timed image does not weaken or renoise the copied latent head.
+
+Append every sampled window with **Append Latent Chain Window**, then publish the complete chain
+with **Direct Publish Chained Timeline**. Publication holds only one VAE stage at a time, streams
+decoded RGB chunks directly to the encoder, searches each repeated video head for the lowest-cost
+motion-aligned join, applies a four-frame cosine blend, and uses a synchronized 50-millisecond
+audio crossfade. It then applies the requested final-frame trim, validates A/V drift, and
+atomically emits one MP4 plus JSON metadata.
+
+[`h3_512p_timed_two_window_staged_turbo_api.json`](examples/h3_512p_timed_two_window_staged_turbo_api.json)
+is a portable API example of the complete contract. Replace both placeholder images before
+queuing. It uses one local first-frame anchor, one global-timeline anchor in window two, a 22-frame
+overlap, and the staged drbaph schedule of two base evaluations plus four Turbo evaluations.
+
 A 2.5-second request is experimental and aligns to 73 frames. Two such windows with a 22-frame
 overlap produce 124 assembled frames: 73 frames from the first window and 51 new frames from the
 second window, or approximately 5.17 seconds total at 24 fps.
@@ -117,19 +145,52 @@ audio samples, and normalizes audio to the exact remaining video duration. Conne
 the publisher's `media_timing_info` input. Join the first decoded clip and the trimmed second clip
 with standard ComfyUI media nodes.
 
-The initial continuation path has these limits:
+The continuation path has these limits:
 
-- Use a T2VA checkpoint and the same checkpoint, canvas, frame rate, and sample rate for both clips.
+- Use a T2VA or FL2VA checkpoint and the same checkpoint, canvas, frame rate, and sample rate for
+  every window. Timed keyframes require FL2VA.
 - Use dense sampling or connect **Trajectory Forecast**. EasyCache and BlockCache remain rejected.
 - Keep `conditioned_row_policy` at `target_only` for chained context. The forecast guard and archive
   then exclude fixed context rows whose output predictions the scheduler discards.
 - Enable `offline_smoothing_replay` for the guarded replay path. Keep `offline_audio_blend` at zero
   for the audio-isolation default, but compare against dense output when seed-specific audio matters.
 - Select 5, 22, 39, or 56 context frames. These values match the H3 temporal latent grid.
+- Use no more than eight sparse timed keyframes in one window. Duplicate resolved frames and
+  timestamps outside the selected window fail before weighted execution.
 - Treat the feature as experimental while broader prompts and longer chains remain untested.
 
 The continuation object contains copied MLX latents. The path does not decode and re-encode the
 overlap, which avoids an extra VAE pass and its reconstruction loss.
+
+The first timed-chain validation used two 107-frame windows at 896 by 512. A global 5.5-second
+anchor mapped to local frame 47 in window two and landed at published frame 132. After removing the
+22-frame overlap, the direct publisher emitted 192 frames and exactly 256,000 pre-mux audio samples:
+8.000 seconds of 24 fps video and 32-kHz stereo audio with zero measured drift. The visual join
+retained the intended direction and scene, but this was a small first validation rather than a
+general continuity guarantee.
+
+The repaired four-window staged-Turbo validation used 1344 by 768, the same 22-frame overlap,
+seven requested schedule points, and six real transformer evaluations per window. The assembled
+timeline was trimmed to 360 frames. Direct staged publication emitted exactly 15.000 seconds of
+video and 480,000 pre-mux audio samples with zero measured drift. Transformer sampling took 14.13,
+21.46, 21.56, and 20.13 minutes by window; staged publication took 6.94 minutes. Motion matching
+reduced the selected seam error at all three joins, and the audio crossfade reduced each entry
+discontinuity. Frame-to-frame motion immediately after joins one and three remained higher than
+the selected seam, so perceptual review is still required.
+
+The matching one-shot staged-Turbo control used one 15.08-second request and the same canvas and
+sampling schedule. Its complete workflow took 2 hours 16 minutes 48 seconds and reached 28.67 GiB
+of MLX peak allocation. The repaired chain completed in 1 hour 24 minutes 49 seconds and reached
+13.46 GiB, making it 1.61 times faster with 53 percent lower measured MLX peak on this system.
+These are single-system experimental measurements, not complete ComfyUI process peaks or general
+performance guarantees.
+
+Ready-to-load 15-second comparison graphs and API prompts are:
+
+- [`h3_768p_15s_one_clip_staged_turbo.json`](workflows/h3_768p_15s_one_clip_staged_turbo.json)
+- [`h3_768p_15s_one_clip_staged_turbo_api.json`](examples/h3_768p_15s_one_clip_staged_turbo_api.json)
+- [`h3_768p_15s_four_window_join_repair.json`](workflows/h3_768p_15s_four_window_join_repair.json)
+- [`h3_768p_15s_four_window_join_repair_api.json`](examples/h3_768p_15s_four_window_join_repair_api.json)
 
 The first real-checkpoint smoke test used 672 by 384 output, 124 frames per generated window,
 eight requested Euler points, a resident BF16 transformer, and no acceleration. The base window
@@ -627,6 +688,8 @@ the Euler schedule and loads a required Turbo adapter only when sampling starts.
 | Turbo, Larry EMA-850 | 5 | 4 | Matching Turbo LoRA |
 | Turbo, Larry v4 step-600 | 5 | 4 | Matching Turbo LoRA |
 | Staged Turbo, drbaph v4 step-600 | 7 | 6 | Two base evaluations, then four LoRA evaluations |
+| One-shot staged Turbo, 15-second quality baseline | 7 | 6 total | One continuous 15-second request |
+| Chained staged Turbo, 15-second repaired chain | 7 | 6 per window | Four windows, 22-frame context, repaired A/V joins |
 | Turbo, LightX2V full rank | 5 | 4 | Matching Turbo LoRA |
 | Turbo, LightX2V dynamic rank 21 | 5 | 4 | Matching Turbo LoRA |
 
@@ -649,6 +712,10 @@ The single-window preset workflows are:
   at the activation boundary. The five-second Q8 paged validation completed in 23 minutes 35
   seconds. Sampling used six real evaluations at a 210.89-second mean. The output contained 124
   H.264 frames and stereo 32-kHz audio with 8.3 milliseconds of recorded drift.
+- [`h3_768p_15s_one_clip_staged_turbo.json`](workflows/h3_768p_15s_one_clip_staged_turbo.json)
+  is the measured one-shot 15-second T2VA quality baseline.
+- [`h3_768p_15s_four_window_join_repair.json`](workflows/h3_768p_15s_four_window_join_repair.json)
+  is the measured four-window alternative with 22-frame continuation and direct repaired joins.
 
 Use [`t2va_smoke_workflow.json`](examples/t2va_smoke_workflow.json) for a basic composable wiring
 check. Use the low-memory workflow described above for the recommended first generation.

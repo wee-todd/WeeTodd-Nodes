@@ -198,6 +198,32 @@ def test_transformer_only_continuation_sampling_shapes():
     assert result.transformer_evaluations == 2
 
 
+def test_transformer_only_continuation_with_timed_keyframes_sampling_shapes():
+    cfg = tiny_config()
+    mx.random.seed(55)
+    pipeline = MiniMaxH3Pipeline(MiniMaxH3DiT(cfg), None, None, None)
+
+    result = pipeline.sample_latents(
+        mx.random.normal((1, 2, cfg.text_dim)),
+        np.array([TAG_VIDEO, TAG_TEXT], dtype=np.int32),
+        duration_seconds=5.0,
+        num_inference_steps=3,
+        height=32,
+        width=32,
+        drop_adaln=False,
+        verbose=False,
+        continuation_video_latents=mx.random.normal((1, cfg.latents_dim, 7, 2, 2)),
+        continuation_audio_latents=mx.random.normal((2, cfg.audio_latents_dim, 37)),
+        continuation_frames=22,
+        condition_video_rows=mx.random.normal((2, cfg.video_patch_dim)),
+        keyframe_anchors=(12, 84),
+    )
+
+    assert result.video_latents.shape == (1, cfg.latents_dim, 37, 2, 2)
+    assert result.audio_latents.shape == (2, cfg.audio_latents_dim, 207)
+    assert result.transformer_evaluations == 2
+
+
 def test_h3_native_refinement_preserves_original_audio_bit_exactly():
     cfg = tiny_config()
     mx.random.seed(51)

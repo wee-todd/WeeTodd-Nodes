@@ -189,6 +189,82 @@ def test_transformer_cache_forwards_dense_continuation(tmp_path: Path):
     assert kwargs["continuation_frames"] == 22
 
 
+def test_transformer_cache_forwards_fl2va_timed_rows_with_continuation(tmp_path: Path):
+    created = []
+
+    def factory(spec):
+        sampler = FakeSampler(spec)
+        created.append(sampler)
+        return sampler
+
+    spec = _spec(tmp_path, task="fl2va")
+    context = H3ContinuationContext(
+        video="context-video",
+        audio="context-audio",
+        context_frames=22,
+        width=640,
+        height=384,
+        fps=24,
+        sample_rate=32000,
+        transformer_checkpoint=spec.checkpoint,
+        transformer_path=spec.transformer,
+    )
+    conditioning = _conditioning(
+        spec,
+        load_vision=True,
+        task="fl2va",
+        condition_video_rows="timed-rows",
+        keyframe_anchors=(36, 84),
+    )
+
+    H3TransformerCache(factory).sample(
+        spec,
+        conditioning,
+        H3GenerationConfig(steps=3, width=640, height=384),
+        continuation=context,
+    )
+
+    kwargs = created[0].calls[0][2]
+    assert kwargs["condition_video_rows"] == "timed-rows"
+    assert kwargs["keyframe_anchors"] == (36, 84)
+    assert kwargs["continuation_frames"] == 22
+
+
+def test_transformer_cache_accepts_text_only_fl2va_after_first_window(tmp_path: Path):
+    created = []
+
+    def factory(spec):
+        sampler = FakeSampler(spec)
+        created.append(sampler)
+        return sampler
+
+    spec = _spec(tmp_path, task="fl2va")
+    context = H3ContinuationContext(
+        video="context-video",
+        audio="context-audio",
+        context_frames=22,
+        width=640,
+        height=384,
+        fps=24,
+        sample_rate=32000,
+        transformer_checkpoint=spec.checkpoint,
+        transformer_path=spec.transformer,
+    )
+    conditioning = _conditioning(spec, load_vision=False, task="fl2va")
+
+    H3TransformerCache(factory).sample(
+        spec,
+        conditioning,
+        H3GenerationConfig(steps=3, width=640, height=384),
+        continuation=context,
+    )
+
+    kwargs = created[0].calls[0][2]
+    assert kwargs["condition_video_rows"] is None
+    assert kwargs["keyframe_anchors"] == ()
+    assert kwargs["continuation_frames"] == 22
+
+
 def test_transformer_cache_forwards_h3_native_refinement_and_preserved_audio(tmp_path: Path):
     from minimax_h3_mlx.hires_fix import resize_video_latents_bicubic
 
