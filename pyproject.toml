@@ -32,7 +32,7 @@ Repository = "https://github.com/wee-todd/WeeTodd-Nodes"
 Issues = "https://github.com/wee-todd/WeeTodd-Nodes/issues"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/wee_todd_nodes", "src/minimax_h3_mlx", "src/ltx23_mlx"]
+packages = ["src/wee_todd_nodes", "src/minimax_h3_mlx", "src/ltx23_mlx", "src/ltx25_mlx"]
 
 [tool.hatch.metadata]
 allow-direct-references = true

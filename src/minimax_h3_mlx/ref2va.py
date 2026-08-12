@@ -127,7 +127,7 @@ def trim_reference_num_frames(num_frames: int) -> int:
     """Snap a reference down to the ``17 * n + 5`` frame count encoded without padding."""
     if num_frames < 5:
         raise ValueError("A Ref2VA video must contain at least five frames after resampling.")
-    return max(1, (num_frames - 5) // 17) * 17 + 5
+    return (num_frames - 5) // 17 * 17 + 5
 
 
 def sample_reference_video_frames(frames: np.ndarray) -> tuple[list[np.ndarray], list[float]]:

@@ -1,6 +1,7 @@
 # WeeTodd Nodes
 
-Experimental MLX-native MiniMax H3 and LTX 2.3 nodes for ComfyUI on Apple Silicon.
+Experimental MLX-native MiniMax H3, LTX 2.3, and foundational LTX 2.5 nodes for ComfyUI on
+Apple Silicon.
 
 WeeTodd Nodes keeps the MiniMax H3 engine separate from the ComfyUI adapter. The current release
 focuses on synchronized text-to-video-plus-audio generation, staged model unloading, and a
@@ -136,6 +137,9 @@ and an ordered prior-video reference. Its matching API prompt is
 - Synchronized H.264 video and 32 kHz stereo AAC audio
 - 41 composable nodes under `WeeTodd/H3`
 - Optional standalone LTX 2.3 T2VA and I2VA pipelines under `WeeTodd/LTX 2.3`
+- Five foundational distilled-model nodes under `WeeTodd/LTX 2.5`; component selection, metadata
+  preflight, the official 8+4 schedule, cancellation, progress, and unloading contracts are in
+  place, but generation requires a versioned MLX backend that exposes `LTX25DistilledPipeline`
 - Learned LTX latent upscaling for decoded H3 `IMAGE` plus `AUDIO`
 
 The FL2VA path stages Qwen3-VL vision and video-VAE encoding before transformer sampling. The
@@ -663,6 +667,23 @@ time order.
 Run **Component Preflight** before generation. Do not queue the sampler if preflight reports a
 missing file, unsupported task, incompatible checkpoint, or negative memory headroom.
 
+Before describing a saved workflow as runtime-ready, validate the matching API prompt against the
+target ComfyUI installation:
+
+```bash
+COMFYUI_ROOT=/path/to/ComfyUI
+
+"$COMFYUI_ROOT/.venv/bin/python" scripts/preflight_h3_workflow.py \
+  --project . \
+  --workflow examples/h3_384p_turbo_4real_api.json \
+  --comfy-root "$COMFYUI_ROOT"
+```
+
+Portable workflow tests reject absolute paths and parent traversal. They do not prove that model
+files exist. The live command resolves every component through the active ComfyUI model registry,
+validates component files without loading full weights, validates the required LoRA, and emits
+`"runtime_ready": true` only after all checks pass.
+
 For the published artifacts, preflight should report:
 
 - Transformer paging format: `weetodd-h3-paged-v1`
@@ -706,6 +727,26 @@ EasyCache, BlockCache, Hierarchical BlockCache, and Trajectory Forecast are mutu
 They can change video and audio output. Turbo LoRA with a cache also requires the explicit
 experimental opt-in. None of these options belongs in the first low-memory smoke test.
 
+A matched 640 by 384 Turbo experiment used the drbaph v4 step-600 adapter and the same prompt and
+seed in four clean ComfyUI processes. Seven full-schedule Turbo evaluations completed in 233.17
+seconds. EasyCache speed reuse reduced this to four real evaluations plus three reused transitions:
+150.51 seconds with `output_residual` and 152.70 seconds with
+`core_residual_fresh_heads`. The accepted staged-quality recipe used two base evaluations followed
+by four Turbo evaluations and completed in 203.49 seconds. All four outputs contained 124 video
+frames plus stereo 32 kHz audio and peaked near 14.9 GB. The cache variants are useful speed
+experiments, but they do not replace the staged 2+4 quality preset; review both video and audio for
+each prompt.
+
+EasyCache offers two reuse strategies. `output_residual` is the compatible default and stores the
+small final video-and-audio velocity residual. Experimental `core_residual_fresh_heads` stores the
+larger packed transformer-core residual, skips all transformer blocks on a hit, and still runs the
+current timestep's final normalization and audiovisual output heads. It always runs the final
+sampling transition without reuse. Measure complete ComfyUI peak memory before adopting the
+experimental strategy because its hidden-state cache is larger. A matched 640 by 384 validation
+found nearly identical speed to output-residual reuse, a 101.9 MB cache instead of 3.46 MB, only a
+small video-similarity improvement, and no restoration of dense audio structure. Keep the strategy
+for research comparisons; it is not a recommended preset.
+
 Trajectory Forecast provides an optional `offline_smoothing_replay` mode for audio-sensitive runs.
 The first pass captures actual joint video and audio features. A transformer-free second pass
 restarts from the original latents, reuses the actual anchors, and reconstructs skipped steps from
@@ -741,7 +782,9 @@ the Euler schedule and loads a required Turbo adapter only when sampling starts.
 | Ref2VA four-reference BF16 with Forward Attention replay | 20 | Up to 11 | Four ordered image references, normal-memory BF16 sampling, guarded replay |
 | Turbo, Larry EMA-850 | 5 | 4 | Matching Turbo LoRA |
 | Turbo, Larry v4 step-600 | 5 | 4 | Matching Turbo LoRA |
+| Turbo, drbaph v4 step-600, 384p low-memory | 5 | 4 | Dense Turbo evaluations with no cache |
 | Staged Turbo, drbaph v4 step-600 | 7 | 6 | Two base evaluations, then four LoRA evaluations |
+| Staged Turbo, drbaph v4 step-600, 384p low-memory | 7 | 6 | Measured 640 by 384 two-base-plus-four-Turbo recipe |
 | One-shot staged Turbo, 15-second quality baseline | 7 | 6 total | One continuous 15-second request |
 | Chained staged Turbo, 15-second repaired chain | 7 | 6 per window | Four windows, 22-frame context, repaired A/V joins |
 | Turbo, LightX2V full rank | 5 | 4 | Matching Turbo LoRA |
@@ -753,6 +796,25 @@ before loading a Turbo workflow. WeeTodd does not bundle or download adapters.
 
 The single-window preset workflows are:
 
+- [`h3_384p_turbo_4real.json`](workflows/h3_384p_turbo_4real.json) uses five Euler schedule points
+  for exactly four drbaph Turbo evaluations. It uses the low-memory Q8 component path, staged
+  unloading, and no cache or trajectory forecast. An equivalent clean-process runtime graph
+  completed in 150.97 seconds, peaked at 14.951 GB, and published 124 frames with stereo 32-kHz
+  audio. The saved workflow remains portable until its component paths pass live preflight in the
+  target ComfyUI installation. Use this schedule for the recommended 384p memory/performance
+  balance. Use the staged two-base-plus-four-Turbo schedule when quality has priority over runtime.
+- [`h3_384p_staged_turbo_2base_4turbo.json`](workflows/h3_384p_staged_turbo_2base_4turbo.json)
+  is the measured five-second, 640 by 384 low-memory staged-Turbo workflow. It executes two base
+  evaluations and then four evaluations with the drbaph v4 step-600 adapter. An equivalent
+  clean-process runtime graph completed in 203.49 seconds, peaked at 14.908 GB, and published 124
+  frames with stereo 32-kHz audio. Run live workflow preflight before calling the saved graph
+  runtime-ready.
+- [`h3_384p_ref2va_2char_video_audio_4real.json`](workflows/h3_384p_ref2va_2char_video_audio_4real.json)
+  is a five-second, 640 by 384 strict Ref2VA comparison graph with two ordered character sheets,
+  one video reference, and its synchronized soundtrack as a separate audio reference. Reference
+  images and video default to output-matched pixel area. The saved API prompt is
+  [`h3_384p_ref2va_2char_video_audio_4real_api.json`](examples/h3_384p_ref2va_2char_video_audio_4real_api.json).
+  Reference media is not bundled; replace the portable input filenames before queuing.
 - [`h3_512p_dense_baseline.json`](workflows/h3_512p_dense_baseline.json)
 - [`h3_512p_trajectory_replay.json`](workflows/h3_512p_trajectory_replay.json)
 - [`h3_512p_turbo_larry_ema850.json`](workflows/h3_512p_turbo_larry_ema850.json)

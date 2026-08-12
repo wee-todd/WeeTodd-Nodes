@@ -43,6 +43,17 @@ PORTABLE_REF2VA_COMPONENTS = {
     "audio_vae": "MiniMax-H3/Ref2VA/audio_vae",
     "allow_fl2va_weights_for_ref2va": False,
 }
+PORTABLE_REF2VA_BF16_COMPONENTS = {
+    "checkpoint": "MiniMax-H3/Ref2VA",
+    "task": "ref2va",
+    "transformer": "MiniMax-H3/Ref2VA/transformer/minimax_h3_bf16_rank64.safetensors",
+    "text_encoder": "MiniMax-H3/Ref2VA/text_encoder",
+    "processor": "MiniMax-H3/Ref2VA/processor",
+    "tokenizer": "MiniMax-H3/Ref2VA/tokenizer",
+    "video_vae": "MiniMax-H3/Ref2VA/video_vae/video_vae_mlx_native.safetensors",
+    "audio_vae": "MiniMax-H3/Ref2VA/audio_vae/audio_vae.safetensors",
+    "allow_fl2va_weights_for_ref2va": True,
+}
 ONE_SHOT_PROMPT = (
     "integrated_multimodal_description: [Shot 1] Live-action mockumentary crossover "
     "parody with realistic skin, clothing, soil, and physically natural movement, presented "
@@ -111,6 +122,35 @@ ALIEN_REF2VA_PROMPT = (
     "loose soil, one brief shoulder shake, crying and panicked breathing, and clean "
     "location-recorded dialogue synchronized to each speaker's mouth. Preserve one continuous "
     "acoustic space without an ambience reset.\n\n"
+    "non_diegetic_music: N/A"
+)
+
+ALIEN_REF2VA_AV_PROMPT = (
+    "<Picture 1> defines one tall white extraterrestrial with an elongated pale face, "
+    "large blue-gray eyes, fine swept-back white hair, very tall slender proportions, and "
+    "fitted white clothing from every shown angle. <Picture 2> defines one short grey "
+    "extraterrestrial with an oversized smooth head, enormous glossy black eyes, gray-green "
+    "skin, a lean ribbed torso, long fingers, and compact proportions from every shown angle. "
+    "Keep them as two distinct individuals without merging their faces, eyes, heights, skin "
+    "colors, clothing, or anatomy. <Video 1> supplies the live-action blocking, shovel motion, "
+    "camera path, timing, desert location, and physical interaction. Replace the two human "
+    "performers in <Video 1> with the extraterrestrials while preserving its coherent motion. "
+    "<Audio 1> supplies the original synchronized dialogue cadence, voices, shovel impacts, "
+    "breathing, footsteps, wind, and continuous acoustic space; preserve its timing and "
+    "clarity.\n\n"
+    "integrated_multimodal_description: [Shot 1] One continuous photorealistic handheld "
+    "mockumentary shot at a barren desert excavation site in harsh afternoon sunlight. The "
+    "short grey from <Picture 2> stands inside a grave-sized hole and angrily throws several "
+    "heavy shovelfuls of dirt over the rim. The shovel strikes compact soil, loose dirt "
+    "scatters, and the grey breathes heavily. The tall white from <Picture 1> walks into frame "
+    "above the hole, studies it suspiciously, brushes fine white hair behind one ear, looks "
+    "down smugly, and says <d>[English] Hello, little man. Digging your own grave? </d> The "
+    "grey stops digging and begins a slow threatening turn toward the tall white as the clip "
+    "ends. Match <Video 1>'s restrained documentary corrections and screen positions. Do not "
+    "cut, fade, teleport, duplicate, feature-swap, or reset the action.\n\n"
+    "overall_soundscape: Follow <Audio 1> in the same continuous dry desert space with "
+    "synchronized shovel strikes, scattering soil, heavy breathing, gravel footsteps, clothing "
+    "rustle, wind, and clean mouth-synchronized dialogue. No ambience reset.\n\n"
     "non_diegetic_music: N/A"
 )
 
@@ -771,6 +811,7 @@ def build_alien_ref2va_chain() -> Workflow:
             {
                 "video_frames": Ref(component_ids[index], 0),
                 "fps": Ref(component_ids[index], 2),
+                "video_size": "native H3 reference canvas (high detail / slow)",
                 "soundtrack": Ref(component_ids[index], 1),
                 "previous_references": Ref(9),
             },
@@ -868,6 +909,178 @@ def build_alien_ref2va_chain() -> Workflow:
     return workflow
 
 
+def build_ref2va_384p_four_real() -> Workflow:
+    workflow = Workflow(
+        "384p single-clip Ref2VA: two characters + source video + standalone source audio"
+    )
+    preset = "Turbo — drbaph v4 step-600 — 5 points / 4 evaluations"
+    common_prefix(
+        workflow,
+        5.0,
+        preset,
+        20_260_812,
+        components=PORTABLE_REF2VA_BF16_COMPONENTS,
+    )
+    workflow.add(
+        18,
+        "WeeToddH3PreviewOverride",
+        {
+            "components": Ref(1),
+            "tae_model": "taeh3.safetensors",
+            "preview_backend": "auto",
+            "coreml_model": "taeh3_coreml_256.mlmodelc",
+            "preview_every": 1,
+            "preview_frames": 6,
+            "max_preview_edge": 256,
+            "safety_guard": "conservative collapse guard",
+        },
+        pos=(500, 760),
+        size=(500, 370),
+    )
+    workflow.nodes[4]["values"]["components"] = Ref(18)
+    workflow.nodes[2]["values"].update(
+        {
+            "steps": 5,
+            "resolution_tier": "384 px short edge — fast smoke",
+            "aspect_ratio": "5:3 — wide landscape",
+            "short_edge": 384,
+            "custom_width": 640,
+            "custom_height": 384,
+            "memory_mode": "normal",
+        }
+    )
+    workflow.add(
+        5,
+        "LoadImage",
+        {"image": "tall_white_reference_sheet.png"},
+        pos=(40, 930),
+        size=(330, 330),
+    )
+    workflow.add(
+        6,
+        "WeeToddH3ReferenceImage",
+        {"image": Ref(5), "pixel_budget_percent": 100},
+        pos=(420, 980),
+        size=(340, 190),
+    )
+    workflow.add(
+        7,
+        "LoadImage",
+        {"image": "grey_alien_reference_sheet.png"},
+        pos=(810, 930),
+        size=(330, 330),
+    )
+    workflow.add(
+        8,
+        "WeeToddH3ReferenceImage",
+        {"image": Ref(7), "pixel_budget_percent": 100, "previous_references": Ref(6)},
+        pos=(1190, 980),
+        size=(360, 210),
+    )
+    workflow.add(
+        9,
+        "LoadVideo",
+        {"file": "H3_768p_15s_One_Clip_Staged_Turbo_Benchmark_20260811.mp4"},
+        pos=(40, 1360),
+        size=(390, 260),
+    )
+    workflow.add(
+        10,
+        "Video Slice",
+        {"video": Ref(9), "start_time": 0.0, "duration": 124 / 24, "strict_duration": False},
+        pos=(500, 1360),
+        size=(390, 250),
+    )
+    workflow.add(
+        11,
+        "GetVideoComponents",
+        {"video": Ref(10)},
+        pos=(950, 1360),
+        size=(390, 250),
+    )
+    workflow.add(
+        12,
+        "WeeToddH3ReferenceVideo",
+        {
+            "video_frames": Ref(11, 0),
+            "fps": Ref(11, 2),
+            "video_size": "native H3 reference canvas (high detail / slow)",
+            "previous_references": Ref(8),
+        },
+        pos=(1410, 1320),
+        size=(430, 280),
+    )
+    workflow.add(
+        13,
+        "WeeToddH3ReferenceAudio",
+        {"audio": Ref(11, 1), "previous_references": Ref(12)},
+        pos=(1910, 1360),
+        size=(390, 220),
+    )
+    workflow.add(
+        14,
+        "WeeToddH3ReferenceEncode",
+        {
+            "components": Ref(4),
+            "config": Ref(3),
+            "references": Ref(13),
+            "prompt": ALIEN_REF2VA_AV_PROMPT,
+        },
+        pos=(1090, 80),
+        size=(760, 650),
+    )
+    workflow.add(
+        15,
+        "WeeToddH3ReferenceStrength",
+        {"conditioning": Ref(14), "visual_strength": 0.999, "audio_strength": 1.0},
+        pos=(1910, 100),
+        size=(390, 220),
+    )
+    workflow.add(
+        16,
+        "WeeToddH3Sample",
+        {
+            "components": Ref(4),
+            "conditioning": Ref(15),
+            "config": Ref(3),
+            "unload_after_sample": True,
+            "loras": Ref(3, 1),
+        },
+        pos=(2360, 100),
+        size=(410, 300),
+    )
+    workflow.add(
+        17,
+        "WeeToddH3DirectPublishLatents",
+        {
+            "components": Ref(4),
+            "latents": Ref(16),
+            "filename_prefix": "WeeTodd/H3_384p_Ref2VA_2Character_Video_Audio_4Real",
+            "crf": 18,
+            "max_av_drift_seconds": 0.025,
+            "generation_metadata": json.dumps(
+                {
+                    "workflow": "h3_384p_ref2va_2char_video_audio_4real",
+                    "seed": 20_260_812,
+                    "schedule": "5 points / 4 real Turbo evaluations",
+                    "cache": "disabled",
+                    "references": [
+                        "Picture 1: tall white",
+                        "Picture 2: grey alien",
+                        "Video 1: first 124 source frames",
+                        "Audio 1: source soundtrack as standalone reference",
+                    ],
+                }
+            ),
+            "sampling_info": Ref(16, 1),
+            "ffmpeg_path": "",
+        },
+        pos=(2840, 90),
+        size=(530, 350),
+    )
+    return workflow
+
+
 def write(name: str, workflow: Workflow) -> None:
     (ROOT / "workflows" / f"{name}.json").write_text(
         json.dumps(workflow.ui(), indent=2) + "\n"
@@ -884,4 +1097,8 @@ if __name__ == "__main__":
     write(
         "h3_768p_15s_ref2va_aliens_chained_staged_turbo",
         build_alien_ref2va_chain(),
+    )
+    write(
+        "h3_384p_ref2va_2char_video_audio_4real",
+        build_ref2va_384p_four_real(),
     )

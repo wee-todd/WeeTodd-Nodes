@@ -175,7 +175,9 @@ def test_paged_forward_and_modulation_cache_match_resident_model(tmp_path):
     )
     paged_dir = tmp_path / "paged"
     convert_to_paged_checkpoint(source, paged_dir)
-    paged = load_paged_dit(paged_dir, window_size=2, verify_hashes=True)
+    paged = load_paged_dit(
+        paged_dir, window_size=2, verify_hashes=True, prefetch=True
+    )
 
     args = _tiny_inputs(config)
     resident_cache = ModulationCache.build(resident, args[3], dtype=mx.float32)
@@ -188,6 +190,43 @@ def test_paged_forward_and_modulation_cache_match_resident_model(tmp_path):
     np.testing.assert_array_equal(np.asarray(actual_audio), np.asarray(expected_audio))
     assert paged.paged_blocks.store.active_page is None
     assert paged.paged_blocks.store.peak_page_bytes > 0
+    report = paged.paged_blocks.report()
+    assert report["prefetch_enabled"] is True
+    # Modulation precomputation and the transformer forward each traverse both windows.
+    assert report["prefetch_requests"] == 2
+    assert report["prefetch_hits"] == 2
+    assert report["prefetch_failures"] == 0
+    assert report["windows_materialized"] == 4
+    assert report["prefetch_backend"] == "darwin_advisory"
+    assert report["prefetch_buffer_bytes"] == 0
+    paged.paged_blocks.close()
+
+
+def test_paged_transformer_prefetch_defaults_off_and_can_use_environment(
+    tmp_path, monkeypatch
+):
+    config = _tiny_dit_config()
+    mx.random.seed(14)
+    resident = MiniMaxH3DiT(config)
+    mx.eval(resident.parameters())
+    source = tmp_path / "full"
+    source.mkdir()
+    (source / "config.json").write_text(json.dumps(asdict(config)))
+    mx.save_safetensors(
+        str(source / "model.safetensors"), dict(tree_flatten(resident.parameters()))
+    )
+    paged_dir = tmp_path / "paged"
+    convert_to_paged_checkpoint(source, paged_dir)
+
+    monkeypatch.delenv("WEETODD_H3_TRANSFORMER_PREFETCH", raising=False)
+    default = load_paged_dit(paged_dir, window_size=2)
+    assert default.paged_blocks.report()["prefetch_enabled"] is False
+    default.paged_blocks.close()
+
+    monkeypatch.setenv("WEETODD_H3_TRANSFORMER_PREFETCH", "1")
+    enabled = load_paged_dit(paged_dir, window_size=2)
+    assert enabled.paged_blocks.report()["prefetch_enabled"] is True
+    enabled.paged_blocks.close()
 
 
 def test_quantized_paged_forward_matches_resident_model(tmp_path):

@@ -22,6 +22,9 @@ through MLX.
   selected. Do not load the next weighted stage before the prior stage is releasable.
 - Validate dimensions, duration, checkpoint paths, and task support before expensive work.
 - Add a focused test for every node contract or engine behavior changed.
+- Treat portable workflow paths and runtime-ready workflow paths as separate validation states.
+- Before an expensive saved-workflow render, run `scripts/preflight_h3_workflow.py` with the saved
+  API prompt and the active ComfyUI root. Execute that saved API prompt for the render.
 - Keep local research, attribution, and knowledge-store material outside the tracked repository.
 - Do not copy incompatible or unlicensed third-party code into Apache-2.0 files.
 - Use `.agents/skills/wee-todd-h3-mlx/SKILL.md` for H3 implementation work.
@@ -45,6 +48,7 @@ python -m compileall -q src __init__.py
 python -m pytest -q tests/test_nodes.py tests/test_runtime.py tests/test_readme.py \
   tests/test_workflows.py
 ruff check src/wee_todd_nodes tests
+python scripts/preflight_h3_workflow.py --project . --all-api
 ./.venv/bin/python .agents/skills/readme-workflow-commit-gate/scripts/audit.py \
   --project . --record-review \
   --confirm-readme-reviewed --confirm-workflows-reviewed

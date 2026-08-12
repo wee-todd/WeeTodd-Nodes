@@ -26,7 +26,9 @@ def validate_profile_components(
     if transformer.is_dir():
         if not (transformer / "config.json").is_file():
             raise ValueError(f"transformer directory lacks config.json: {transformer}")
-        if not list(transformer.glob("*.safetensors")):
+        if not list(transformer.glob("*.safetensors")) and not (
+            transformer / "paged_manifest.json"
+        ).is_file():
             raise ValueError(f"transformer directory contains no safetensors: {transformer}")
     elif not transformer.is_file():
         raise ValueError(f"transformer must be an existing file or directory: {transformer}")
@@ -39,8 +41,10 @@ def validate_profile_components(
     for label, path in directories.items():
         if not path.is_dir():
             raise ValueError(f"{label} must be an existing directory: {path}")
-    if not (text_encoder_directory / "text_encoder.safetensors").is_file() and not list(
-        text_encoder_directory.glob("*.safetensors")
+    if (
+        not (text_encoder_directory / "text_encoder.safetensors").is_file()
+        and not list(text_encoder_directory.glob("*.safetensors"))
+        and not (text_encoder_directory / "paged_text_encoder_manifest.json").is_file()
     ):
         raise ValueError(
             f"text encoder directory contains no safetensors: {text_encoder_directory}"

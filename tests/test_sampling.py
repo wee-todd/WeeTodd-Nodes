@@ -6,6 +6,7 @@ import mlx.core as mx
 import pytest
 
 from minimax_h3_mlx.blockcache import H3BlockCacheConfig
+from minimax_h3_mlx.easycache import H3EasyCacheConfig
 from minimax_h3_mlx.trajectory_forecast import H3TrajectoryForecastConfig
 from wee_todd_nodes.conditioning import H3Conditioning, H3TextEncoderSpec
 from wee_todd_nodes.continuation import H3ContinuationContext
@@ -153,6 +154,29 @@ def test_transformer_cache_samples_and_unloads(tmp_path: Path):
     assert progress == [(0, 2), (1, 2), (2, 2)]
     assert cache.loaded is False
     assert len(created) == 1
+
+
+def test_transformer_cache_closes_paged_worker_before_unload(tmp_path: Path):
+    closed = False
+
+    def close():
+        nonlocal closed
+        closed = True
+
+    def factory(spec):
+        sampler = FakeSampler(spec)
+        sampler.dit.paged_blocks = SimpleNamespace(close=close, report=lambda: {})
+        return sampler
+
+    spec = _spec(tmp_path)
+    H3TransformerCache(factory).sample(
+        spec,
+        _conditioning(spec),
+        H3GenerationConfig(steps=3),
+        unload_after=True,
+    )
+
+    assert closed is True
 
 
 def test_transformer_cache_forwards_dense_continuation(tmp_path: Path):
@@ -606,6 +630,30 @@ def test_turbo_blockcache_requires_explicit_experimental_opt_in(tmp_path: Path, 
 
     allowed = H3BlockCacheConfig(allow_turbo_experimental=True)
     result = cache.sample(spec, conditioning, config, loras=turbo, blockcache=allowed)
+
+    assert result.transformer_evaluations == 2
+    assert cache.loaded is False
+
+
+def test_turbo_easycache_requires_explicit_experimental_opt_in(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr("minimax_h3_mlx.lora.apply_lora_stack", lambda dit, requests: ())
+    cache = H3TransformerCache(lambda spec: FakeSampler(spec))
+    spec = _spec(tmp_path)
+    conditioning = _conditioning(spec)
+    config = H3GenerationConfig(steps=5)
+    turbo = _turbo_lora_stack(tmp_path)
+
+    with pytest.raises(ValueError, match="explicit experimental opt-in"):
+        cache.sample(
+            spec,
+            conditioning,
+            config,
+            loras=turbo,
+            easycache=H3EasyCacheConfig(),
+        )
+
+    allowed = H3EasyCacheConfig(allow_turbo_experimental=True)
+    result = cache.sample(spec, conditioning, config, loras=turbo, easycache=allowed)
 
     assert result.transformer_evaluations == 2
     assert cache.loaded is False

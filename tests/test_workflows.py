@@ -269,6 +269,61 @@ def test_h3_768p_staged_turbo_workflow_uses_one_continuous_schedule():
     assert ui_nodes[6]["inputs"][4]["name"] == "loras"
 
 
+def test_h3_384p_staged_turbo_workflow_matches_measured_low_memory_recipe():
+    prompt = json.loads(
+        (ROOT / "examples" / "h3_384p_staged_turbo_2base_4turbo_api.json").read_text()
+    )
+    workflow = json.loads(
+        (ROOT / "workflows" / "h3_384p_staged_turbo_2base_4turbo.json").read_text()
+    )
+    ui_nodes = {node["id"]: node for node in workflow["nodes"]}
+
+    assert len(ui_nodes) == 7
+    assert {node["type"] for node in ui_nodes.values()} <= set(NODE_CLASS_MAPPINGS)
+    assert prompt["1"]["inputs"] == PORTABLE_T2VA_INPUTS
+    assert prompt["2"]["inputs"]["duration_seconds"] == 5.0
+    assert prompt["2"]["inputs"]["steps"] == 7
+    assert prompt["2"]["inputs"]["seed"] == 0
+    assert prompt["2"]["inputs"]["resolution_mode"] == "ratio + size"
+    assert prompt["2"]["inputs"]["aspect_ratio"] == "5:3 — wide landscape"
+    assert prompt["2"]["inputs"]["short_edge"] == 384
+    assert prompt["2"]["inputs"]["custom_width"] == 640
+    assert prompt["2"]["inputs"]["custom_height"] == 384
+    assert prompt["2"]["inputs"]["memory_mode"] == "low_memory_bf16"
+    assert prompt["3"]["inputs"]["preset"] == (
+        "Staged Turbo — drbaph v4 step-600 — 384p low-memory — "
+        "2 base + 4 Turbo evaluations"
+    )
+    assert prompt["6"]["inputs"]["loras"] == ["3", 1]
+    assert "easycache" not in prompt["6"]["inputs"]
+    assert "blockcache" not in prompt["6"]["inputs"]
+    assert ui_nodes[3]["widgets_values"] == [prompt["3"]["inputs"]["preset"]]
+    assert ui_nodes[2]["widgets_values"][0:3] == [5.0, 7, 0]
+    assert ui_nodes[2]["widgets_values"][10] == "low_memory_bf16"
+
+
+def test_h3_384p_four_evaluation_turbo_workflow_is_dense_and_cache_free():
+    prompt = json.loads((ROOT / "examples" / "h3_384p_turbo_4real_api.json").read_text())
+    workflow = json.loads((ROOT / "workflows" / "h3_384p_turbo_4real.json").read_text())
+    ui_nodes = {node["id"]: node for node in workflow["nodes"]}
+
+    assert len(ui_nodes) == 7
+    assert {node["type"] for node in ui_nodes.values()} <= set(NODE_CLASS_MAPPINGS)
+    assert prompt["1"]["inputs"] == PORTABLE_T2VA_INPUTS
+    assert prompt["2"]["inputs"]["steps"] == 5
+    assert prompt["2"]["inputs"]["memory_mode"] == "low_memory_bf16"
+    assert prompt["2"]["inputs"]["short_edge"] == 384
+    assert prompt["3"]["inputs"]["preset"] == (
+        "Turbo — drbaph v4 step-600 — 384p low-memory — 5 points / 4 evaluations"
+    )
+    assert prompt["6"]["inputs"]["loras"] == ["3", 1]
+    assert "easycache" not in prompt["6"]["inputs"]
+    assert "blockcache" not in prompt["6"]["inputs"]
+    assert "trajectory_forecast" not in prompt["6"]["inputs"]
+    assert ui_nodes[2]["widgets_values"][0:3] == [5.0, 5, 0]
+    assert ui_nodes[3]["widgets_values"] == [prompt["3"]["inputs"]["preset"]]
+
+
 def test_h3_15_second_one_shot_workflow_is_the_portable_quality_control():
     prompt = json.loads(
         (ROOT / "examples" / "h3_768p_15s_one_clip_staged_turbo_api.json").read_text()

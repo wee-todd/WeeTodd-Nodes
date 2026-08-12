@@ -29,6 +29,14 @@ from minimax_h3_mlx.pipeline import MiniMaxH3Pipeline
 from minimax_h3_mlx.text_encoder import MiniMaxH3TextEncoder
 
 
+def _load_transformer(path: Path):
+    if (path / "paged_manifest.json").is_file():
+        from minimax_h3_mlx.paged_checkpoint import load_paged_dit
+
+        return load_paged_dit(path)
+    return load_dit(path)
+
+
 def _save_final_latents(output_directory: Path, result) -> Path:
     output_directory.mkdir(parents=True, exist_ok=True)
     target = output_directory / "final_latents.safetensors"
@@ -135,7 +143,7 @@ def main() -> int:
     del encoder
     gc.collect()
     mx.clear_cache()
-    dit = load_dit(args.transformer)
+    dit = _load_transformer(args.transformer)
     quantization = None
     block_overrides = parse_block_bit_overrides(args.quantize_block_bit)
     module_overrides = parse_module_bit_overrides(args.quantize_module_bit)
@@ -247,6 +255,7 @@ def main() -> int:
     latent_path = _save_final_latents(args.output, result) if args.save_final_latents else None
     metadata = session.write_metadata()
     run_path = args.output / "run.json"
+    paged = getattr(dit, "paged_blocks", None)
     run_path.write_text(
         json.dumps(
             {
@@ -272,6 +281,14 @@ def main() -> int:
                     else None
                 ),
                 "final_latents": latent_path.name if latent_path is not None else None,
+                "paged_weights": paged.report() if paged is not None else None,
+                "prepared_state": {
+                    "cache_hits": result.prepared_state_cache_hits,
+                    "cache_builds": result.prepared_state_cache_builds,
+                    "cache_bytes": result.prepared_state_cache_bytes,
+                    "build_seconds": result.prepared_state_build_seconds,
+                    "key": result.prepared_state_key,
+                },
             },
             indent=2,
         )
@@ -280,6 +297,8 @@ def main() -> int:
     if hybrid_controller is not None:
         hybrid_path = args.output / "hybrid.json"
         hybrid_path.write_text(json.dumps(hybrid_controller.history, indent=2) + "\n")
+    if paged is not None:
+        paged.close()
     print(metadata)
     return 0
 

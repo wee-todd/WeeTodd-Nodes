@@ -9,6 +9,7 @@ import pytest
 from wee_todd_nodes.nodes import (
     NODE_CLASS_MAPPINGS,
     WeeToddH3ComponentLoader,
+    WeeToddH3EasyCache,
     WeeToddH3FirstFrame,
     WeeToddH3FirstLastFrame,
     WeeToddH3GenerationConfig,
@@ -29,7 +30,48 @@ from wee_todd_nodes.nodes import (
     _publication_environment,
     _resolve_h3_resolution,
     _safe_output_target,
+    _save_h3_preview_contact_sheet,
 )
+
+
+def test_live_preview_contact_sheet_is_published_atomically(tmp_path, monkeypatch):
+    from PIL import Image
+
+    monkeypatch.setitem(
+        sys.modules,
+        "folder_paths",
+        SimpleNamespace(get_output_directory=lambda: str(tmp_path)),
+    )
+    path = _save_h3_preview_contact_sheet(Image.new("RGB", (32, 16), "red"), 1, 4)
+
+    assert path == tmp_path / "WeeTodd" / "previews" / "h3_live_preview_eval_01_of_04.jpg"
+    assert path.is_file()
+    assert not path.with_suffix(".tmp.jpg").exists()
+
+
+def test_easycache_exposes_fresh_head_core_residual_strategy_without_changing_default():
+    inputs = WeeToddH3EasyCache.INPUT_TYPES()
+    assert inputs["optional"]["reuse_strategy"][0] == [
+        "output_residual",
+        "core_residual_fresh_heads",
+    ]
+    assert inputs["optional"]["allow_turbo_experimental"][1]["default"] is False
+
+    (legacy,) = WeeToddH3EasyCache().configure("manual", 0.2, 0.15, 0.95, 1.15, 0.25)
+    (fresh_heads,) = WeeToddH3EasyCache().configure(
+        "manual",
+        0.2,
+        0.15,
+        0.95,
+        1.15,
+        0.25,
+        "core_residual_fresh_heads",
+        True,
+    )
+
+    assert legacy.reuse_strategy == "output_residual"
+    assert fresh_heads.reuse_strategy == "core_residual_fresh_heads"
+    assert fresh_heads.allow_turbo_experimental is True
 
 
 def test_trim_timing_metadata_explicitly_authorizes_changed_frame_count():
@@ -97,6 +139,7 @@ def test_sampling_metadata_preserves_exact_prompt(monkeypatch):
         "transformer": {"format": "weetodd-h3-paged-v1"},
         "text_encoder": {"format": "weetodd-h3-qwen-paged-v1"},
     }
+    assert parsed["prepared_state"] is None
 
 
 def test_hires_fix_resolves_target_and_preserves_audio_contract(monkeypatch):
@@ -180,7 +223,7 @@ def test_hires_fix_resolves_target_and_preserves_audio_contract(monkeypatch):
 
 
 def test_expected_nodes_are_registered():
-    assert len(NODE_CLASS_MAPPINGS) == 48
+    assert len(NODE_CLASS_MAPPINGS) == 53
     assert "WeeToddH3ComponentLoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3QuantizedTransformerLoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3Preflight" in NODE_CLASS_MAPPINGS
@@ -224,6 +267,11 @@ def test_expected_nodes_are_registered():
     assert "WeeToddLTX23UpscalerLoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddLTX23UpscalePublish" in NODE_CLASS_MAPPINGS
     assert "WeeToddLTX23Unload" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX25ComponentLoader" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX25GenerationConfig" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX25Preflight" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX25Generate" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX25Unload" in NODE_CLASS_MAPPINGS
 
 
 def test_continuation_context_defaults_to_quality_first_22_frames():
@@ -389,7 +437,25 @@ def test_validated_chained_context_presets_match_measured_policies(tmp_path, mon
             "minimax_h3_turbo_v4_step600_ema.safetensors",
         ),
         (
+            "Turbo — drbaph v4 step-600 — 5 points / 4 evaluations",
+            "minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors",
+        ),
+        (
+            (
+                "Turbo — drbaph v4 step-600 — 384p low-memory — "
+                "5 points / 4 evaluations"
+            ),
+            "minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors",
+        ),
+        (
             "Staged Turbo — drbaph v4 step-600 — 2 base + 4 Turbo evaluations",
+            "minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors",
+        ),
+        (
+            (
+                "Staged Turbo — drbaph v4 step-600 — 384p low-memory — "
+                "2 base + 4 Turbo evaluations"
+            ),
             "minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors",
         ),
         (

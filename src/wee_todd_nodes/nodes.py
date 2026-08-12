@@ -141,6 +141,21 @@ def _h3_preview_contact_sheet(frames, completed: int, total: int):
     return sheet
 
 
+def _save_h3_preview_contact_sheet(image, completed: int, total: int) -> Path | None:
+    """Publish a stable sampler-preview artifact beside normal ComfyUI outputs."""
+    try:
+        import folder_paths
+    except ImportError:
+        return None
+    directory = Path(folder_paths.get_output_directory()) / "WeeTodd" / "previews"
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"h3_live_preview_eval_{completed:02d}_of_{total:02d}.jpg"
+    temporary = path.with_suffix(".tmp.jpg")
+    image.save(temporary, format="JPEG", quality=92)
+    temporary.replace(path)
+    return path
+
+
 _COMPONENT_MODEL_CATEGORIES = {
     "checkpoint": ("checkpoints", "diffusers", "diffusion_models"),
     "transformer": ("diffusion_models", "checkpoints", "diffusers"),
@@ -313,6 +328,30 @@ _H3_VALIDATED_SAMPLING_PRESETS = {
         "policy": "turbo",
         "lora": "minimax_h3_turbo_v4_step600_ema.safetensors",
     },
+    "Turbo — drbaph v4 step-600 — 5 points / 4 evaluations": {
+        "steps": 5,
+        "policy": "turbo",
+        "lora": "minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors",
+    },
+    "Turbo — drbaph v4 step-600 — 384p low-memory — 5 points / 4 evaluations": {
+        "steps": 5,
+        "policy": "turbo",
+        "lora": "minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors",
+        "measurement": {
+            "task": "t2va",
+            "seed": 0,
+            "canvas": [640, 384],
+            "duration_seconds": 5.0,
+            "memory_mode": "low_memory_bf16",
+            "transformer_evaluations": 4,
+            "cache": "disabled",
+            "complete_workflow_seconds": 150.965,
+            "complete_process_peak_bytes": 14951286752,
+            "seconds_per_evaluation": 28.621493291517254,
+            "output_frames": 124,
+            "audio_sample_rate": 32000,
+        },
+    },
     "Staged Turbo — drbaph v4 step-600 — 2 base + 4 Turbo evaluations": {
         "steps": 7,
         "policy": "turbo",
@@ -328,6 +367,26 @@ _H3_VALIDATED_SAMPLING_PRESETS = {
             "sampling_seconds": 1275.5262,
             "complete_workflow_seconds": 1415.689,
             "av_drift_seconds": 0.0083333,
+        },
+    },
+    "Staged Turbo — drbaph v4 step-600 — 384p low-memory — 2 base + 4 Turbo evaluations": {
+        "steps": 7,
+        "policy": "turbo",
+        "lora": "minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors",
+        "start_after_evaluations": 2,
+        "measurement": {
+            "task": "t2va",
+            "seed": 0,
+            "canvas": [640, 384],
+            "duration_seconds": 5.0,
+            "memory_mode": "low_memory_bf16",
+            "transformer_evaluations": 6,
+            "base_evaluations": 2,
+            "lora_evaluations": 4,
+            "complete_workflow_seconds": 203.493,
+            "complete_process_peak_bytes": 14908409896,
+            "output_frames": 124,
+            "audio_sample_rate": 32000,
         },
     },
     "One-shot staged Turbo — drbaph v4 step-600 — 15-second quality baseline": {
@@ -637,7 +696,7 @@ class WeeToddH3PreviewOverride:
                         ),
                     },
                 ),
-            }
+            },
         }
 
     RETURN_TYPES = ("WEETODD_H3_COMPONENTS",)
@@ -1001,6 +1060,21 @@ class WeeToddH3ReferenceVideo:
             "required": {
                 "video_frames": ("IMAGE",),
                 "fps": ("FLOAT", {"default": 24.0, "min": 0.01, "max": 240.0, "step": 0.01}),
+                "video_size": (
+                    [
+                        "match output (recommended)",
+                        "native H3 reference canvas (high detail / slow)",
+                    ],
+                    {
+                        "default": "match output (recommended)",
+                        "tooltip": (
+                            "Match output preserves aspect and downsizes only to the generated "
+                            "video's pixel area. Native H3 canvas may improve fine reference "
+                            "detail, but persistent reference tokens make every forward pass "
+                            "slower and increase memory use."
+                        ),
+                    },
+                ),
             },
             "optional": {
                 "soundtrack": ("AUDIO",),
@@ -1014,13 +1088,27 @@ class WeeToddH3ReferenceVideo:
     CATEGORY = "WeeTodd/H3/conditioning"
     DESCRIPTION = (
         "Append a video motion and camera reference, with an optional synchronized soundtrack. "
-        "Supply the source frame rate explicitly."
+        "Supply the source frame rate explicitly. The recommended default matches the output "
+        "pixel area; native reference resolution is available but can be dramatically slower."
     )
 
-    def append(self, video_frames, fps, soundtrack=None, previous_references=None):
+    def append(
+        self,
+        video_frames,
+        fps,
+        video_size="match output (recommended)",
+        soundtrack=None,
+        previous_references=None,
+    ):
         return _append_reference(
             previous_references,
-            H3ReferenceInput("video", video_frames, fps=fps, soundtrack=soundtrack),
+            H3ReferenceInput(
+                "video",
+                video_frames,
+                fps=fps,
+                soundtrack=soundtrack,
+                video_size_mode=video_size,
+            ),
         )
 
 
@@ -1669,6 +1757,7 @@ class WeeToddH3Sample:
                 check_interrupted()
             if progress is not None and update.frames is not None:
                 image = _h3_preview_contact_sheet(update.frames, completed, total)
+                _save_h3_preview_contact_sheet(image, completed, total)
                 progress.update_absolute(
                     completed,
                     total,
@@ -1725,6 +1814,10 @@ class WeeToddH3Sample:
             "transformer_evaluations": latents.transformer_evaluations,
             "easycache_skipped_steps": latents.easycache_skipped_steps,
             "easycache_resolved_threshold": latents.easycache_resolved_threshold,
+            "easycache_reuse_strategy": getattr(
+                latents, "easycache_reuse_strategy", None
+            ),
+            "easycache_cache_bytes": getattr(latents, "easycache_cache_bytes", 0),
             "easycache": asdict(easycache) if easycache is not None else None,
             "blockcache_hits": getattr(latents, "blockcache_hits", 0),
             "blockcache_resolved_threshold": getattr(
@@ -1778,6 +1871,7 @@ class WeeToddH3Sample:
                 "transformer": getattr(latents, "paging_report", None),
                 "text_encoder": getattr(latents, "text_encoder_paging_report", None),
             },
+            "prepared_state": getattr(latents, "prepared_state_report", None),
             "preview_policy": (
                 {
                     "model": Path(preview_config.tae_path).name,
@@ -1916,6 +2010,7 @@ class WeeToddH3LatentHiresFix:
                 check_interrupted()
             if progress is not None and update.frames is not None:
                 image = _h3_preview_contact_sheet(update.frames, completed, total)
+                _save_h3_preview_contact_sheet(image, completed, total)
                 progress.update_absolute(
                     completed,
                     total,
@@ -2215,7 +2310,23 @@ class WeeToddH3EasyCache:
                     "FLOAT",
                     {"default": 0.25, "min": 0.0, "max": 0.5, "step": 0.05},
                 ),
-            }
+            },
+            "optional": {
+                "reuse_strategy": (
+                    ["output_residual", "core_residual_fresh_heads"],
+                    {"default": "output_residual"},
+                ),
+                "allow_turbo_experimental": (
+                    "BOOLEAN",
+                    {
+                        "default": False,
+                        "tooltip": (
+                            "Allow Turbo LoRA with EasyCache for controlled comparisons. "
+                            "This combination can change video and audio."
+                        ),
+                    },
+                ),
+            },
         }
 
     RETURN_TYPES = ("WEETODD_H3_EASYCACHE",)
@@ -2235,6 +2346,8 @@ class WeeToddH3EasyCache:
         end_percent,
         auto_multiplier,
         max_skip_fraction,
+        reuse_strategy="output_residual",
+        allow_turbo_experimental=False,
     ):
         from minimax_h3_mlx.easycache import H3EasyCacheConfig
 
@@ -2245,6 +2358,8 @@ class WeeToddH3EasyCache:
             end_percent=end_percent,
             auto_multiplier=auto_multiplier,
             max_skip_fraction=max_skip_fraction,
+            reuse_strategy=reuse_strategy,
+            allow_turbo_experimental=allow_turbo_experimental,
         )
         config.validate()
         return (config,)
@@ -3542,3 +3657,15 @@ from .ltx_nodes import (  # noqa: E402
 
 NODE_CLASS_MAPPINGS.update(LTX23_NODE_CLASS_MAPPINGS)
 NODE_DISPLAY_NAME_MAPPINGS.update(LTX23_NODE_DISPLAY_NAME_MAPPINGS)
+
+# LTX 2.5 uses its own split-component contract and never aliases LTX 2.3
+# checkpoints or Gemma 3 state. Imports remain lightweight until execution.
+from .ltx25_nodes import (  # noqa: E402
+    NODE_CLASS_MAPPINGS as LTX25_NODE_CLASS_MAPPINGS,
+)
+from .ltx25_nodes import (  # noqa: E402
+    NODE_DISPLAY_NAME_MAPPINGS as LTX25_NODE_DISPLAY_NAME_MAPPINGS,
+)
+
+NODE_CLASS_MAPPINGS.update(LTX25_NODE_CLASS_MAPPINGS)
+NODE_DISPLAY_NAME_MAPPINGS.update(LTX25_NODE_DISPLAY_NAME_MAPPINGS)

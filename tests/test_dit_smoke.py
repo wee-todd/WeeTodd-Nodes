@@ -17,7 +17,7 @@ from minimax_h3_mlx.algorithm_search.capture import CaptureConfig, DiagnosticSes
 from minimax_h3_mlx.blockcache import H3BlockCacheConfig
 from minimax_h3_mlx.config import TAG_AUDIO, TAG_TEXT, TAG_VIDEO, DiTConfig
 from minimax_h3_mlx.dit import MiniMaxH3DiT
-from minimax_h3_mlx.easycache import H3EasyCacheConfig
+from minimax_h3_mlx.easycache import H3EasyCacheConfig, H3EasyCacheState
 from minimax_h3_mlx.pipeline import MiniMaxH3Pipeline
 from minimax_h3_mlx.ref2va import PreparedReference
 from minimax_h3_mlx.trajectory_forecast import H3TrajectoryForecastConfig
@@ -180,6 +180,24 @@ def test_transformer_only_text_sampling_shapes():
         (1, 2, tuple(result.video_latents.shape)),
         (2, 2, tuple(result.video_latents.shape)),
     ]
+    assert result.prepared_state_cache_builds == 1
+    assert result.prepared_state_cache_hits == 0
+    assert result.prepared_state_cache_bytes > 0
+    assert len(result.prepared_state_key) == 16
+
+    repeated = pipeline.sample_latents(
+        mx.random.normal((1, 3, cfg.text_dim)),
+        np.full((3,), TAG_TEXT, dtype=np.int32),
+        duration_seconds=5.0,
+        num_inference_steps=3,
+        height=32,
+        width=32,
+        drop_adaln=False,
+        verbose=False,
+    )
+    assert repeated.prepared_state_cache_builds == 1
+    assert repeated.prepared_state_cache_hits == 1
+    assert repeated.prepared_state_key == result.prepared_state_key
 
 
 def test_transformer_only_continuation_sampling_shapes():
@@ -537,6 +555,53 @@ def test_h3_easycache_skips_joint_video_audio_evaluation():
     assert result.transformer_evaluations + result.easycache_skipped_steps == 5
     assert result.video_latents.shape == (1, cfg.latents_dim, 37, 2, 2)
     assert result.audio_latents.shape == (2, cfg.audio_latents_dim, 207)
+
+
+def test_h3_easycache_core_residual_reuses_blocks_with_fresh_output_heads():
+    cfg = tiny_config()
+    mx.random.seed(4)
+    pipeline = MiniMaxH3Pipeline(MiniMaxH3DiT(cfg), None, None, None)
+
+    result = pipeline.sample_latents(
+        mx.random.normal((1, 3, cfg.text_dim)),
+        np.full((3,), TAG_TEXT, dtype=np.int32),
+        duration_seconds=5.0,
+        num_inference_steps=6,
+        height=32,
+        width=32,
+        drop_adaln=False,
+        verbose=False,
+        easycache_config=H3EasyCacheConfig(
+            reuse_threshold=100.0,
+            start_percent=0.0,
+            end_percent=1.0,
+            reuse_strategy="core_residual_fresh_heads",
+        ),
+    )
+
+    assert result.easycache_skipped_steps > 0
+    assert result.transformer_evaluations + result.easycache_skipped_steps == 5
+    assert result.transformer_evaluations >= 3
+    assert result.easycache_reuse_strategy == "core_residual_fresh_heads"
+    assert result.easycache_cache_bytes > 0
+    assert result.video_latents.shape == (1, cfg.latents_dim, 37, 2, 2)
+    assert result.audio_latents.shape == (2, cfg.audio_latents_dim, 207)
+
+
+def test_h3_easycache_core_residual_is_applied_to_current_packed_input():
+    state = H3EasyCacheState(
+        H3EasyCacheConfig(reuse_strategy="core_residual_fresh_heads")
+    )
+    before = mx.arange(24, dtype=mx.float32).reshape(1, 3, 8)
+    after = before * 2
+    current = mx.full(before.shape, 10.0)
+
+    state.update_core(before, after)
+    reused = state.reuse_core(current)
+    mx.eval(reused)
+
+    assert mx.array_equal(reused, current + (after - before))
+    assert state.cache_bytes == int(state.core_residual.nbytes)
 
 
 def test_h3_blockcache_reuses_later_blocks_but_runs_each_sampling_step():

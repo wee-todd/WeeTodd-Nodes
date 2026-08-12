@@ -8,6 +8,7 @@ import json
 import os
 import shutil
 import tempfile
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,6 +18,7 @@ import mlx.core as mx
 from mlx.utils import tree_flatten, tree_unflatten
 
 from .load import shard_paths
+from .page_prefetch import SequentialPagePrefetch
 
 PAGED_FORMAT = "weetodd-h3-paged-v1"
 PAGED_MANIFEST = "paged_manifest.json"
@@ -193,6 +195,7 @@ class PagedBlockExecutor:
         config,
         quant_config,
         window_size: int = 4,
+        prefetch: bool | None = None,
     ):
         if window_size < 1:
             raise ValueError("Paged H3 block window size must be positive.")
@@ -202,6 +205,19 @@ class PagedBlockExecutor:
         self.window_size = int(window_size)
         self.query_chunk_size: int | None = None
         self.store = PagedTensorStore(manifest)
+        if prefetch is None:
+            value = os.environ.get("WEETODD_H3_TRANSFORMER_PREFETCH", "0").strip().lower()
+            prefetch = value not in {"0", "false", "no", "off"}
+        self.prefetch = SequentialPagePrefetch(
+            manifest.root,
+            manifest.blocks,
+            enabled=prefetch,
+            thread_name="h3-transformer-prefetch",
+            backend="darwin_advisory",
+        )
+        self.windows_materialized = 0
+        self.window_setup_seconds = 0.0
+        self.window_compute_seconds = 0.0
         self.lora_requests: list[tuple[Any, mx.array | None]] = []
         self.lora_timesteps: mx.array | None = None
 
@@ -215,8 +231,11 @@ class PagedBlockExecutor:
         from .dit import TransformerBlock
         from .quantize import apply_block_quantization_structure
 
-        values = self.store.load_block_window(start, self.window_size)
         stop = min(start + self.window_size, self.num_blocks)
+        size = stop - start
+        self.prefetch.wait(start, size)
+        setup_started = time.perf_counter()
+        values = self.store.load_block_window(start, self.window_size)
         blocks = []
         try:
             for index in range(start, stop):
@@ -251,19 +270,34 @@ class PagedBlockExecutor:
                     )
                 blocks.append(block)
             mx.eval(tuple(block.parameters() for block in blocks))
+            self.windows_materialized += 1
+            self.window_setup_seconds += time.perf_counter() - setup_started
+            if stop < self.num_blocks:
+                self.prefetch.start(
+                    stop, min(self.window_size, self.num_blocks - stop)
+                )
+            compute_started = time.perf_counter()
             yield blocks
+            self.window_compute_seconds += time.perf_counter() - compute_started
         finally:
             blocks.clear()
             values.clear()
             self.store.release()
 
-    def report(self) -> dict[str, int | str]:
+    def close(self) -> None:
+        self.prefetch.close()
+
+    def report(self) -> dict[str, int | float | bool | str]:
         return {
             "format": PAGED_FORMAT,
             "window_size": self.window_size,
             "pages_loaded": self.store.pages_loaded,
             "peak_window_bytes": self.store.peak_page_bytes,
             "lora_count": len(self.lora_requests),
+            "windows_materialized": self.windows_materialized,
+            "window_setup_seconds": self.window_setup_seconds,
+            "window_compute_seconds": self.window_compute_seconds,
+            **self.prefetch.report(),
         }
 
 
@@ -272,6 +306,7 @@ def load_paged_dit(
     *,
     window_size: int = 4,
     verify_hashes: bool = False,
+    prefetch: bool | None = None,
 ):
     """Load fixed H3 tensors and attach a bounded block executor for direct inference."""
     from .config import DiTConfig
@@ -328,7 +363,9 @@ def load_paged_dit(
     finally:
         fixed.clear()
         store.release()
-    model.paged_blocks = PagedBlockExecutor(manifest, config, quant_config, window_size)
+    model.paged_blocks = PagedBlockExecutor(
+        manifest, config, quant_config, window_size, prefetch
+    )
     return model
 
 

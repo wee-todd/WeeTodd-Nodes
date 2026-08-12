@@ -10,10 +10,19 @@ from minimax_h3_mlx.ref2va import (
     PreparedReference,
     build_ref2va_packed_sequence,
     encode_reference_video_rows,
+    trim_reference_num_frames,
     validate_reference_set,
 )
 
 PATCH = (1, 2, 2)
+
+
+@pytest.mark.parametrize(
+    ("frames", "expected"),
+    [(5, 5), (6, 5), (21, 5), (22, 22), (38, 22), (39, 39), (124, 124)],
+)
+def test_reference_video_frame_count_snaps_down(frames, expected):
+    assert trim_reference_num_frames(frames) == expected
 
 
 def test_ref2va_image_encoding_uses_posterior_mean_not_sample():

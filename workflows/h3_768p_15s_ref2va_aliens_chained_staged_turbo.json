@@ -627,7 +627,9 @@
       "properties": {
         "Node name for S&R": "WeeToddH3ReferenceVideo"
       },
-      "widgets_values": []
+      "widgets_values": [
+        "native H3 reference canvas (high detail / slow)"
+      ]
     },
     {
       "id": 14,
@@ -1032,7 +1034,9 @@
       "properties": {
         "Node name for S&R": "WeeToddH3ReferenceVideo"
       },
-      "widgets_values": []
+      "widgets_values": [
+        "native H3 reference canvas (high detail / slow)"
+      ]
     },
     {
       "id": 23,
@@ -1447,7 +1451,9 @@
       "properties": {
         "Node name for S&R": "WeeToddH3ReferenceVideo"
       },
-      "widgets_values": []
+      "widgets_values": [
+        "native H3 reference canvas (high detail / slow)"
+      ]
     },
     {
       "id": 32,
@@ -1862,7 +1868,9 @@
       "properties": {
         "Node name for S&R": "WeeToddH3ReferenceVideo"
       },
-      "widgets_values": []
+      "widgets_values": [
+        "native H3 reference canvas (high detail / slow)"
+      ]
     },
     {
       "id": 41,

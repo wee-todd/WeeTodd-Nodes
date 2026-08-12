@@ -32,34 +32,8 @@ def _resolve_ltx_model_root(value: str) -> Path:
     path = Path(value).expanduser()
     if path.is_absolute() or path.exists():
         return path
-
-
-def _resolve_gemma_root(value: str) -> str:
-    """Resolve explicit Comfy model paths while leaving cached repo IDs intact."""
-    path = Path(value).expanduser()
-    if path.is_absolute() or path.exists():
-        return str(path)
     if ".." in path.parts:
-        raise ValueError("Relative Gemma model paths cannot contain '..'.")
-    try:
-        import folder_paths
-
-        roots = []
-        for category in ("text_encoders", "clip", "LLM", "llm"):
-            try:
-                roots.extend(Path(root) for root in folder_paths.get_folder_paths(category))
-            except KeyError:
-                continue
-        roots.append(Path(folder_paths.models_dir))
-        for root in roots:
-            candidate = root / path
-            if candidate.is_dir():
-                return str(candidate)
-    except ImportError:
-        pass
-    return value
-    if ".." in path.parts:
-        raise ValueError("Relative LTX 2.3 model paths cannot contain '..'.")
+        raise ValueError("Relative LTX model paths cannot contain '..'.")
     try:
         import folder_paths
 
@@ -91,6 +65,32 @@ def _resolve_gemma_root(value: str) -> str:
         return models_dir / path
     except ImportError:
         return path
+
+
+def _resolve_gemma_root(value: str) -> str:
+    """Resolve explicit Comfy model paths while leaving cached repo IDs intact."""
+    path = Path(value).expanduser()
+    if path.is_absolute() or path.exists():
+        return str(path)
+    if ".." in path.parts:
+        raise ValueError("Relative Gemma model paths cannot contain '..'.")
+    try:
+        import folder_paths
+
+        roots = []
+        for category in ("text_encoders", "clip", "LLM", "llm"):
+            try:
+                roots.extend(Path(root) for root in folder_paths.get_folder_paths(category))
+            except KeyError:
+                continue
+        roots.append(Path(folder_paths.models_dir))
+        for root in roots:
+            candidate = root / path
+            if candidate.is_dir():
+                return str(candidate)
+    except ImportError:
+        pass
+    return value
 
 
 def _output_directory() -> Path:

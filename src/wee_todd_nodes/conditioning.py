@@ -182,6 +182,9 @@ class H3TextEncoderCache:
             self._release_locked()
 
     def _release_locked(self) -> None:
+        pager = getattr(self._encoder, "paged_layers", None)
+        if pager is not None and hasattr(pager, "close"):
+            pager.close()
         self._encoder = None
         self._spec = None
         gc.collect()

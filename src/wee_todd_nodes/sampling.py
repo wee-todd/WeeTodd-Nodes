@@ -94,6 +94,8 @@ class H3Latents:
     generation_config: H3GenerationConfig
     easycache_skipped_steps: int = 0
     easycache_resolved_threshold: float | None = None
+    easycache_reuse_strategy: str | None = None
+    easycache_cache_bytes: int = 0
     blockcache_hits: int = 0
     blockcache_resolved_threshold: float | None = None
     blockcache_cache_bytes: int = 0
@@ -125,6 +127,7 @@ class H3Latents:
     refinement_strength: float | None = None
     refinement_audio_preserved: bool = False
     preview_report: tuple[dict[str, Any], ...] = ()
+    prepared_state_report: dict[str, int | float | str | None] | None = None
 
 
 SamplerFactory = Callable[[H3TransformerSpec], Any]
@@ -279,10 +282,14 @@ class H3TransformerCache:
                 "Staged LoRA activation requires dense transformer evaluations. Disconnect "
                 "EasyCache, BlockCache, and Trajectory Forecast before sampling."
             )
-        if loras.has_turbo and easycache is not None:
+        if (
+            loras.has_turbo
+            and easycache is not None
+            and not getattr(easycache, "allow_turbo_experimental", False)
+        ):
             raise ValueError(
-                "Turbo LoRA sampling does not support EasyCache. Disconnect the cache node "
-                "before sampling."
+                "Turbo LoRA with EasyCache requires the explicit experimental opt-in on the "
+                "EasyCache node. This combination may change motion, detail, or audio."
             )
         if (
             loras.has_turbo
@@ -451,6 +458,10 @@ class H3TransformerCache:
                     easycache_resolved_threshold=getattr(
                         result, "easycache_resolved_threshold", None
                     ),
+                    easycache_reuse_strategy=getattr(
+                        result, "easycache_reuse_strategy", None
+                    ),
+                    easycache_cache_bytes=getattr(result, "easycache_cache_bytes", 0),
                     blockcache_hits=getattr(result, "blockcache_hits", 0),
                     blockcache_resolved_threshold=getattr(
                         result, "blockcache_resolved_threshold", None
@@ -504,6 +515,15 @@ class H3TransformerCache:
                     refinement_strength=getattr(result, "refinement_strength", None),
                     refinement_audio_preserved=getattr(result, "refinement_audio_preserved", False),
                     preview_report=tuple(preview_reports),
+                    prepared_state_report={
+                        "cache_hits": getattr(result, "prepared_state_cache_hits", 0),
+                        "cache_builds": getattr(result, "prepared_state_cache_builds", 0),
+                        "cache_bytes": getattr(result, "prepared_state_cache_bytes", 0),
+                        "build_seconds": getattr(
+                            result, "prepared_state_build_seconds", 0.0
+                        ),
+                        "key": getattr(result, "prepared_state_key", None),
+                    },
                     seconds_per_evaluation=result.seconds_per_evaluation,
                     total_seconds=result.total_seconds,
                     transformer_spec=spec,
@@ -528,6 +548,10 @@ class H3TransformerCache:
             self._release_locked()
 
     def _release_locked(self) -> None:
+        dit = getattr(self._sampler, "dit", None)
+        pager = getattr(dit, "paged_blocks", None)
+        if pager is not None and hasattr(pager, "close"):
+            pager.close()
         self._sampler = None
         self._spec = None
         self._schedule_key = None

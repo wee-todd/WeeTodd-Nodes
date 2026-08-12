@@ -5,10 +5,12 @@ import json
 import mlx.core as mx
 import pytest
 
+from minimax_h3_mlx.page_prefetch import PagePrefetchResult, SequentialPagePrefetch
 from minimax_h3_mlx.paged_checkpoint import PagedTensorStore
 from minimax_h3_mlx.paged_text_encoder import (
     PAGED_QWEN_MANIFEST,
     PagedTextEncoderManifest,
+    PagedTextLayerExecutor,
     convert_to_paged_text_encoder,
 )
 
@@ -90,3 +92,98 @@ def test_text_manifest_rejects_modified_layer(tmp_path):
 
     with pytest.raises(ValueError, match="hash differs"):
         PagedTextEncoderManifest.load(destination, verify_hashes=True)
+
+
+def test_sequential_page_prefetch_reads_one_bounded_future(tmp_path):
+    manifest = convert_to_paged_text_encoder(
+        _source(tmp_path), tmp_path / "paged", num_layers=2
+    )
+    prefetch = SequentialPagePrefetch(manifest.root, manifest.layers)
+
+    prefetch.start(1)
+    assert prefetch.wait(1) is True
+    report = prefetch.report()
+    prefetch.close()
+
+    assert report["prefetch_enabled"] is True
+    assert report["prefetch_depth"] == 1
+    assert report["prefetch_requests"] == 1
+    assert report["prefetch_hits"] == 1
+    assert report["prefetch_failures"] == 0
+    assert report["prefetch_bytes"] == (manifest.root / manifest.layers[1].file).stat().st_size
+    assert report["prefetch_buffer_bytes"] == 8 * 1024 * 1024
+    assert 0 <= report["prefetch_wait_seconds"] <= report["prefetch_read_seconds"] + 0.1
+
+
+def test_sequential_page_prefetch_failure_uses_serial_fallback(tmp_path):
+    manifest = convert_to_paged_text_encoder(
+        _source(tmp_path), tmp_path / "paged", num_layers=2
+    )
+
+    def fail_reader(_index, _paths):
+        raise OSError("injected speculative read failure")
+
+    prefetch = SequentialPagePrefetch(
+        manifest.root, manifest.layers, reader=fail_reader
+    )
+    prefetch.start(1)
+
+    assert prefetch.wait(1) is False
+    assert set(mx.load(str(manifest.root / manifest.layers[1].file))) == {
+        "model.layers.1.self_attn.q_proj.weight"
+    }
+    assert prefetch.report()["prefetch_failures"] == 1
+    prefetch.close()
+
+
+def test_sequential_page_prefetch_can_be_disabled(tmp_path):
+    manifest = convert_to_paged_text_encoder(
+        _source(tmp_path), tmp_path / "paged", num_layers=2
+    )
+    prefetch = SequentialPagePrefetch(
+        manifest.root, manifest.layers, enabled=False
+    )
+
+    prefetch.start(1)
+
+    assert prefetch.wait(1) is False
+    assert prefetch.report()["prefetch_requests"] == 0
+    assert prefetch.report()["prefetch_buffer_bytes"] == 0
+    prefetch.close()
+
+
+def test_paged_text_layer_prefetch_defaults_off_and_can_be_enabled(tmp_path, monkeypatch):
+    manifest = convert_to_paged_text_encoder(
+        _source(tmp_path), tmp_path / "paged", num_layers=2
+    )
+    monkeypatch.delenv("WEETODD_H3_QWEN_PREFETCH", raising=False)
+    default = PagedTextLayerExecutor(manifest, object())
+    assert default.report()["prefetch_enabled"] is False
+    default.close()
+
+    monkeypatch.setenv("WEETODD_H3_QWEN_PREFETCH", "1")
+    enabled = PagedTextLayerExecutor(manifest, object())
+    assert enabled.report()["prefetch_enabled"] is True
+    enabled.close()
+
+
+def test_sequential_page_prefetch_records_reader_metrics(tmp_path):
+    manifest = convert_to_paged_text_encoder(
+        _source(tmp_path), tmp_path / "paged", num_layers=2
+    )
+
+    def measured_reader(index, paths):
+        return PagePrefetchResult(
+            index, len(paths), sum(path.stat().st_size for path in paths), 0.25
+        )
+
+    prefetch = SequentialPagePrefetch(
+        manifest.root, manifest.layers, reader=measured_reader
+    )
+    prefetch.start(1)
+    assert prefetch.wait(1) is True
+    report = prefetch.report()
+    prefetch.close()
+
+    assert report["prefetch_read_seconds"] == 0.25
+    assert 0 <= report["prefetch_hidden_seconds"] <= 0.25

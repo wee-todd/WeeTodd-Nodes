@@ -5,6 +5,8 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+CORE_RESIDUAL_REUSE = object()
+
 
 @dataclass(frozen=True)
 class H3EasyCacheConfig:
@@ -17,6 +19,8 @@ class H3EasyCacheConfig:
     subsample_factor: int = 8
     auto_multiplier: float = 1.15
     max_skip_fraction: float = 0.25
+    reuse_strategy: str = "output_residual"
+    allow_turbo_experimental: bool = False
 
     def validate(self) -> None:
         if self.mode not in {
@@ -40,6 +44,11 @@ class H3EasyCacheConfig:
             raise ValueError("EasyCache automatic multiplier must be at least 1.0.")
         if not 0 <= self.max_skip_fraction <= 0.5:
             raise ValueError("EasyCache maximum skip fraction must be between 0 and 0.5.")
+        if self.reuse_strategy not in {"output_residual", "core_residual_fresh_heads"}:
+            raise ValueError(
+                "EasyCache reuse strategy must be 'output_residual' or "
+                "'core_residual_fresh_heads'."
+            )
 
 
 class H3EasyCacheState:
@@ -54,11 +63,13 @@ class H3EasyCacheState:
         self.previous_audio_output = None
         self.video_residual = None
         self.audio_residual = None
+        self.core_residual = None
         self.output_norm: float | None = None
         self.relative_transformation_rate: float | None = None
         self.cumulative_change_rate = 0.0
         self.skipped_steps = 0
         self.consecutive_skips = 0
+        self.last_was_core_reuse = False
         self.resolved_threshold: float | None = (
             config.reuse_threshold if config.mode == "manual" else None
         )
@@ -74,6 +85,10 @@ class H3EasyCacheState:
     @property
     def _balanced_policy(self) -> bool:
         return self.config.mode == "automatic_balanced"
+
+    @property
+    def uses_core_residual(self) -> bool:
+        return self.config.reuse_strategy == "core_residual_fresh_heads"
 
     def _subsample(self, value):
         return value[:, :: self.config.subsample_factor, :]
@@ -91,6 +106,8 @@ class H3EasyCacheState:
         )
 
     def _in_window(self, index: int, total_steps: int) -> bool:
+        if self.uses_core_residual and index >= total_steps - 1:
+            return False
         progress = index / max(total_steps - 1, 1)
         if not self.config.start_percent <= progress <= self.config.end_percent:
             return False
@@ -120,11 +137,16 @@ class H3EasyCacheState:
         )
 
     def try_reuse(self, video_input, audio_input, index: int, total_steps: int):
+        self.last_was_core_reuse = False
         if not self._in_window(index, total_steps):
             return None
+        residual_missing = (
+            self.core_residual is None
+            if self.uses_core_residual
+            else self.video_residual is None or self.audio_residual is None
+        )
         if (
-            self.video_residual is None
-            or self.audio_residual is None
+            residual_missing
             or self.previous_video_input is None
             or self.previous_audio_input is None
             or self.output_norm is None
@@ -157,7 +179,28 @@ class H3EasyCacheState:
             return None
         self.skipped_steps += 1
         self.consecutive_skips += 1
+        if self.uses_core_residual:
+            self.last_was_core_reuse = True
+            return CORE_RESIDUAL_REUSE
         return video_input + self.video_residual, audio_input + self.audio_residual
+
+    def update_core(self, before_stack, after_stack) -> None:
+        """Cache the full packed block-stack residual after a real evaluation."""
+        import mlx.core as mx
+
+        self.core_residual = after_stack - before_stack
+        mx.eval(self.core_residual)
+
+    def reuse_core(self, current_input):
+        """Apply the most recent block-stack residual to freshly packed inputs."""
+        if self.core_residual is None:
+            raise RuntimeError("EasyCache core residual reuse was requested before calibration.")
+        if tuple(current_input.shape) != tuple(self.core_residual.shape):
+            raise ValueError(
+                "EasyCache packed sequence shape changed during sampling: "
+                f"input {tuple(current_input.shape)}, cache {tuple(self.core_residual.shape)}."
+            )
+        return current_input + self.core_residual
 
     def update(self, video_input, audio_input, video_output, audio_output) -> None:
         self.consecutive_skips = 0
@@ -180,8 +223,9 @@ class H3EasyCacheState:
             )
             if input_change > 1e-12:
                 self.relative_transformation_rate = output_change / input_change
-        self.video_residual = video_output - video_input
-        self.audio_residual = audio_output - audio_input
+        if not self.uses_core_residual:
+            self.video_residual = video_output - video_input
+            self.audio_residual = audio_output - audio_input
         self.previous_video_input = video_sample
         self.previous_audio_input = audio_sample
         self.previous_video_output = video_output_sample
@@ -189,3 +233,8 @@ class H3EasyCacheState:
         self.output_norm = 0.5 * (
             self._mean_abs(video_output_sample) + self._mean_abs(audio_output_sample)
         )
+
+    @property
+    def cache_bytes(self) -> int:
+        values = (self.video_residual, self.audio_residual, self.core_residual)
+        return sum(int(value.nbytes) for value in values if value is not None)
