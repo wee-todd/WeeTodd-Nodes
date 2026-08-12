@@ -1,0 +1,2809 @@
+{
+  "last_node_id": 45,
+  "last_link_id": 81,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "WeeToddH3ComponentLoader",
+      "pos": [
+        40,
+        60
+      ],
+      "size": [
+        400,
+        340
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "components",
+          "type": "WEETODD_H3_COMPONENTS",
+          "links": [
+            2
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3ComponentLoader"
+      },
+      "widgets_values": [
+        "MiniMax-H3/Ref2VA",
+        "ref2va",
+        "MiniMax-H3/Ref2VA/transformer",
+        "MiniMax-H3/Ref2VA/text_encoder",
+        "MiniMax-H3/Ref2VA/processor",
+        "MiniMax-H3/Ref2VA/tokenizer",
+        "MiniMax-H3/Ref2VA/video_vae",
+        "MiniMax-H3/Ref2VA/audio_vae",
+        false
+      ]
+    },
+    {
+      "id": 2,
+      "type": "WeeToddH3GenerationConfig",
+      "pos": [
+        40,
+        450
+      ],
+      "size": [
+        410,
+        420
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "config",
+          "type": "WEETODD_H3_CONFIG",
+          "links": [
+            1
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "resolved_resolution",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3GenerationConfig"
+      },
+      "widgets_values": [
+        4.0,
+        7,
+        20260812,
+        "exact dimensions",
+        "768 px short edge \u2014 native",
+        "16:9 \u2014 widescreen landscape",
+        768,
+        1344,
+        768,
+        true,
+        "normal",
+        "automatic",
+        "mlx",
+        "euler"
+      ]
+    },
+    {
+      "id": 3,
+      "type": "WeeToddH3ValidatedSamplingPreset",
+      "pos": [
+        500,
+        470
+      ],
+      "size": [
+        500,
+        230
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "config",
+          "type": "WEETODD_H3_CONFIG",
+          "link": 1
+        }
+      ],
+      "outputs": [
+        {
+          "name": "config",
+          "type": "WEETODD_H3_CONFIG",
+          "links": [
+            3,
+            14,
+            19,
+            31,
+            36,
+            50,
+            55,
+            69,
+            74
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "loras",
+          "type": "WEETODD_H3_LORAS",
+          "links": [
+            20,
+            38,
+            57,
+            76
+          ],
+          "slot_index": 1
+        },
+        {
+          "name": "trajectory_forecast",
+          "type": "WEETODD_H3_TRAJECTORY_FORECAST",
+          "links": null,
+          "slot_index": 2
+        },
+        {
+          "name": "preset_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 3
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3ValidatedSamplingPreset"
+      },
+      "widgets_values": [
+        "Chained staged Turbo \u2014 drbaph v4 step-600 \u2014 4 windows / 22-frame context"
+      ]
+    },
+    {
+      "id": 4,
+      "type": "WeeToddH3Preflight",
+      "pos": [
+        500,
+        80
+      ],
+      "size": [
+        390,
+        260
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "components",
+          "type": "WEETODD_H3_COMPONENTS",
+          "link": 2
+        },
+        {
+          "name": "config",
+          "type": "WEETODD_H3_CONFIG",
+          "link": 3
+        }
+      ],
+      "outputs": [
+        {
+          "name": "components",
+          "type": "WEETODD_H3_COMPONENTS",
+          "links": [
+            13,
+            17,
+            30,
+            34,
+            49,
+            53,
+            68,
+            72,
+            80
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "preflight_report",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3Preflight"
+      },
+      "widgets_values": [
+        1024,
+        0.0,
+        ""
+      ]
+    },
+    {
+      "id": 5,
+      "type": "WeeToddH3ChainedTimeline",
+      "pos": [
+        500,
+        760
+      ],
+      "size": [
+        390,
+        250
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "timeline",
+          "type": "WEETODD_H3_TIMELINE",
+          "links": [
+            21,
+            39,
+            58,
+            77
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "timeline_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3ChainedTimeline"
+      },
+      "widgets_values": [
+        4.0,
+        4,
+        "22",
+        15.0
+      ]
+    },
+    {
+      "id": 6,
+      "type": "LoadImage",
+      "pos": [
+        40,
+        1030
+      ],
+      "size": [
+        330,
+        300
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            4
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "MASK",
+          "type": "MASK",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoadImage"
+      },
+      "widgets_values": [
+        "tall_white_reference_sheet.png",
+        "image"
+      ]
+    },
+    {
+      "id": 7,
+      "type": "WeeToddH3ReferenceImage",
+      "pos": [
+        410,
+        1080
+      ],
+      "size": [
+        340,
+        190
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": 4
+        }
+      ],
+      "outputs": [
+        {
+          "name": "references",
+          "type": "WEETODD_H3_REFERENCES",
+          "links": [
+            6
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "reference_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3ReferenceImage"
+      },
+      "widgets_values": [
+        100
+      ]
+    },
+    {
+      "id": 8,
+      "type": "LoadImage",
+      "pos": [
+        40,
+        1390
+      ],
+      "size": [
+        330,
+        300
+      ],
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            5
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "MASK",
+          "type": "MASK",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoadImage"
+      },
+      "widgets_values": [
+        "grey_alien_reference_sheet.png",
+        "image"
+      ]
+    },
+    {
+      "id": 9,
+      "type": "WeeToddH3ReferenceImage",
+      "pos": [
+        410,
+        1440
+      ],
+      "size": [
+        350,
+        210
+      ],
+      "flags": {},
+      "order": 8,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": 5
+        },
+        {
+          "name": "previous_references",
+          "type": "WEETODD_H3_REFERENCES",
+          "link": 6
+        }
+      ],
+      "outputs": [
+        {
+          "name": "references",
+          "type": "WEETODD_H3_REFERENCES",
+          "links": [
+            12,
+            29,
+            48,
+            67
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "reference_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3ReferenceImage"
+      },
+      "widgets_values": [
+        100
+      ]
+    },
+    {
+      "id": 10,
+      "type": "LoadVideo",
+      "pos": [
+        40,
+        1760
+      ],
+      "size": [
+        410,
+        250
+      ],
+      "flags": {},
+      "order": 9,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "video",
+          "type": "VIDEO",
+          "links": [
+            7,
+            24,
+            43,
+            62
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoadVideo"
+      },
+      "widgets_values": [
+        "H3_768p_15s_One_Clip_Staged_Turbo_Benchmark_20260811.mp4"
+      ]
+    },
+    {
+      "id": 11,
+      "type": "Video Slice",
+      "pos": [
+        920,
+        60
+      ],
+      "size": [
+        360,
+        230
+      ],
+      "flags": {},
+      "order": 10,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "video",
+          "type": "VIDEO",
+          "link": 7
+        }
+      ],
+      "outputs": [
+        {
+          "name": "video",
+          "type": "VIDEO",
+          "links": [
+            8
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "Video Slice"
+      },
+      "widgets_values": [
+        0.0,
+        4.458333333333333,
+        false
+      ]
+    },
+    {
+      "id": 12,
+      "type": "GetVideoComponents",
+      "pos": [
+        1320,
+        60
+      ],
+      "size": [
+        340,
+        170
+      ],
+      "flags": {},
+      "order": 11,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "video",
+          "type": "VIDEO",
+          "link": 8
+        }
+      ],
+      "outputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "links": [
+            9
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "audio",
+          "type": "AUDIO",
+          "links": [
+            11
+          ],
+          "slot_index": 1
+        },
+        {
+          "name": "fps",
+          "type": "FLOAT",
+          "links": [
+            10
+          ],
+          "slot_index": 2
+        },
+        {
+          "name": "frame_count",
+          "type": "INT",
+          "links": null,
+          "slot_index": 3
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "GetVideoComponents"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 13,
+      "type": "WeeToddH3ReferenceVideo",
+      "pos": [
+        1700,
+        60
+      ],
+      "size": [
+        390,
+        250
+      ],
+      "flags": {},
+      "order": 12,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "video_frames",
+          "type": "IMAGE",
+          "link": 9
+        },
+        {
+          "name": "fps",
+          "type": "FLOAT",
+          "link": 10
+        },
+        {
+          "name": "soundtrack",
+          "type": "AUDIO",
+          "link": 11
+        },
+        {
+          "name": "previous_references",
+          "type": "WEETODD_H3_REFERENCES",
+          "link": 12
+        }
+      ],
+      "outputs": [
+        {
+          "name": "references",
+          "type": "WEETODD_H3_REFERENCES",
+          "links": [
+            15
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "reference_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3ReferenceVideo"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 14,
+      "type": "WeeToddH3ReferenceEncode",
+      "pos": [
+        2140,
+        60
+      ],
+      "size": [
+        700,
+        470
+      ],
+      "flags": {},
+      "order": 13,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "components",
+          "type": "WEETODD_H3_COMPONENTS",
+          "link": 13
+        },
+        {
+          "name": "config",
+          "type": "WEETODD_H3_CONFIG",
+          "link": 14
+        },
+        {
+          "name": "references",
+          "type": "WEETODD_H3_REFERENCES",
+          "link": 15
+        }
+      ],
+      "outputs": [
+        {
+          "name": "conditioning",
+          "type": "WEETODD_H3_CONDITIONING",
+          "links": [
+            16
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "conditioning_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3ReferenceEncode"
+      },
+      "widgets_values": [
+        "<Picture 1> defines the single tall white extraterrestrial's elongated face, pale white skin, large blue-gray eyes, fine swept-back white hair, very tall slender proportions, hands, feet, and fitted white clothing from all shown angles. <Picture 2> defines the single short grey extraterrestrial's oversized smooth head, enormous glossy black eyes, small mouth, gray-green skin texture, lean ribbed torso, long fingers, and compact body from all shown angles. <Video 1> supplies the corresponding segment's live-action blocking, camera movement, physical timing, dialogue pacing, and continuous desert sound. Replace the two people in <Video 1> with the two extraterrestrials while preserving the characters from <Picture 1> and <Picture 2> as distinct individuals. Do not inherit either person's face, hair color, eye color, clothing, height, skin color, or body proportions from <Video 1>.\n\nintegrated_multimodal_description: [Shot 1] Begin one continuous photorealistic mockumentary shot at the barren desert excavation site shown in <Video 1>, in harsh afternoon sunlight. The short grey from <Picture 2> stands inside the grave-sized hole and angrily throws several heavy shovelfuls of dirt over the rim. The shovel strikes compact soil, dirt scatters, and the grey breathes heavily. The tall white from <Picture 1> walks into frame above the hole, studies it suspiciously, brushes fine white hair behind one ear, looks down smugly, and says <d>[English] Hello, little man. Digging your own grave? </d> End with the grey frozen mid-dig below the tall white. Preserve the blocking and restrained handheld corrections from <Video 1>; do not cut, duplicate, teleport, or merge the aliens.\n\noverall_soundscape: Dry desert wind, shovel impacts, scattering dirt, the grey's heavy breathing, the tall white's gravel footsteps, clothing rustle, and clean synchronized dialogue. Preserve the acoustic pacing and continuous location ambience from <Video 1>.\n\nnon_diegetic_music: N/A"
+      ]
+    },
+    {
+      "id": 15,
+      "type": "WeeToddH3ReferenceStrength",
+      "pos": [
+        2890,
+        90
+      ],
+      "size": [
+        360,
+        210
+      ],
+      "flags": {},
+      "order": 14,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "conditioning",
+          "type": "WEETODD_H3_CONDITIONING",
+          "link": 16
+        }
+      ],
+      "outputs": [
+        {
+          "name": "conditioning",
+          "type": "WEETODD_H3_CONDITIONING",
+          "links": [
+            18
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "strength_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3ReferenceStrength"
+      },
+      "widgets_values": [
+        0.999,
+        1.0
+      ]
+    },
+    {
+      "id": 16,
+      "type": "WeeToddH3Sample",
+      "pos": [
+        3300,
+        80
+      ],
+      "size": [
+        410,
+        310
+      ],
+      "flags": {},
+      "order": 15,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "components",
+          "type": "WEETODD_H3_COMPONENTS",
+          "link": 17
+        },
+        {
+          "name": "conditioning",
+          "type": "WEETODD_H3_CONDITIONING",
+          "link": 18
+        },
+        {
+          "name": "config",
+          "type": "WEETODD_H3_CONFIG",
+          "link": 19
+        },
+        {
+          "name": "loras",
+          "type": "WEETODD_H3_LORAS",
+          "link": 20
+        }
+      ],
+      "outputs": [
+        {
+          "name": "latents",
+          "type": "WEETODD_H3_LATENTS",
+          "links": [
+            22,
+            23
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "sampling_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3Sample"
+      },
+      "widgets_values": [
+        false
+      ]
+    },
+    {
+      "id": 17,
+      "type": "WeeToddH3ChainAppend",
+      "pos": [
+        3760,
+        80
+      ],
+      "size": [
+        350,
+        230
+      ],
+      "flags": {},
+      "order": 16,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "timeline",
+          "type": "WEETODD_H3_TIMELINE",
+          "link": 21
+        },
+        {
+          "name": "latents",
+          "type": "WEETODD_H3_LATENTS",
+          "link": 22
+        }
+      ],
+      "outputs": [
+        {
+          "name": "chain",
+          "type": "WEETODD_H3_LATENT_CHAIN",
+          "links": [
+            41
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "chain_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3ChainAppend"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 18,
+      "type": "WeeToddH3ContinuationContext",
+      "pos": [
+        3760,
+        350
+      ],
+      "size": [
+        360,
+        190
+      ],
+      "flags": {},
+      "order": 17,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "latents",
+          "type": "WEETODD_H3_LATENTS",
+          "link": 23
+        }
+      ],
+      "outputs": [
+        {
+          "name": "continuation",
+          "type": "WEETODD_H3_CONTINUATION",
+          "links": [
+            37
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "continuation_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3ContinuationContext"
+      },
+      "widgets_values": [
+        "22"
+      ]
+    },
+    {
+      "id": 20,
+      "type": "Video Slice",
+      "pos": [
+        920,
+        620
+      ],
+      "size": [
+        360,
+        230
+      ],
+      "flags": {},
+      "order": 18,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "video",
+          "type": "VIDEO",
+          "link": 24
+        }
+      ],
+      "outputs": [
+        {
+          "name": "video",
+          "type": "VIDEO",
+          "links": [
+            25
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "Video Slice"
+      },
+      "widgets_values": [
+        3.5416666666666665,
+        4.458333333333333,
+        false
+      ]
+    },
+    {
+      "id": 21,
+      "type": "GetVideoComponents",
+      "pos": [
+        1320,
+        620
+      ],
+      "size": [
+        340,
+        170
+      ],
+      "flags": {},
+      "order": 19,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "video",
+          "type": "VIDEO",
+          "link": 25
+        }
+      ],
+      "outputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "links": [
+            26
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "audio",
+          "type": "AUDIO",
+          "links": [
+            28
+          ],
+          "slot_index": 1
+        },
+        {
+          "name": "fps",
+          "type": "FLOAT",
+          "links": [
+            27
+          ],
+          "slot_index": 2
+        },
+        {
+          "name": "frame_count",
+          "type": "INT",
+          "links": null,
+          "slot_index": 3
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "GetVideoComponents"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 22,
+      "type": "WeeToddH3ReferenceVideo",
+      "pos": [
+        1700,
+        620
+      ],
+      "size": [
+        390,
+        250
+      ],
+      "flags": {},
+      "order": 20,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "video_frames",
+          "type": "IMAGE",
+          "link": 26
+        },
+        {
+          "name": "fps",
+          "type": "FLOAT",
+          "link": 27
+        },
+        {
+          "name": "soundtrack",
+          "type": "AUDIO",
+          "link": 28
+        },
+        {
+          "name": "previous_references",
+          "type": "WEETODD_H3_REFERENCES",
+          "link": 29
+        }
+      ],
+      "outputs": [
+        {
+          "name": "references",
+          "type": "WEETODD_H3_REFERENCES",
+          "links": [
+            32
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "reference_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3ReferenceVideo"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 23,
+      "type": "WeeToddH3ReferenceEncode",
+      "pos": [
+        2140,
+        620
+      ],
+      "size": [
+        700,
+        470
+      ],
+      "flags": {},
+      "order": 21,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "components",
+          "type": "WEETODD_H3_COMPONENTS",
+          "link": 30
+        },
+        {
+          "name": "config",
+          "type": "WEETODD_H3_CONFIG",
+          "link": 31
+        },
+        {
+          "name": "references",
+          "type": "WEETODD_H3_REFERENCES",
+          "link": 32
+        }
+      ],
+      "outputs": [
+        {
+          "name": "conditioning",
+          "type": "WEETODD_H3_CONDITIONING",
+          "links": [
+            33
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "conditioning_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3ReferenceEncode"
+      },
+      "widgets_values": [
+        "<Picture 1> defines the single tall white extraterrestrial's elongated face, pale white skin, large blue-gray eyes, fine swept-back white hair, very tall slender proportions, hands, feet, and fitted white clothing from all shown angles. <Picture 2> defines the single short grey extraterrestrial's oversized smooth head, enormous glossy black eyes, small mouth, gray-green skin texture, lean ribbed torso, long fingers, and compact body from all shown angles. <Video 1> supplies the corresponding segment's live-action blocking, camera movement, physical timing, dialogue pacing, and continuous desert sound. Replace the two people in <Video 1> with the two extraterrestrials while preserving the characters from <Picture 1> and <Picture 2> as distinct individuals. Do not inherit either person's face, hair color, eye color, clothing, height, skin color, or body proportions from <Video 1>.\n\nintegrated_multimodal_description: [Shot 1] Continue directly from the inherited latent frames with no cut or reset. Preserve the same grave, sunlight, screen positions, shovel, and both extraterrestrials. The short grey from <Picture 2> immediately stops digging, slowly turns its head and shoulders toward the tall white, plants its feet, and grips the shovel tightly with both hands. With a cold threatening expression it replies <d>[English] No, no, no... I'm digging it for you. Just like I did for Michael. </d> The tall white's smug expression begins to fail. Follow <Video 1>'s action timing and subtle handheld push while retaining the aliens' reference-defined anatomy.\n\noverall_soundscape: Continue the same dry wind without an ambience reset. One final shovel scrape stops, loose dirt settles, the grey's breathing slows, long fingers tighten on the handle, and its threatening dialogue remains synchronized. Use <Video 1> for pacing.\n\nnon_diegetic_music: N/A"
+      ]
+    },
+    {
+      "id": 24,
+      "type": "WeeToddH3ReferenceStrength",
+      "pos": [
+        2890,
+        650
+      ],
+      "size": [
+        360,
+        210
+      ],
+      "flags": {},
+      "order": 22,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "conditioning",
+          "type": "WEETODD_H3_CONDITIONING",
+          "link": 33
+        }
+      ],
+      "outputs": [
+        {
+          "name": "conditioning",
+          "type": "WEETODD_H3_CONDITIONING",
+          "links": [
+            35
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "strength_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3ReferenceStrength"
+      },
+      "widgets_values": [
+        0.999,
+        1.0
+      ]
+    },
+    {
+      "id": 25,
+      "type": "WeeToddH3Sample",
+      "pos": [
+        3300,
+        640
+      ],
+      "size": [
+        410,
+        310
+      ],
+      "flags": {},
+      "order": 23,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "components",
+          "type": "WEETODD_H3_COMPONENTS",
+          "link": 34
+        },
+        {
+          "name": "conditioning",
+          "type": "WEETODD_H3_CONDITIONING",
+          "link": 35
+        },
+        {
+          "name": "config",
+          "type": "WEETODD_H3_CONFIG",
+          "link": 36
+        },
+        {
+          "name": "continuation",
+          "type": "WEETODD_H3_CONTINUATION",
+          "link": 37
+        },
+        {
+          "name": "loras",
+          "type": "WEETODD_H3_LORAS",
+          "link": 38
+        }
+      ],
+      "outputs": [
+        {
+          "name": "latents",
+          "type": "WEETODD_H3_LATENTS",
+          "links": [
+            40,
+            42
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "sampling_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3Sample"
+      },
+      "widgets_values": [
+        false
+      ]
+    },
+    {
+      "id": 26,
+      "type": "WeeToddH3ChainAppend",
+      "pos": [
+        3760,
+        640
+      ],
+      "size": [
+        350,
+        230
+      ],
+      "flags": {},
+      "order": 24,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "timeline",
+          "type": "WEETODD_H3_TIMELINE",
+          "link": 39
+        },
+        {
+          "name": "latents",
+          "type": "WEETODD_H3_LATENTS",
+          "link": 40
+        },
+        {
+          "name": "previous_chain",
+          "type": "WEETODD_H3_LATENT_CHAIN",
+          "link": 41
+        }
+      ],
+      "outputs": [
+        {
+          "name": "chain",
+          "type": "WEETODD_H3_LATENT_CHAIN",
+          "links": [
+            60
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "chain_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3ChainAppend"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 27,
+      "type": "WeeToddH3ContinuationContext",
+      "pos": [
+        3760,
+        910
+      ],
+      "size": [
+        360,
+        190
+      ],
+      "flags": {},
+      "order": 25,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "latents",
+          "type": "WEETODD_H3_LATENTS",
+          "link": 42
+        }
+      ],
+      "outputs": [
+        {
+          "name": "continuation",
+          "type": "WEETODD_H3_CONTINUATION",
+          "links": [
+            56
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "continuation_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3ContinuationContext"
+      },
+      "widgets_values": [
+        "22"
+      ]
+    },
+    {
+      "id": 29,
+      "type": "Video Slice",
+      "pos": [
+        920,
+        1180
+      ],
+      "size": [
+        360,
+        230
+      ],
+      "flags": {},
+      "order": 26,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "video",
+          "type": "VIDEO",
+          "link": 43
+        }
+      ],
+      "outputs": [
+        {
+          "name": "video",
+          "type": "VIDEO",
+          "links": [
+            44
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "Video Slice"
+      },
+      "widgets_values": [
+        7.083333333333333,
+        4.458333333333333,
+        false
+      ]
+    },
+    {
+      "id": 30,
+      "type": "GetVideoComponents",
+      "pos": [
+        1320,
+        1180
+      ],
+      "size": [
+        340,
+        170
+      ],
+      "flags": {},
+      "order": 27,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "video",
+          "type": "VIDEO",
+          "link": 44
+        }
+      ],
+      "outputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "links": [
+            45
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "audio",
+          "type": "AUDIO",
+          "links": [
+            47
+          ],
+          "slot_index": 1
+        },
+        {
+          "name": "fps",
+          "type": "FLOAT",
+          "links": [
+            46
+          ],
+          "slot_index": 2
+        },
+        {
+          "name": "frame_count",
+          "type": "INT",
+          "links": null,
+          "slot_index": 3
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "GetVideoComponents"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 31,
+      "type": "WeeToddH3ReferenceVideo",
+      "pos": [
+        1700,
+        1180
+      ],
+      "size": [
+        390,
+        250
+      ],
+      "flags": {},
+      "order": 28,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "video_frames",
+          "type": "IMAGE",
+          "link": 45
+        },
+        {
+          "name": "fps",
+          "type": "FLOAT",
+          "link": 46
+        },
+        {
+          "name": "soundtrack",
+          "type": "AUDIO",
+          "link": 47
+        },
+        {
+          "name": "previous_references",
+          "type": "WEETODD_H3_REFERENCES",
+          "link": 48
+        }
+      ],
+      "outputs": [
+        {
+          "name": "references",
+          "type": "WEETODD_H3_REFERENCES",
+          "links": [
+            51
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "reference_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3ReferenceVideo"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 32,
+      "type": "WeeToddH3ReferenceEncode",
+      "pos": [
+        2140,
+        1180
+      ],
+      "size": [
+        700,
+        470
+      ],
+      "flags": {},
+      "order": 29,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "components",
+          "type": "WEETODD_H3_COMPONENTS",
+          "link": 49
+        },
+        {
+          "name": "config",
+          "type": "WEETODD_H3_CONFIG",
+          "link": 50
+        },
+        {
+          "name": "references",
+          "type": "WEETODD_H3_REFERENCES",
+          "link": 51
+        }
+      ],
+      "outputs": [
+        {
+          "name": "conditioning",
+          "type": "WEETODD_H3_CONDITIONING",
+          "links": [
+            52
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "conditioning_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3ReferenceEncode"
+      },
+      "widgets_values": [
+        "<Picture 1> defines the single tall white extraterrestrial's elongated face, pale white skin, large blue-gray eyes, fine swept-back white hair, very tall slender proportions, hands, feet, and fitted white clothing from all shown angles. <Picture 2> defines the single short grey extraterrestrial's oversized smooth head, enormous glossy black eyes, small mouth, gray-green skin texture, lean ribbed torso, long fingers, and compact body from all shown angles. <Video 1> supplies the corresponding segment's live-action blocking, camera movement, physical timing, dialogue pacing, and continuous desert sound. Replace the two people in <Video 1> with the two extraterrestrials while preserving the characters from <Picture 1> and <Picture 2> as distinct individuals. Do not inherit either person's face, hair color, eye color, clothing, height, skin color, or body proportions from <Video 1>.\n\nintegrated_multimodal_description: [Shot 1] Continue directly from the inherited latent frames in the same unbroken handheld shot. The tall white from <Picture 1> loses all confidence; its large blue-gray eyes widen, its pale elongated face fills with horror, and it begins crying and panicking. It drops to its knees at the rim, reaches down, grabs the short grey from <Picture 2> by both shoulders, shakes it once, and screams <d>[English] No! What did you do to Michael?! Where is he? Tell me now! </d> The grey remains emotionless, holding the shovel. Follow <Video 1>'s blocking and camera jolt without transferring human features or changing either alien's identity.\n\noverall_soundscape: Continue the same desert wind. Knees strike loose soil, clothing pulls, one shoulder shake rustles both bodies, and the tall white cries and screams with synchronized mouth movement. Preserve <Video 1>'s acoustic timing without a reset.\n\nnon_diegetic_music: N/A"
+      ]
+    },
+    {
+      "id": 33,
+      "type": "WeeToddH3ReferenceStrength",
+      "pos": [
+        2890,
+        1210
+      ],
+      "size": [
+        360,
+        210
+      ],
+      "flags": {},
+      "order": 30,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "conditioning",
+          "type": "WEETODD_H3_CONDITIONING",
+          "link": 52
+        }
+      ],
+      "outputs": [
+        {
+          "name": "conditioning",
+          "type": "WEETODD_H3_CONDITIONING",
+          "links": [
+            54
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "strength_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3ReferenceStrength"
+      },
+      "widgets_values": [
+        0.999,
+        1.0
+      ]
+    },
+    {
+      "id": 34,
+      "type": "WeeToddH3Sample",
+      "pos": [
+        3300,
+        1200
+      ],
+      "size": [
+        410,
+        310
+      ],
+      "flags": {},
+      "order": 31,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "components",
+          "type": "WEETODD_H3_COMPONENTS",
+          "link": 53
+        },
+        {
+          "name": "conditioning",
+          "type": "WEETODD_H3_CONDITIONING",
+          "link": 54
+        },
+        {
+          "name": "config",
+          "type": "WEETODD_H3_CONFIG",
+          "link": 55
+        },
+        {
+          "name": "continuation",
+          "type": "WEETODD_H3_CONTINUATION",
+          "link": 56
+        },
+        {
+          "name": "loras",
+          "type": "WEETODD_H3_LORAS",
+          "link": 57
+        }
+      ],
+      "outputs": [
+        {
+          "name": "latents",
+          "type": "WEETODD_H3_LATENTS",
+          "links": [
+            59,
+            61
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "sampling_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3Sample"
+      },
+      "widgets_values": [
+        false
+      ]
+    },
+    {
+      "id": 35,
+      "type": "WeeToddH3ChainAppend",
+      "pos": [
+        3760,
+        1200
+      ],
+      "size": [
+        350,
+        230
+      ],
+      "flags": {},
+      "order": 32,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "timeline",
+          "type": "WEETODD_H3_TIMELINE",
+          "link": 58
+        },
+        {
+          "name": "latents",
+          "type": "WEETODD_H3_LATENTS",
+          "link": 59
+        },
+        {
+          "name": "previous_chain",
+          "type": "WEETODD_H3_LATENT_CHAIN",
+          "link": 60
+        }
+      ],
+      "outputs": [
+        {
+          "name": "chain",
+          "type": "WEETODD_H3_LATENT_CHAIN",
+          "links": [
+            79
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "chain_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3ChainAppend"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 36,
+      "type": "WeeToddH3ContinuationContext",
+      "pos": [
+        3760,
+        1470
+      ],
+      "size": [
+        360,
+        190
+      ],
+      "flags": {},
+      "order": 33,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "latents",
+          "type": "WEETODD_H3_LATENTS",
+          "link": 61
+        }
+      ],
+      "outputs": [
+        {
+          "name": "continuation",
+          "type": "WEETODD_H3_CONTINUATION",
+          "links": [
+            75
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "continuation_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3ContinuationContext"
+      },
+      "widgets_values": [
+        "22"
+      ]
+    },
+    {
+      "id": 38,
+      "type": "Video Slice",
+      "pos": [
+        920,
+        1740
+      ],
+      "size": [
+        360,
+        230
+      ],
+      "flags": {},
+      "order": 34,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "video",
+          "type": "VIDEO",
+          "link": 62
+        }
+      ],
+      "outputs": [
+        {
+          "name": "video",
+          "type": "VIDEO",
+          "links": [
+            63
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "Video Slice"
+      },
+      "widgets_values": [
+        10.625,
+        4.458333333333333,
+        false
+      ]
+    },
+    {
+      "id": 39,
+      "type": "GetVideoComponents",
+      "pos": [
+        1320,
+        1740
+      ],
+      "size": [
+        340,
+        170
+      ],
+      "flags": {},
+      "order": 35,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "video",
+          "type": "VIDEO",
+          "link": 63
+        }
+      ],
+      "outputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "links": [
+            64
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "audio",
+          "type": "AUDIO",
+          "links": [
+            66
+          ],
+          "slot_index": 1
+        },
+        {
+          "name": "fps",
+          "type": "FLOAT",
+          "links": [
+            65
+          ],
+          "slot_index": 2
+        },
+        {
+          "name": "frame_count",
+          "type": "INT",
+          "links": null,
+          "slot_index": 3
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "GetVideoComponents"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 40,
+      "type": "WeeToddH3ReferenceVideo",
+      "pos": [
+        1700,
+        1740
+      ],
+      "size": [
+        390,
+        250
+      ],
+      "flags": {},
+      "order": 36,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "video_frames",
+          "type": "IMAGE",
+          "link": 64
+        },
+        {
+          "name": "fps",
+          "type": "FLOAT",
+          "link": 65
+        },
+        {
+          "name": "soundtrack",
+          "type": "AUDIO",
+          "link": 66
+        },
+        {
+          "name": "previous_references",
+          "type": "WEETODD_H3_REFERENCES",
+          "link": 67
+        }
+      ],
+      "outputs": [
+        {
+          "name": "references",
+          "type": "WEETODD_H3_REFERENCES",
+          "links": [
+            70
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "reference_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3ReferenceVideo"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 41,
+      "type": "WeeToddH3ReferenceEncode",
+      "pos": [
+        2140,
+        1740
+      ],
+      "size": [
+        700,
+        470
+      ],
+      "flags": {},
+      "order": 37,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "components",
+          "type": "WEETODD_H3_COMPONENTS",
+          "link": 68
+        },
+        {
+          "name": "config",
+          "type": "WEETODD_H3_CONFIG",
+          "link": 69
+        },
+        {
+          "name": "references",
+          "type": "WEETODD_H3_REFERENCES",
+          "link": 70
+        }
+      ],
+      "outputs": [
+        {
+          "name": "conditioning",
+          "type": "WEETODD_H3_CONDITIONING",
+          "links": [
+            71
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "conditioning_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3ReferenceEncode"
+      },
+      "widgets_values": [
+        "<Picture 1> defines the single tall white extraterrestrial's elongated face, pale white skin, large blue-gray eyes, fine swept-back white hair, very tall slender proportions, hands, feet, and fitted white clothing from all shown angles. <Picture 2> defines the single short grey extraterrestrial's oversized smooth head, enormous glossy black eyes, small mouth, gray-green skin texture, lean ribbed torso, long fingers, and compact body from all shown angles. <Video 1> supplies the corresponding segment's live-action blocking, camera movement, physical timing, dialogue pacing, and continuous desert sound. Replace the two people in <Video 1> with the two extraterrestrials while preserving the characters from <Picture 1> and <Picture 2> as distinct individuals. Do not inherit either person's face, hair color, eye color, clothing, height, skin color, or body proportions from <Video 1>.\n\nintegrated_multimodal_description: [Shot 1] Continue directly from the inherited latent frames. The handheld camera completes its push into a tight close-up of the tall white from <Picture 1>. Tears cross its pale skin, its blue-gray eyes remain wide, and its breathing is rapid and uneven. It looks from the short grey to the grave and back. The short grey from <Picture 2> remains silent and emotionless in the shallow background, holding the shovel upright. Hold the dreadful silence briefly and end abruptly on the tall white's terrified face. Match <Video 1>'s terminal framing while preserving both alien identities. No cut, fade, duplication, feature swap, or action reset.\n\noverall_soundscape: Continue the same wind and outdoor ambience. The tall white's panicked breathing and quiet sobbing dominate; the grey is silent; a few grains of dirt fall into the hole. End hard with no musical sting.\n\nnon_diegetic_music: N/A"
+      ]
+    },
+    {
+      "id": 42,
+      "type": "WeeToddH3ReferenceStrength",
+      "pos": [
+        2890,
+        1770
+      ],
+      "size": [
+        360,
+        210
+      ],
+      "flags": {},
+      "order": 38,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "conditioning",
+          "type": "WEETODD_H3_CONDITIONING",
+          "link": 71
+        }
+      ],
+      "outputs": [
+        {
+          "name": "conditioning",
+          "type": "WEETODD_H3_CONDITIONING",
+          "links": [
+            73
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "strength_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3ReferenceStrength"
+      },
+      "widgets_values": [
+        0.999,
+        1.0
+      ]
+    },
+    {
+      "id": 43,
+      "type": "WeeToddH3Sample",
+      "pos": [
+        3300,
+        1760
+      ],
+      "size": [
+        410,
+        310
+      ],
+      "flags": {},
+      "order": 39,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "components",
+          "type": "WEETODD_H3_COMPONENTS",
+          "link": 72
+        },
+        {
+          "name": "conditioning",
+          "type": "WEETODD_H3_CONDITIONING",
+          "link": 73
+        },
+        {
+          "name": "config",
+          "type": "WEETODD_H3_CONFIG",
+          "link": 74
+        },
+        {
+          "name": "continuation",
+          "type": "WEETODD_H3_CONTINUATION",
+          "link": 75
+        },
+        {
+          "name": "loras",
+          "type": "WEETODD_H3_LORAS",
+          "link": 76
+        }
+      ],
+      "outputs": [
+        {
+          "name": "latents",
+          "type": "WEETODD_H3_LATENTS",
+          "links": [
+            78
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "sampling_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3Sample"
+      },
+      "widgets_values": [
+        true
+      ]
+    },
+    {
+      "id": 44,
+      "type": "WeeToddH3ChainAppend",
+      "pos": [
+        3760,
+        1760
+      ],
+      "size": [
+        350,
+        230
+      ],
+      "flags": {},
+      "order": 40,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "timeline",
+          "type": "WEETODD_H3_TIMELINE",
+          "link": 77
+        },
+        {
+          "name": "latents",
+          "type": "WEETODD_H3_LATENTS",
+          "link": 78
+        },
+        {
+          "name": "previous_chain",
+          "type": "WEETODD_H3_LATENT_CHAIN",
+          "link": 79
+        }
+      ],
+      "outputs": [
+        {
+          "name": "chain",
+          "type": "WEETODD_H3_LATENT_CHAIN",
+          "links": [
+            81
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "chain_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3ChainAppend"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 45,
+      "type": "WeeToddH3DirectPublishChain",
+      "pos": [
+        3760,
+        2260
+      ],
+      "size": [
+        520,
+        350
+      ],
+      "flags": {},
+      "order": 41,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "components",
+          "type": "WEETODD_H3_COMPONENTS",
+          "link": 80
+        },
+        {
+          "name": "chain",
+          "type": "WEETODD_H3_LATENT_CHAIN",
+          "link": 81
+        }
+      ],
+      "outputs": [
+        {
+          "name": "video_path",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 0
+        },
+        {
+          "name": "generation_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3DirectPublishChain"
+      },
+      "widgets_values": [
+        "WeeTodd/H3_768p_15s_Ref2VA_Aliens_Chained_Staged_Turbo",
+        18,
+        0.025,
+        "{\"workflow\": \"h3_768p_15s_ref2va_aliens_chained_staged_turbo\", \"seed\": 20260812, \"lora\": \"minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors\", \"references\": [\"tall white character sheet\", \"grey alien character sheet\", \"matching source-video segment with soundtrack\"], \"context_frames\": 22, \"join_policy\": \"latent overlap + motion-matched 4-frame cosine blend + 50-ms audio crossfade\"}",
+        ""
+      ]
+    }
+  ],
+  "links": [
+    [
+      1,
+      2,
+      0,
+      3,
+      0,
+      "WEETODD_H3_CONFIG"
+    ],
+    [
+      2,
+      1,
+      0,
+      4,
+      0,
+      "WEETODD_H3_COMPONENTS"
+    ],
+    [
+      3,
+      3,
+      0,
+      4,
+      1,
+      "WEETODD_H3_CONFIG"
+    ],
+    [
+      4,
+      6,
+      0,
+      7,
+      0,
+      "IMAGE"
+    ],
+    [
+      5,
+      8,
+      0,
+      9,
+      0,
+      "IMAGE"
+    ],
+    [
+      6,
+      7,
+      0,
+      9,
+      1,
+      "WEETODD_H3_REFERENCES"
+    ],
+    [
+      7,
+      10,
+      0,
+      11,
+      0,
+      "VIDEO"
+    ],
+    [
+      8,
+      11,
+      0,
+      12,
+      0,
+      "VIDEO"
+    ],
+    [
+      9,
+      12,
+      0,
+      13,
+      0,
+      "IMAGE"
+    ],
+    [
+      10,
+      12,
+      2,
+      13,
+      1,
+      "FLOAT"
+    ],
+    [
+      11,
+      12,
+      1,
+      13,
+      2,
+      "AUDIO"
+    ],
+    [
+      12,
+      9,
+      0,
+      13,
+      3,
+      "WEETODD_H3_REFERENCES"
+    ],
+    [
+      13,
+      4,
+      0,
+      14,
+      0,
+      "WEETODD_H3_COMPONENTS"
+    ],
+    [
+      14,
+      3,
+      0,
+      14,
+      1,
+      "WEETODD_H3_CONFIG"
+    ],
+    [
+      15,
+      13,
+      0,
+      14,
+      2,
+      "WEETODD_H3_REFERENCES"
+    ],
+    [
+      16,
+      14,
+      0,
+      15,
+      0,
+      "WEETODD_H3_CONDITIONING"
+    ],
+    [
+      17,
+      4,
+      0,
+      16,
+      0,
+      "WEETODD_H3_COMPONENTS"
+    ],
+    [
+      18,
+      15,
+      0,
+      16,
+      1,
+      "WEETODD_H3_CONDITIONING"
+    ],
+    [
+      19,
+      3,
+      0,
+      16,
+      2,
+      "WEETODD_H3_CONFIG"
+    ],
+    [
+      20,
+      3,
+      1,
+      16,
+      3,
+      "WEETODD_H3_LORAS"
+    ],
+    [
+      21,
+      5,
+      0,
+      17,
+      0,
+      "WEETODD_H3_TIMELINE"
+    ],
+    [
+      22,
+      16,
+      0,
+      17,
+      1,
+      "WEETODD_H3_LATENTS"
+    ],
+    [
+      23,
+      16,
+      0,
+      18,
+      0,
+      "WEETODD_H3_LATENTS"
+    ],
+    [
+      24,
+      10,
+      0,
+      20,
+      0,
+      "VIDEO"
+    ],
+    [
+      25,
+      20,
+      0,
+      21,
+      0,
+      "VIDEO"
+    ],
+    [
+      26,
+      21,
+      0,
+      22,
+      0,
+      "IMAGE"
+    ],
+    [
+      27,
+      21,
+      2,
+      22,
+      1,
+      "FLOAT"
+    ],
+    [
+      28,
+      21,
+      1,
+      22,
+      2,
+      "AUDIO"
+    ],
+    [
+      29,
+      9,
+      0,
+      22,
+      3,
+      "WEETODD_H3_REFERENCES"
+    ],
+    [
+      30,
+      4,
+      0,
+      23,
+      0,
+      "WEETODD_H3_COMPONENTS"
+    ],
+    [
+      31,
+      3,
+      0,
+      23,
+      1,
+      "WEETODD_H3_CONFIG"
+    ],
+    [
+      32,
+      22,
+      0,
+      23,
+      2,
+      "WEETODD_H3_REFERENCES"
+    ],
+    [
+      33,
+      23,
+      0,
+      24,
+      0,
+      "WEETODD_H3_CONDITIONING"
+    ],
+    [
+      34,
+      4,
+      0,
+      25,
+      0,
+      "WEETODD_H3_COMPONENTS"
+    ],
+    [
+      35,
+      24,
+      0,
+      25,
+      1,
+      "WEETODD_H3_CONDITIONING"
+    ],
+    [
+      36,
+      3,
+      0,
+      25,
+      2,
+      "WEETODD_H3_CONFIG"
+    ],
+    [
+      37,
+      18,
+      0,
+      25,
+      3,
+      "WEETODD_H3_CONTINUATION"
+    ],
+    [
+      38,
+      3,
+      1,
+      25,
+      4,
+      "WEETODD_H3_LORAS"
+    ],
+    [
+      39,
+      5,
+      0,
+      26,
+      0,
+      "WEETODD_H3_TIMELINE"
+    ],
+    [
+      40,
+      25,
+      0,
+      26,
+      1,
+      "WEETODD_H3_LATENTS"
+    ],
+    [
+      41,
+      17,
+      0,
+      26,
+      2,
+      "WEETODD_H3_LATENT_CHAIN"
+    ],
+    [
+      42,
+      25,
+      0,
+      27,
+      0,
+      "WEETODD_H3_LATENTS"
+    ],
+    [
+      43,
+      10,
+      0,
+      29,
+      0,
+      "VIDEO"
+    ],
+    [
+      44,
+      29,
+      0,
+      30,
+      0,
+      "VIDEO"
+    ],
+    [
+      45,
+      30,
+      0,
+      31,
+      0,
+      "IMAGE"
+    ],
+    [
+      46,
+      30,
+      2,
+      31,
+      1,
+      "FLOAT"
+    ],
+    [
+      47,
+      30,
+      1,
+      31,
+      2,
+      "AUDIO"
+    ],
+    [
+      48,
+      9,
+      0,
+      31,
+      3,
+      "WEETODD_H3_REFERENCES"
+    ],
+    [
+      49,
+      4,
+      0,
+      32,
+      0,
+      "WEETODD_H3_COMPONENTS"
+    ],
+    [
+      50,
+      3,
+      0,
+      32,
+      1,
+      "WEETODD_H3_CONFIG"
+    ],
+    [
+      51,
+      31,
+      0,
+      32,
+      2,
+      "WEETODD_H3_REFERENCES"
+    ],
+    [
+      52,
+      32,
+      0,
+      33,
+      0,
+      "WEETODD_H3_CONDITIONING"
+    ],
+    [
+      53,
+      4,
+      0,
+      34,
+      0,
+      "WEETODD_H3_COMPONENTS"
+    ],
+    [
+      54,
+      33,
+      0,
+      34,
+      1,
+      "WEETODD_H3_CONDITIONING"
+    ],
+    [
+      55,
+      3,
+      0,
+      34,
+      2,
+      "WEETODD_H3_CONFIG"
+    ],
+    [
+      56,
+      27,
+      0,
+      34,
+      3,
+      "WEETODD_H3_CONTINUATION"
+    ],
+    [
+      57,
+      3,
+      1,
+      34,
+      4,
+      "WEETODD_H3_LORAS"
+    ],
+    [
+      58,
+      5,
+      0,
+      35,
+      0,
+      "WEETODD_H3_TIMELINE"
+    ],
+    [
+      59,
+      34,
+      0,
+      35,
+      1,
+      "WEETODD_H3_LATENTS"
+    ],
+    [
+      60,
+      26,
+      0,
+      35,
+      2,
+      "WEETODD_H3_LATENT_CHAIN"
+    ],
+    [
+      61,
+      34,
+      0,
+      36,
+      0,
+      "WEETODD_H3_LATENTS"
+    ],
+    [
+      62,
+      10,
+      0,
+      38,
+      0,
+      "VIDEO"
+    ],
+    [
+      63,
+      38,
+      0,
+      39,
+      0,
+      "VIDEO"
+    ],
+    [
+      64,
+      39,
+      0,
+      40,
+      0,
+      "IMAGE"
+    ],
+    [
+      65,
+      39,
+      2,
+      40,
+      1,
+      "FLOAT"
+    ],
+    [
+      66,
+      39,
+      1,
+      40,
+      2,
+      "AUDIO"
+    ],
+    [
+      67,
+      9,
+      0,
+      40,
+      3,
+      "WEETODD_H3_REFERENCES"
+    ],
+    [
+      68,
+      4,
+      0,
+      41,
+      0,
+      "WEETODD_H3_COMPONENTS"
+    ],
+    [
+      69,
+      3,
+      0,
+      41,
+      1,
+      "WEETODD_H3_CONFIG"
+    ],
+    [
+      70,
+      40,
+      0,
+      41,
+      2,
+      "WEETODD_H3_REFERENCES"
+    ],
+    [
+      71,
+      41,
+      0,
+      42,
+      0,
+      "WEETODD_H3_CONDITIONING"
+    ],
+    [
+      72,
+      4,
+      0,
+      43,
+      0,
+      "WEETODD_H3_COMPONENTS"
+    ],
+    [
+      73,
+      42,
+      0,
+      43,
+      1,
+      "WEETODD_H3_CONDITIONING"
+    ],
+    [
+      74,
+      3,
+      0,
+      43,
+      2,
+      "WEETODD_H3_CONFIG"
+    ],
+    [
+      75,
+      36,
+      0,
+      43,
+      3,
+      "WEETODD_H3_CONTINUATION"
+    ],
+    [
+      76,
+      3,
+      1,
+      43,
+      4,
+      "WEETODD_H3_LORAS"
+    ],
+    [
+      77,
+      5,
+      0,
+      44,
+      0,
+      "WEETODD_H3_TIMELINE"
+    ],
+    [
+      78,
+      43,
+      0,
+      44,
+      1,
+      "WEETODD_H3_LATENTS"
+    ],
+    [
+      79,
+      35,
+      0,
+      44,
+      2,
+      "WEETODD_H3_LATENT_CHAIN"
+    ],
+    [
+      80,
+      4,
+      0,
+      45,
+      0,
+      "WEETODD_H3_COMPONENTS"
+    ],
+    [
+      81,
+      44,
+      0,
+      45,
+      1,
+      "WEETODD_H3_LATENT_CHAIN"
+    ]
+  ],
+  "groups": [
+    {
+      "title": "15-second four-window Ref2VA alien chain with image, source-video, and latent context",
+      "bounding": [
+        20,
+        20,
+        4100,
+        2250
+      ],
+      "color": "#3f789e",
+      "font_size": 24,
+      "flags": {}
+    }
+  ],
+  "config": {},
+  "extra": {
+    "ds": {
+      "scale": 0.5,
+      "offset": [
+        40,
+        70
+      ]
+    }
+  },
+  "version": 0.4
+}

@@ -11,8 +11,10 @@ from threading import RLock
 from typing import Any
 
 from .conditioning import H3Conditioning, H3TextEncoderSpec
+from .continuation import H3ContinuationContext, validate_continuation_for_sample
 from .lora import H3LoRAStack
-from .preflight import H3ComponentSetSpec
+from .preflight import H3ComponentSetSpec, validate_task_partition
+from .preview import H3PreviewConfig, H3PreviewSession
 from .runtime import H3GenerationConfig
 
 
@@ -29,6 +31,7 @@ class H3TransformerSpec:
     audio_vae: str
     task: str
     text_encoder_config: str | None = None
+    allow_fl2va_weights_for_ref2va: bool = False
 
     @classmethod
     def from_components(cls, components: H3ComponentSetSpec) -> H3TransformerSpec:
@@ -44,6 +47,7 @@ class H3TransformerSpec:
             audio_vae=str(paths["audio_vae"]),
             task=components.task,
             text_encoder_config=encoder_spec.config_path,
+            allow_fl2va_weights_for_ref2va=components.allow_fl2va_weights_for_ref2va,
         )
 
     def validate(self) -> None:
@@ -59,12 +63,17 @@ class H3TransformerSpec:
         manifest = json.loads((root / "model_index.json").read_text())
         metadata = manifest.get("_minimax_h3", {})
         tasks = metadata.get("tasks", [])
-        if self.task not in tasks:
-            raise ValueError(
-                f"Checkpoint does not support task {self.task!r}; supported tasks: {tasks}."
-            )
-        if self.task != "t2va":
-            raise ValueError("The first transformer sampler supports the t2va task only.")
+        if self.task not in {"t2va", "fl2va", "ref2va"}:
+            raise ValueError(f"The transformer sampler does not support task {self.task!r}.")
+        partition = metadata.get("partition")
+        if not isinstance(partition, str) or not partition:
+            raise ValueError("MiniMax H3 model manifest has no partition name.")
+        validate_task_partition(
+            task=self.task,
+            tasks=tasks,
+            partition=partition,
+            allow_fl2va_weights_for_ref2va=self.allow_fl2va_weights_for_ref2va,
+        )
 
 
 @dataclass(frozen=True)
@@ -103,11 +112,19 @@ class H3Latents:
     trajectory_capture_seconds: float = 0.0
     trajectory_replay_seconds: float = 0.0
     trajectory_replay_fallback_reason: str | None = None
+    trajectory_conditioned_row_policy: str | None = None
+    trajectory_excluded_video_rows: int = 0
+    trajectory_excluded_audio_rows: int = 0
     lora_report: tuple[dict[str, Any], ...] = ()
     projection_backend_report: dict[str, Any] | None = None
     projection_backend_runtime: dict[str, Any] | None = None
     paging_report: dict[str, Any] | None = None
     text_encoder_paging_report: dict[str, Any] | None = None
+    refinement_source_width: int | None = None
+    refinement_source_height: int | None = None
+    refinement_strength: float | None = None
+    refinement_audio_preserved: bool = False
+    preview_report: tuple[dict[str, Any], ...] = ()
 
 
 SamplerFactory = Callable[[H3TransformerSpec], Any]
@@ -136,7 +153,7 @@ class H3TransformerCache:
         self._lock = RLock()
         self._factory = factory or _default_sampler_factory
         self._spec: H3TransformerSpec | None = None
-        self._schedule_key: tuple[int, bool, str, str] | None = None
+        self._schedule_key: tuple | None = None
         self._lora_key = None
         self._lora_report: tuple[dict[str, Any], ...] = ()
         self._projection_backend_report: dict[str, Any] | None = None
@@ -158,32 +175,110 @@ class H3TransformerCache:
         easycache=None,
         blockcache=None,
         trajectory_forecast=None,
+        continuation: H3ContinuationContext | None = None,
+        refinement_source: H3Latents | None = None,
+        refinement_strength: float = 1.0,
+        refinement_resize_method: str = "bilinear",
         loras: H3LoRAStack | None = None,
+        preview_config: H3PreviewConfig | None = None,
+        preview_callback=None,
         prepare_stage: Callable[[], None] | None = None,
     ) -> H3Latents:
         spec.validate()
         config.validate()
-        if conditioning.load_vision:
-            raise ValueError("The first transformer sampler accepts text-only conditioning.")
+        continuation_text_only_fl2va = bool(
+            spec.task == "fl2va"
+            and continuation is not None
+            and conditioning.condition_video_rows is None
+            and not conditioning.keyframe_anchors
+        )
+        expected_vision = spec.task in {"fl2va", "ref2va"} and not continuation_text_only_fl2va
+        if conditioning.task != spec.task:
+            raise ValueError(
+                f"Conditioning task {conditioning.task!r} does not match "
+                f"component task {spec.task!r}."
+            )
+        if conditioning.load_vision != expected_vision:
+            requirement = "vision" if expected_vision else "text-only"
+            raise ValueError(f"The {spec.task} sampler requires {requirement} conditioning.")
+        if spec.task == "t2va" and (
+            conditioning.condition_video_rows is not None or conditioning.keyframe_anchors
+        ):
+            raise ValueError("T2VA conditioning cannot contain first/last-frame rows.")
+        if (
+            spec.task == "fl2va"
+            and not continuation_text_only_fl2va
+            and (conditioning.condition_video_rows is None or not conditioning.keyframe_anchors)
+        ):
+            raise ValueError("FL2VA conditioning requires encoded first/last-frame rows.")
+        if spec.task == "ref2va" and (
+            conditioning.condition_video_rows is None or not conditioning.references
+        ):
+            raise ValueError("Ref2VA conditioning requires encoded visual reference rows.")
+        if spec.task == "ref2va" and conditioning.keyframe_anchors:
+            raise ValueError("Ref2VA conditioning cannot contain first/last-frame anchors.")
+        if continuation is not None:
+            validate_continuation_for_sample(continuation, spec, config)
+        if refinement_source is not None:
+            if continuation is not None:
+                raise ValueError("H3 Hi Res Fix cannot be combined with motion continuation.")
+            if refinement_source.transformer_spec != spec:
+                raise ValueError("H3 Hi Res Fix source latents use a different transformer.")
+            from minimax_h3_mlx.packing import align_num_frames
+
+            expected_frames = align_num_frames(round(config.duration_seconds * 24))
+            if refinement_source.num_frames != expected_frames:
+                raise ValueError(
+                    "H3 Hi Res Fix duration does not match the source latent frame count."
+                )
+            if refinement_source.fps != 24 or refinement_source.sample_rate != 32000:
+                raise ValueError("H3 Hi Res Fix requires native 24 fps and 32 kHz H3 latents.")
+            if config.width <= refinement_source.width or config.height <= refinement_source.height:
+                raise ValueError(
+                    "H3 Hi Res Fix target dimensions must exceed the source dimensions."
+                )
+            if not 0.0 < refinement_strength <= 1.0:
+                raise ValueError(
+                    "H3 Hi Res Fix refinement strength must be greater than 0 and at most 1."
+                )
         expected_encoder = H3TextEncoderSpec(
             text_encoder=spec.text_encoder,
             processor=spec.processor,
             tokenizer=spec.tokenizer,
-            load_vision=False,
+            load_vision=expected_vision,
             config_path=spec.text_encoder_config,
         )
         if conditioning.encoder_spec != expected_encoder:
             raise ValueError(
                 "Conditioning was produced by a different Qwen3-VL component specification."
             )
+        condition_schedule_key = (
+            continuation is not None,
+            refinement_source is not None,
+            round(float(refinement_strength), 6) if refinement_source is not None else None,
+            conditioning.condition_video_rows is not None,
+            conditioning.condition_audio_rows is not None,
+            float(conditioning.visual_condition_strength),
+            float(conditioning.audio_condition_strength),
+        )
         schedule_key = (
             config.steps,
             config.drop_adaln,
             config.memory_mode,
             config.projection_backend,
+            config.sampling_method,
+            condition_schedule_key,
         )
         loras = loras or H3LoRAStack()
         loras.validate_for_steps(config.steps)
+        staged_lora = any(spec.start_after_evaluations > 0 for spec in loras.adapters)
+        if staged_lora and any(
+            value is not None for value in (easycache, blockcache, trajectory_forecast)
+        ):
+            raise ValueError(
+                "Staged LoRA activation requires dense transformer evaluations. Disconnect "
+                "EasyCache, BlockCache, and Trajectory Forecast before sampling."
+            )
         if loras.has_turbo and easycache is not None:
             raise ValueError(
                 "Turbo LoRA sampling does not support EasyCache. Disconnect the cache node "
@@ -204,6 +299,20 @@ class H3TransformerCache:
         if accelerators > 1:
             raise ValueError(
                 "EasyCache, BlockCache, and Trajectory Forecast are mutually exclusive."
+            )
+        if continuation is not None and (easycache is not None or blockcache is not None):
+            raise ValueError(
+                "H3 continuation supports dense sampling or Trajectory Forecast. Disconnect "
+                "EasyCache and BlockCache."
+            )
+        if spec.task == "fl2va" and accelerators:
+            raise ValueError(
+                "The first FL2VA baseline does not support cache or trajectory acceleration."
+            )
+        if spec.task == "ref2va" and (easycache is not None or blockcache is not None):
+            raise ValueError(
+                "Ref2VA supports Trajectory Forecast only; EasyCache and BlockCache remain "
+                "disabled until their conditioned-row behavior is validated."
             )
         if prepare_stage is not None:
             prepare_stage()
@@ -242,20 +351,89 @@ class H3TransformerCache:
                     raise
             try:
                 self._sampler.dit.set_attention_query_chunk_size(config.attention_query_chunk_size)
-                result = self._sampler.sample_latents(
-                    conditioning.embeddings,
-                    conditioning.token_tags,
-                    duration_seconds=config.duration_seconds,
-                    num_inference_steps=config.steps,
-                    seed=config.seed,
-                    height=config.height,
-                    width=config.width,
-                    drop_adaln=config.drop_adaln,
-                    step_callback=step_callback,
-                    easycache_config=easycache,
-                    blockcache_config=blockcache,
-                    trajectory_forecast_config=trajectory_forecast,
+                initial_video_latents = None
+                initial_audio_latents = None
+                if refinement_source is not None:
+                    from minimax_h3_mlx.hires_fix import resize_video_latents
+
+                    initial_video_latents = resize_video_latents(
+                        refinement_source.video,
+                        config.height // 16,
+                        config.width // 16,
+                        method=refinement_resize_method,
+                    )
+                    initial_audio_latents = refinement_source.audio
+                    import mlx.core as mx
+
+                    mx.eval(initial_video_latents, initial_audio_latents)
+                preview_session = (
+                    H3PreviewSession(preview_config) if preview_config is not None else None
                 )
+                preview_reports: list[dict[str, Any]] = []
+
+                def on_latent_preview(completed, total, video_latents):
+                    if preview_session is None:
+                        return
+                    update = preview_session.update(video_latents, completed, total)
+                    if update is None:
+                        return
+                    report = {
+                        "completed": int(completed),
+                        "total": int(total),
+                        "backend": preview_session.backend,
+                        "fallback_reason": preview_session.fallback_reason,
+                        "statistics": (
+                            asdict(update.statistics) if update.statistics is not None else None
+                        ),
+                        "rejected": update.reject_reason is not None,
+                    }
+                    preview_reports.append(report)
+                    if preview_callback is not None:
+                        preview_callback(update, completed, total)
+                    if update.reject_reason is not None:
+                        raise RuntimeError(update.reject_reason)
+
+                try:
+                    result = self._sampler.sample_latents(
+                        conditioning.embeddings,
+                        conditioning.token_tags,
+                        duration_seconds=config.duration_seconds,
+                        num_inference_steps=config.steps,
+                        seed=config.seed,
+                        height=config.height,
+                        width=config.width,
+                        drop_adaln=config.drop_adaln,
+                        step_callback=step_callback,
+                        latent_preview_callback=(
+                            on_latent_preview if preview_session is not None else None
+                        ),
+                        easycache_config=easycache,
+                        blockcache_config=blockcache,
+                        trajectory_forecast_config=trajectory_forecast,
+                        continuation_video_latents=(
+                            continuation.video if continuation is not None else None
+                        ),
+                        continuation_audio_latents=(
+                            continuation.audio if continuation is not None else None
+                        ),
+                        continuation_frames=(
+                            continuation.context_frames if continuation is not None else 0
+                        ),
+                        condition_video_rows=conditioning.condition_video_rows,
+                        condition_audio_rows=conditioning.condition_audio_rows,
+                        keyframe_anchors=conditioning.keyframe_anchors,
+                        references=conditioning.references,
+                        sampling_method=config.sampling_method,
+                        visual_condition_strength=conditioning.visual_condition_strength,
+                        audio_condition_strength=conditioning.audio_condition_strength,
+                        initial_video_latents=initial_video_latents,
+                        initial_audio_latents=initial_audio_latents,
+                        refinement_strength=refinement_strength,
+                        preserve_initial_audio=refinement_source is not None,
+                    )
+                finally:
+                    if preview_session is not None:
+                        preview_session.release()
                 from minimax_h3_mlx.projection import mpp_runtime_status
 
                 paged = getattr(self._sampler.dit, "paged_blocks", None)
@@ -303,11 +481,29 @@ class H3TransformerCache:
                     trajectory_replay_fallback_reason=getattr(
                         result, "trajectory_replay_fallback_reason", None
                     ),
+                    trajectory_conditioned_row_policy=getattr(
+                        result, "trajectory_conditioned_row_policy", None
+                    ),
+                    trajectory_excluded_video_rows=getattr(
+                        result, "trajectory_excluded_video_rows", 0
+                    ),
+                    trajectory_excluded_audio_rows=getattr(
+                        result, "trajectory_excluded_audio_rows", 0
+                    ),
                     lora_report=self._lora_report,
                     projection_backend_report=self._projection_backend_report,
                     projection_backend_runtime=mpp_runtime_status(),
                     paging_report=paged.report() if paged is not None else None,
                     text_encoder_paging_report=conditioning.paging_report,
+                    refinement_source_width=(
+                        refinement_source.width if refinement_source is not None else None
+                    ),
+                    refinement_source_height=(
+                        refinement_source.height if refinement_source is not None else None
+                    ),
+                    refinement_strength=getattr(result, "refinement_strength", None),
+                    refinement_audio_preserved=getattr(result, "refinement_audio_preserved", False),
+                    preview_report=tuple(preview_reports),
                     seconds_per_evaluation=result.seconds_per_evaluation,
                     total_seconds=result.total_seconds,
                     transformer_spec=spec,

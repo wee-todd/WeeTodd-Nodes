@@ -7,7 +7,10 @@ import math
 import struct
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .preview import H3PreviewConfig
 
 SUPPORTED_TASKS = frozenset({"t2va", "fl2va", "ref2va"})
 COMPONENT_NAMES = (
@@ -19,6 +22,14 @@ COMPONENT_NAMES = (
     "audio_vae",
 )
 WEIGHT_COMPONENTS = frozenset({"transformer", "text_encoder", "video_vae", "audio_vae"})
+COMPONENT_EXPECTATIONS = {
+    "transformer": "a transformer directory or an MLX-ready pruned safetensors file",
+    "text_encoder": "a text-encoder directory with config.json and weights",
+    "processor": "a processor directory with processor configuration",
+    "tokenizer": "a tokenizer directory with tokenizer.json or vocab.json",
+    "video_vae": "a video-VAE directory or a self-describing MLX safetensors file",
+    "audio_vae": "an audio-VAE directory or a self-describing MLX safetensors file",
+}
 DTYPE_BYTES = {
     "BOOL": 1,
     "I8": 1,
@@ -50,6 +61,8 @@ class H3ComponentSetSpec:
     tokenizer: str | None = None
     video_vae: str | None = None
     audio_vae: str | None = None
+    allow_fl2va_weights_for_ref2va: bool = False
+    preview_override: H3PreviewConfig | None = None
 
     def resolved_paths(self) -> dict[str, Path]:
         root = Path(self.checkpoint).expanduser()
@@ -57,6 +70,39 @@ class H3ComponentSetSpec:
             name: Path(getattr(self, name)).expanduser() if getattr(self, name) else root / name
             for name in COMPONENT_NAMES
         }
+
+
+def validate_task_partition(
+    *,
+    task: str,
+    tasks: list[str],
+    partition: str,
+    allow_fl2va_weights_for_ref2va: bool = False,
+) -> bool:
+    """Validate task metadata and report experimental FL2VA-to-Ref2VA reuse.
+
+    The two official partitions share an architecture and sampling shifts but not identical
+    learned tensors. Reuse therefore remains an explicit compatibility experiment and is
+    never inferred from matching tensor shapes.
+    """
+
+    expected_partition = "ref2va" if task == "ref2va" else "fl2va"
+    if task in tasks and partition == expected_partition:
+        return False
+    compatible = (
+        allow_fl2va_weights_for_ref2va
+        and task == "ref2va"
+        and partition == "fl2va"
+        and "fl2va" in tasks
+    )
+    if compatible:
+        return True
+    if task not in tasks:
+        raise ValueError(f"Checkpoint does not support task {task!r}; supported tasks: {tasks}.")
+    raise ValueError(
+        f"Checkpoint partition must be {expected_partition!r} for task {task!r}, "
+        f"got {partition!r}."
+    )
 
 
 @dataclass(frozen=True)
@@ -69,8 +115,11 @@ class H3PreflightRequest:
     available_memory_gb: float = 0.0
 
     def validate(self) -> None:
-        if not 5.0 <= self.duration_seconds <= 15.0:
-            raise ValueError("Duration must be between 5 and 15 seconds.")
+        if not 2.5 <= self.duration_seconds <= 15.0:
+            raise ValueError(
+                "Duration must be between 2.5 and 15 seconds; "
+                "durations below 5 seconds are experimental."
+            )
         if self.steps < 2:
             raise ValueError("Sampling steps must be at least 2.")
         if self.width < 32 or self.height < 32:
@@ -90,6 +139,7 @@ class SafetensorsHeader:
     dtypes: tuple[str, ...]
     metadata: dict[str, str]
     tensor_names: tuple[str, ...]
+    tensor_shapes: dict[str, tuple[int, ...]]
     adaln_bytes: int = 0
 
 
@@ -213,6 +263,10 @@ def read_safetensors_header(path: str | Path) -> SafetensorsHeader:
         dtypes=tuple(sorted(dtypes)),
         metadata={str(key): str(value) for key, value in metadata.items()},
         tensor_names=tuple(sorted(header)),
+        tensor_shapes={
+            name: tuple(int(dimension) for dimension in entry["shape"])
+            for name, entry in header.items()
+        },
         adaln_bytes=adaln_bytes,
     )
 
@@ -284,6 +338,19 @@ def _validate_asset_directory(
         ):
             return
         joined = " or ".join(candidates)
+        nested = sorted(
+            candidate
+            for child in path.iterdir()
+            if child.is_dir()
+            for name in candidates
+            if (candidate := child / name).is_file()
+        )
+        if nested:
+            selected_root = nested[0].parent
+            raise FileNotFoundError(
+                f"{component} requires {joined} directly in the selected directory: {path}. "
+                f"A nested component root was found: {selected_root}. Select that directory."
+            )
         raise FileNotFoundError(f"{component} requires {joined}: {path}")
 
 
@@ -327,6 +394,18 @@ def _validate_component_config(path: Path, component: str) -> None:
     if component == "video_vae" and (path / "source" / "config.json").is_file():
         config_path = path / "source" / "config.json"
     if not config_path.is_file():
+        nested = sorted(path.glob("*/config.json"))
+        if component == "video_vae":
+            nested.extend(sorted(path.glob("*/source/config.json")))
+        if nested:
+            selected_root = nested[0].parent
+            if nested[0].parent.name == "source":
+                selected_root = nested[0].parent.parent
+            raise FileNotFoundError(
+                f"{component} config.json must be directly in the selected component root: "
+                f"{path}. A nested component root was found: {selected_root}. "
+                "Select that directory instead."
+            )
         raise FileNotFoundError(f"{component} config file not found: {config_path}")
     if component == "audio_vae" and not (path / "metadata.json").is_file():
         raise FileNotFoundError(f"audio_vae metadata file not found: {path / 'metadata.json'}")
@@ -401,6 +480,18 @@ def _component_report(
                 "Single-file transformer is not an MLX-ready pruned H3 export: "
                 "adaln_t_table is missing."
             )
+        if name == "transformer":
+            from minimax_h3_mlx.config import MIN_VALIDATED_ADALN_CURVE_RANK
+
+            table_shape = headers[0].tensor_shapes.get("adaln_t_table")
+            if table_shape is not None and (
+                len(table_shape) != 2 or table_shape[1] < MIN_VALIDATED_ADALN_CURVE_RANK
+            ):
+                rank = table_shape[1] if len(table_shape) == 2 else table_shape
+                raise ValueError(
+                    f"Pruned AdaLN curve rank {rank} is below the validated minimum "
+                    f"{MIN_VALIDATED_ADALN_CURVE_RANK}. Reconvert with rank 64."
+                )
         required_metadata = {
             "video_vae": "minimax_h3_video_vae",
             "audio_vae": "minimax_h3_audio_vae",
@@ -459,6 +550,33 @@ def _component_report(
     )
 
 
+def _component_resolution_error(
+    spec: H3ComponentSetSpec,
+    name: str,
+    path: Path,
+    error: FileNotFoundError | ValueError,
+) -> str:
+    """Explain whether a failed path came from an override or native fallback."""
+
+    override = getattr(spec, name)
+    expected = COMPONENT_EXPECTATIONS[name]
+    if override:
+        selection = f"The {name} override is invalid: {path}."
+    else:
+        selection = (
+            f"No {name} override is selected. The native partition fallback is invalid: {path}."
+        )
+    guidance = (
+        f"Select {expected}, or install a native {name} component at the fallback path."
+    )
+    if name == "transformer" and override is None:
+        guidance += (
+            " The logical component name 'transformer' does not require renaming a shared "
+            "physical folder named 'transformers'."
+        )
+    return f"{selection} {guidance} Details: {error}"
+
+
 def _aligned_frames(duration_seconds: float) -> int:
     frames = int(round(duration_seconds * 24))
     while frames % 17 != 5:
@@ -493,30 +611,38 @@ def preflight_components(
     tasks = metadata.get("tasks")
     if not isinstance(tasks, list) or not all(isinstance(task, str) for task in tasks):
         raise ValueError("MiniMax H3 model manifest has invalid task metadata.")
-    if spec.task not in tasks:
-        raise ValueError(
-            f"Checkpoint does not support task {spec.task!r}; supported tasks: {tasks}."
-        )
     partition = metadata.get("partition")
     if not isinstance(partition, str) or not partition:
         raise ValueError("MiniMax H3 model manifest has no partition name.")
-    expected_partition = "ref2va" if spec.task == "ref2va" else "fl2va"
-    if partition != expected_partition:
-        raise ValueError(
-            f"Checkpoint partition must be {expected_partition!r} for task {spec.task!r}, "
-            f"got {partition!r}."
-        )
+    experimental_cross_partition = validate_task_partition(
+        task=spec.task,
+        tasks=tasks,
+        partition=partition,
+        allow_fl2va_weights_for_ref2va=spec.allow_fl2va_weights_for_ref2va,
+    )
 
     paths = spec.resolved_paths()
-    components = tuple(
-        _component_report(
-            name,
-            paths[name],
-            allow_text_only_processor=spec.task == "t2va",
-        )
-        for name in COMPONENT_NAMES
-    )
+    component_reports = []
+    for name in COMPONENT_NAMES:
+        try:
+            component_reports.append(
+                _component_report(
+                    name,
+                    paths[name],
+                    allow_text_only_processor=spec.task == "t2va",
+                )
+            )
+        except (FileNotFoundError, ValueError) as exc:
+            raise type(exc)(
+                _component_resolution_error(spec, name, paths[name], exc)
+            ) from exc
+    components = tuple(component_reports)
     by_name = {component.name: component for component in components}
+    if spec.task in {"fl2va", "ref2va"} and by_name["text_encoder"].paging_format:
+        raise ValueError(
+            "The selected paged text_encoder is text-only. FL2VA and Ref2VA require a "
+            "resident Qwen3-VL text encoder with vision weights."
+        )
 
     frames = _aligned_frames(request.duration_seconds)
     video_latent_frames = (frames - 5) // 17 * 5 + 2
@@ -571,6 +697,12 @@ def preflight_components(
         "Memory values are header-based estimates; Metal kernels and allocator fragmentation "
         "can increase peak memory."
     ]
+    if experimental_cross_partition:
+        warnings.append(
+            "Experimental compatibility mode is using FL2VA weights for Ref2VA packing. "
+            "Official FL2VA and Ref2VA checkpoints share an architecture but have different "
+            "learned tensor payloads; validate reference fidelity before production use."
+        )
     if request.width < 768 and request.height < 768:
         warnings.append("The selected canvas is an off-distribution wiring-test size.")
     if headroom is not None and headroom < 0:

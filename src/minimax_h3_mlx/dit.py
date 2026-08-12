@@ -214,6 +214,41 @@ class Attention(nn.Module):
         )
         return self.out_proj(out.astype(x.dtype))
 
+    def selected_queries(self, x, query_indices, rotary, mask):
+        """Attend selected queries to full-sequence K/V for terminal-block research."""
+        batch, sequence, _ = x.shape
+        qkv = self.qkv_proj(x).reshape(
+            batch, sequence, self.heads, 3, self.head_dim
+        )
+        q = mx.take(qkv[:, :, :, 0], query_indices, axis=1)
+        k = qkv[:, :, :, 1]
+        v = qkv[:, :, :, 2]
+        q = self.q_norm(q).transpose(0, 2, 1, 3)
+        k = self.k_norm(k).transpose(0, 2, 1, 3)
+        v = v.transpose(0, 2, 1, 3)
+        if rotary is not None:
+            cos, sin = rotary
+            q = apply_rotary(
+                q,
+                mx.take(cos, query_indices, axis=0),
+                mx.take(sin, query_indices, axis=0),
+            )
+            k = apply_rotary(k, cos, sin)
+        query_mask = mask
+        if mask is not None and mask.shape[-2] == sequence:
+            query_mask = mx.take(mask, query_indices, axis=-2)
+        out = mx.fast.scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            scale=self.scale,
+            mask=query_mask,
+        )
+        out = out.transpose(0, 2, 1, 3).reshape(
+            batch, query_indices.shape[0], self.heads * self.head_dim
+        )
+        return self.out_proj(out.astype(x.dtype))
+
     def __call__(
         self,
         x: mx.array,
@@ -548,6 +583,31 @@ class TransformerBlock(nn.Module):
         diagnostics.observe_hybrid_block(block_index, block_input, result)
         return result
 
+    def selected_terminal_queries(
+        self,
+        x: mx.array,
+        modulation: tuple[mx.array, ...],
+        adaln_indices: mx.array,
+        rotary: tuple[mx.array, mx.array],
+        query_indices: mx.array,
+        mask: mx.array | None = None,
+    ) -> mx.array:
+        """Return terminal-block target rows while retaining full-sequence K/V."""
+        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = modulation
+        h = self.norm1(x)
+        h = h * (1.0 + scale_msa[adaln_indices]) + shift_msa[adaln_indices]
+        target_adaln = adaln_indices[query_indices]
+        target = mx.take(x, query_indices, axis=1)
+        target = target + gate_msa[target_adaln] * self.attn.selected_queries(
+            h,
+            query_indices,
+            rotary,
+            mask,
+        )
+        h = self.norm2(target)
+        h = h * (1.0 + scale_mlp[target_adaln]) + shift_mlp[target_adaln]
+        return target + gate_mlp[target_adaln] * self.mlp(h)
+
 
 class MiniMaxH3DiT(nn.Module):
     """The MiniMax-H3 joint video + audio diffusion transformer.
@@ -642,27 +702,63 @@ class MiniMaxH3DiT(nn.Module):
                 f"{token_tags.shape} and {timestep_indices.shape} for seq_len={seq_len}."
             )
 
-        rotary = self.rope(position_ids)
+        rotary = _diagnostic_run(
+            diagnostics,
+            "input.rotary",
+            lambda: self.rope(position_ids),
+            metadata={"sequence_rows": int(seq_len)},
+        )
 
         # 1. Project each modality and scatter the rows into the packed buffer. The text stream
         #    sets the dtype of the packed sequence.
-        video_embeds = self.video_patch_proj(
-            video_latents.astype(param_dtype(self.video_patch_proj))
+        video_embeds = _diagnostic_run(
+            diagnostics,
+            "input.video_projection",
+            lambda: self.video_patch_proj(
+                video_latents.astype(param_dtype(self.video_patch_proj))
+            ),
+            metadata={"rows": int(video_latents.shape[1])},
         )
-        audio_embeds = self.audio_patch_proj(
-            audio_latents.astype(param_dtype(self.audio_patch_proj))
+        audio_embeds = _diagnostic_run(
+            diagnostics,
+            "input.audio_projection",
+            lambda: self.audio_patch_proj(
+                audio_latents.astype(param_dtype(self.audio_patch_proj))
+            ),
+            metadata={"rows": int(audio_latents.shape[1])},
         )
-        text = self.condition_proj(text_embeds.astype(param_dtype(self.condition_proj)))
+        text = _diagnostic_run(
+            diagnostics,
+            "input.text_projection",
+            lambda: self.condition_proj(
+                text_embeds.astype(param_dtype(self.condition_proj))
+            ),
+            metadata={"rows": int(text_embeds.shape[1])},
+        )
         text = self.token_refiner(text, diagnostics=diagnostics)
 
         B = text.shape[0]
-        x = mx.zeros((B, seq_len, text.shape[-1]), dtype=text.dtype)
-        x[:, text_indices] = text
-        x[:, video_indices] = video_embeds.astype(text.dtype)
-        x[:, audio_indices] = audio_embeds.astype(text.dtype)
+        def scatter_inputs():
+            packed = mx.zeros((B, seq_len, text.shape[-1]), dtype=text.dtype)
+            packed[:, text_indices] = text
+            packed[:, video_indices] = video_embeds.astype(text.dtype)
+            packed[:, audio_indices] = audio_embeds.astype(text.dtype)
+            return packed
+
+        x = _diagnostic_run(
+            diagnostics,
+            "input.scatter",
+            scatter_inputs,
+            metadata={"sequence_rows": int(seq_len)},
+        )
 
         # 2. One timestep embedding per distinct noise level, shared by all AdaLN projections.
-        temb = self.embed_timesteps(timestep)
+        temb = _diagnostic_run(
+            diagnostics,
+            "input.timestep_embedding",
+            lambda: self.embed_timesteps(timestep),
+            metadata={"distinct_timesteps": int(timestep.shape[0])},
+        )
 
         # 3. Row -> AdaLN table row. `maximum(tags, 0)` mirrors the reference clamp: padding rows
         #    carry tag -1 and must not index backwards. They never reach the outputs.
@@ -698,6 +794,11 @@ class MiniMaxH3DiT(nn.Module):
         blockcache=None,
         trajectory_forecast=None,
         forecast_coordinate: float | None = None,
+        trajectory_video_row_start: int = 0,
+        trajectory_audio_row_start: int = 0,
+        terminal_target_only: bool = False,
+        terminal_video_row_start: int = 0,
+        terminal_audio_row_start: int = 0,
         step_index: int = 0,
         total_steps: int = 1,
         diagnostics=None,
@@ -727,13 +828,44 @@ class MiniMaxH3DiT(nn.Module):
             )
             if predicted is not None:
                 temb = self.embed_timesteps(timestep)
-                return self._project_target_features(
+                video_result, audio_result = self._project_target_features(
                     predicted[0],
                     predicted[1],
                     temb,
-                    timestep_indices[video_indices],
-                    timestep_indices[audio_indices],
+                    timestep_indices[video_indices[trajectory_video_row_start:]],
+                    timestep_indices[audio_indices[trajectory_audio_row_start:]],
                 )
+                if trajectory_video_row_start:
+                    video_result = mx.concatenate(
+                        [
+                            mx.zeros(
+                                (
+                                    video_result.shape[0],
+                                    trajectory_video_row_start,
+                                    video_result.shape[2],
+                                ),
+                                dtype=video_result.dtype,
+                            ),
+                            video_result,
+                        ],
+                        axis=1,
+                    )
+                if trajectory_audio_row_start:
+                    audio_result = mx.concatenate(
+                        [
+                            mx.zeros(
+                                (
+                                    audio_result.shape[0],
+                                    trajectory_audio_row_start,
+                                    audio_result.shape[2],
+                                ),
+                                dtype=audio_result.dtype,
+                            ),
+                            audio_result,
+                        ],
+                        axis=1,
+                    )
+                return video_result, audio_result
 
         x, temb, adaln_indices, rotary = self.pack_inputs(
             video_latents,
@@ -757,6 +889,21 @@ class MiniMaxH3DiT(nn.Module):
             )
 
         paged = getattr(self, "paged_blocks", None)
+        if terminal_target_only and (
+            paged is not None or blockcache is not None or trajectory_forecast is not None
+        ):
+            raise ValueError(
+                "Terminal target-only research requires resident dense transformer blocks."
+            )
+        target_video_indices = None
+        target_audio_indices = None
+        terminal_query_indices = None
+        if terminal_target_only:
+            target_video_indices = video_indices[terminal_video_row_start:]
+            target_audio_indices = audio_indices[terminal_audio_row_start:]
+            terminal_query_indices = mx.concatenate(
+                (target_video_indices, target_audio_indices)
+            )
         if paged is not None:
             if blockcache is not None and hasattr(blockcache, "segment_start"):
                 raise ValueError(
@@ -846,15 +993,25 @@ class MiniMaxH3DiT(nn.Module):
                     if modulation_cache is not None
                     else block.adaln_proj(temb)
                 )
-                x = block(
-                    x,
-                    modulation,
-                    adaln_indices,
-                    rotary,
-                    mask,
-                    diagnostics=diagnostics,
-                    block_index=i,
-                )
+                if terminal_target_only and i == len(self.blocks) - 1:
+                    x = block.selected_terminal_queries(
+                        x,
+                        modulation,
+                        adaln_indices,
+                        rotary,
+                        terminal_query_indices,
+                        mask,
+                    )
+                else:
+                    x = block(
+                        x,
+                        modulation,
+                        adaln_indices,
+                        rotary,
+                        mask,
+                        diagnostics=diagnostics,
+                        block_index=i,
+                    )
                 if i == 0 and blockcache is not None:
                     after_block_zero = x
                     reused = blockcache.try_reuse(
@@ -885,14 +1042,104 @@ class MiniMaxH3DiT(nn.Module):
         if trajectory_forecast is not None and forecast_coordinate is not None:
             trajectory_forecast.update(
                 forecast_coordinate,
-                x[:, video_indices],
-                x[:, audio_indices],
+                x[:, video_indices[trajectory_video_row_start:]],
+                x[:, audio_indices[trajectory_audio_row_start:]],
             )
 
+        if terminal_target_only:
+            num_target_video = int(target_video_indices.shape[0])
+            video_hidden = x[:, :num_target_video]
+            audio_hidden = x[:, num_target_video:]
+            video = self.final_layer.norm_out(
+                video_hidden,
+                temb,
+                timestep_indices[target_video_indices],
+            )
+            audio = self.final_layer.norm_out(
+                audio_hidden,
+                temb,
+                timestep_indices[target_audio_indices],
+            )
+            video_result = self.final_layer.video_out(
+                video.astype(param_dtype(self.final_layer.video_out))
+            )
+            # The narrow audio head can select a different Metal GEMM kernel when its row count
+            # shrinks. Filler rows restore the original M dimension and bit-exact target audio;
+            # each output row is independent, and this projection is tiny relative to one block.
+            audio_rows = int(audio.shape[1])
+            if audio_rows < int(timestep_indices.shape[0]):
+                audio = mx.concatenate(
+                    (
+                        audio,
+                        mx.zeros(
+                            (
+                                audio.shape[0],
+                                int(timestep_indices.shape[0]) - audio_rows,
+                                audio.shape[2],
+                            ),
+                            dtype=audio.dtype,
+                        ),
+                    ),
+                    axis=1,
+                )
+            audio_result = self.final_layer.audio_out(
+                audio.astype(param_dtype(self.final_layer.audio_out))
+            )[:, :audio_rows]
+            if terminal_video_row_start:
+                video_result = mx.concatenate(
+                    (
+                        mx.zeros(
+                            (
+                                video_result.shape[0],
+                                terminal_video_row_start,
+                                video_result.shape[2],
+                            ),
+                            dtype=video_result.dtype,
+                        ),
+                        video_result,
+                    ),
+                    axis=1,
+                )
+            if terminal_audio_row_start:
+                audio_result = mx.concatenate(
+                    (
+                        mx.zeros(
+                            (
+                                audio_result.shape[0],
+                                terminal_audio_row_start,
+                                audio_result.shape[2],
+                            ),
+                            dtype=audio_result.dtype,
+                        ),
+                        audio_result,
+                    ),
+                    axis=1,
+                )
+            return video_result, audio_result
+
         # 4. Both heads run over every row, then each modality's rows are selected.
-        x = self.final_layer.norm_out(x, temb, timestep_indices)
-        video_out = self.final_layer.video_out(x.astype(param_dtype(self.final_layer.video_out)))
-        audio_out = self.final_layer.audio_out(x.astype(param_dtype(self.final_layer.audio_out)))
+        x = _diagnostic_run(
+            diagnostics,
+            "output.norm",
+            lambda: self.final_layer.norm_out(x, temb, timestep_indices),
+            metadata={"sequence_rows": int(x.shape[1])},
+        )
+        video_out = _diagnostic_run(
+            diagnostics,
+            "output.video_projection",
+            lambda: self.final_layer.video_out(
+                x.astype(param_dtype(self.final_layer.video_out))
+            ),
+            metadata={"sequence_rows": int(x.shape[1])},
+        )
+        audio_out = _diagnostic_run(
+            diagnostics,
+            "output.audio_projection",
+            lambda: self.final_layer.audio_out(
+                x.astype(param_dtype(self.final_layer.audio_out))
+            ),
+            metadata={"sequence_rows": int(x.shape[1])},
+        )
         video_result = video_out[:, video_indices]
         audio_result = audio_out[:, audio_indices]
         if diagnostics is not None:

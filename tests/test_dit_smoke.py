@@ -13,11 +13,13 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from minimax_h3_mlx.adaln import ModulationCache, drop_adaln_weights, schedule_timesteps
+from minimax_h3_mlx.algorithm_search.capture import CaptureConfig, DiagnosticSession
 from minimax_h3_mlx.blockcache import H3BlockCacheConfig
 from minimax_h3_mlx.config import TAG_AUDIO, TAG_TEXT, TAG_VIDEO, DiTConfig
 from minimax_h3_mlx.dit import MiniMaxH3DiT
 from minimax_h3_mlx.easycache import H3EasyCacheConfig
 from minimax_h3_mlx.pipeline import MiniMaxH3Pipeline
+from minimax_h3_mlx.ref2va import PreparedReference
 from minimax_h3_mlx.trajectory_forecast import H3TrajectoryForecastConfig
 
 
@@ -153,6 +155,7 @@ def test_transformer_only_text_sampling_shapes():
     dit = MiniMaxH3DiT(cfg)
     pipeline = MiniMaxH3Pipeline(dit, None, None, None)
     progress = []
+    previews = []
 
     result = pipeline.sample_latents(
         mx.random.normal((1, 3, cfg.text_dim)),
@@ -164,12 +167,349 @@ def test_transformer_only_text_sampling_shapes():
         drop_adaln=False,
         verbose=False,
         step_callback=lambda completed, total: progress.append((completed, total)),
+        latent_preview_callback=lambda completed, total, latents: previews.append(
+            (completed, total, tuple(latents.shape))
+        ),
     )
 
     assert result.video_latents.shape == (1, cfg.latents_dim, 37, 2, 2)
     assert result.audio_latents.shape == (2, cfg.audio_latents_dim, 207)
     assert result.transformer_evaluations == 2
     assert progress == [(0, 2), (1, 2), (2, 2)]
+    assert previews == [
+        (1, 2, tuple(result.video_latents.shape)),
+        (2, 2, tuple(result.video_latents.shape)),
+    ]
+
+
+def test_transformer_only_continuation_sampling_shapes():
+    cfg = tiny_config()
+    mx.random.seed(5)
+    pipeline = MiniMaxH3Pipeline(MiniMaxH3DiT(cfg), None, None, None)
+
+    result = pipeline.sample_latents(
+        mx.random.normal((1, 3, cfg.text_dim)),
+        np.full((3,), TAG_TEXT, dtype=np.int32),
+        duration_seconds=5.0,
+        num_inference_steps=3,
+        height=32,
+        width=32,
+        drop_adaln=False,
+        verbose=False,
+        continuation_video_latents=mx.random.normal((1, cfg.latents_dim, 7, 2, 2)),
+        continuation_audio_latents=mx.random.normal((2, cfg.audio_latents_dim, 37)),
+        continuation_frames=22,
+    )
+
+    assert result.video_latents.shape == (1, cfg.latents_dim, 37, 2, 2)
+    assert result.audio_latents.shape == (2, cfg.audio_latents_dim, 207)
+    assert result.transformer_evaluations == 2
+
+
+def test_transformer_only_ref2va_continuation_sampling_shapes():
+    cfg = tiny_config()
+    mx.random.seed(15)
+    pipeline = MiniMaxH3Pipeline(MiniMaxH3DiT(cfg), None, None, None)
+    reference = PreparedReference(
+        "video",
+        num_latent_frames=1,
+        latent_height=2,
+        latent_width=2,
+        num_audio_latents=1,
+    )
+
+    result = pipeline.sample_latents(
+        mx.random.normal((1, 3, cfg.text_dim)),
+        np.full((3,), TAG_TEXT, dtype=np.int32),
+        duration_seconds=5.0,
+        num_inference_steps=3,
+        height=32,
+        width=32,
+        drop_adaln=False,
+        verbose=False,
+        condition_video_rows=mx.random.normal((1, cfg.video_patch_dim)),
+        condition_audio_rows=mx.random.normal((2, cfg.audio_latents_dim)),
+        references=(reference,),
+        continuation_video_latents=mx.random.normal((1, cfg.latents_dim, 7, 2, 2)),
+        continuation_audio_latents=mx.random.normal((2, cfg.audio_latents_dim, 37)),
+        continuation_frames=22,
+    )
+
+    assert result.video_latents.shape == (1, cfg.latents_dim, 37, 2, 2)
+    assert result.audio_latents.shape == (2, cfg.audio_latents_dim, 207)
+    assert result.transformer_evaluations == 2
+
+
+def test_transformer_only_continuation_with_timed_keyframes_sampling_shapes():
+    cfg = tiny_config()
+    mx.random.seed(55)
+    pipeline = MiniMaxH3Pipeline(MiniMaxH3DiT(cfg), None, None, None)
+
+    result = pipeline.sample_latents(
+        mx.random.normal((1, 2, cfg.text_dim)),
+        np.array([TAG_VIDEO, TAG_TEXT], dtype=np.int32),
+        duration_seconds=5.0,
+        num_inference_steps=3,
+        height=32,
+        width=32,
+        drop_adaln=False,
+        verbose=False,
+        continuation_video_latents=mx.random.normal((1, cfg.latents_dim, 7, 2, 2)),
+        continuation_audio_latents=mx.random.normal((2, cfg.audio_latents_dim, 37)),
+        continuation_frames=22,
+        condition_video_rows=mx.random.normal((2, cfg.video_patch_dim)),
+        keyframe_anchors=(12, 84),
+    )
+
+    assert result.video_latents.shape == (1, cfg.latents_dim, 37, 2, 2)
+    assert result.audio_latents.shape == (2, cfg.audio_latents_dim, 207)
+    assert result.transformer_evaluations == 2
+
+
+def test_h3_native_refinement_preserves_original_audio_bit_exactly():
+    cfg = tiny_config()
+    mx.random.seed(51)
+    pipeline = MiniMaxH3Pipeline(MiniMaxH3DiT(cfg), None, None, None)
+    initial_video = mx.random.normal((1, cfg.latents_dim, 37, 4, 4))
+    initial_audio = mx.random.normal((2, cfg.audio_latents_dim, 207))
+    mx.eval(initial_video, initial_audio)
+
+    result = pipeline.sample_latents(
+        mx.random.normal((1, 3, cfg.text_dim)),
+        np.full((3,), TAG_TEXT, dtype=np.int32),
+        duration_seconds=5.0,
+        num_inference_steps=5,
+        height=64,
+        width=64,
+        drop_adaln=False,
+        verbose=False,
+        initial_video_latents=initial_video,
+        initial_audio_latents=initial_audio,
+        refinement_strength=0.5,
+        preserve_initial_audio=True,
+    )
+
+    assert result.video_latents.shape == initial_video.shape
+    assert result.transformer_evaluations == 2
+    assert result.refinement_strength == 0.5
+    assert result.refinement_audio_preserved is True
+    assert mx.array_equal(result.audio_latents, initial_audio).item()
+
+
+def test_continuation_target_only_trajectory_forecast_excludes_fixed_rows():
+    cfg = tiny_config()
+    mx.random.seed(6)
+    result = MiniMaxH3Pipeline(MiniMaxH3DiT(cfg), None, None, None).sample_latents(
+        mx.random.normal((1, 3, cfg.text_dim)),
+        np.full((3,), TAG_TEXT, dtype=np.int32),
+        duration_seconds=5.0,
+        num_inference_steps=5,
+        height=32,
+        width=32,
+        drop_adaln=False,
+        verbose=False,
+        continuation_video_latents=mx.random.normal((1, cfg.latents_dim, 7, 2, 2)),
+        continuation_audio_latents=mx.random.normal((2, cfg.audio_latents_dim, 37)),
+        continuation_frames=22,
+        trajectory_forecast_config=H3TrajectoryForecastConfig(
+            mode="automatic_speed",
+            max_delta_ratio=100.0,
+            offline_smoothing_replay=True,
+            conditioned_row_policy="target_only",
+        ),
+    )
+
+    assert result.trajectory_conditioned_row_policy == "target_only"
+    assert result.trajectory_excluded_video_rows == 7
+    assert result.trajectory_excluded_audio_rows == 74
+    assert result.trajectory_forecasts == 1
+    assert result.transformer_evaluations == 3
+    assert result.video_latents.shape == (1, cfg.latents_dim, 37, 2, 2)
+    assert result.audio_latents.shape == (2, cfg.audio_latents_dim, 207)
+
+
+def test_continuation_hidden_state_becomes_target_dependent_after_block_zero(tmp_path):
+    cfg = tiny_config()
+    session = DiagnosticSession(
+        CaptureConfig(
+            enabled=True,
+            output_directory=str(tmp_path),
+            targets=("block_input",),
+            blocks=(0, 1),
+            evaluation_indices=(0, 1),
+            max_total_bytes=32 * 1024 * 1024,
+        )
+    )
+    MiniMaxH3Pipeline(MiniMaxH3DiT(cfg), None, None, None).sample_latents(
+        mx.random.normal((1, 3, cfg.text_dim)),
+        np.full((3,), TAG_TEXT, dtype=np.int32),
+        duration_seconds=5.0,
+        num_inference_steps=3,
+        seed=19,
+        height=32,
+        width=32,
+        drop_adaln=False,
+        verbose=False,
+        continuation_video_latents=mx.random.normal((1, cfg.latents_dim, 7, 2, 2)),
+        continuation_audio_latents=mx.random.normal((2, cfg.audio_latents_dim, 37)),
+        continuation_frames=22,
+        diagnostics=session,
+    )
+
+    captures = {
+        (item["block"], item["evaluation_index"]): mx.load(str(tmp_path / item["path"]))[
+            "tensor_0"
+        ]
+        for item in session.captures
+    }
+    # Three text rows, seven video-context rows, then 74 audio-context rows.
+    context_indices = mx.concatenate((mx.arange(3, 10), mx.arange(10, 84)))
+    block0_first = captures[(0, 0)][:, context_indices]
+    block0_second = captures[(0, 1)][:, context_indices]
+    block1_first = captures[(1, 0)][:, context_indices]
+    block1_second = captures[(1, 1)][:, context_indices]
+    mx.eval(block0_first, block0_second, block1_first, block1_second)
+
+    assert mx.array_equal(block0_first, block0_second).item()
+    assert not mx.array_equal(block1_first, block1_second).item()
+    assert float(mx.max(mx.abs(block1_first - block1_second)).item()) > 0
+
+
+def test_terminal_target_only_matches_full_terminal_block_within_bf16_precision():
+    cfg = tiny_config()
+    mx.random.seed(29)
+    pipeline = MiniMaxH3Pipeline(MiniMaxH3DiT(cfg), None, None, None)
+    embeddings = mx.random.normal((1, 3, cfg.text_dim))
+    video_context = mx.random.normal((1, cfg.latents_dim, 7, 2, 2))
+    audio_context = mx.random.normal((2, cfg.audio_latents_dim, 37))
+    arguments = {
+        "duration_seconds": 5.0,
+        "num_inference_steps": 3,
+        "seed": 31,
+        "height": 32,
+        "width": 32,
+        "drop_adaln": False,
+        "verbose": False,
+        "continuation_video_latents": video_context,
+        "continuation_audio_latents": audio_context,
+        "continuation_frames": 22,
+    }
+    baseline = pipeline.sample_latents(
+        embeddings,
+        np.full((3,), TAG_TEXT, dtype=np.int32),
+        **arguments,
+    )
+    candidate = pipeline.sample_latents(
+        embeddings,
+        np.full((3,), TAG_TEXT, dtype=np.int32),
+        terminal_target_only=True,
+        **arguments,
+    )
+    mx.eval(
+        baseline.video_latents,
+        baseline.audio_latents,
+        candidate.video_latents,
+        candidate.audio_latents,
+    )
+
+    np.testing.assert_allclose(
+        np.asarray(candidate.video_latents),
+        np.asarray(baseline.video_latents),
+        rtol=2e-2,
+        atol=2e-2,
+    )
+    np.testing.assert_allclose(
+        np.asarray(candidate.audio_latents),
+        np.asarray(baseline.audio_latents),
+        rtol=2e-2,
+        atol=2e-2,
+    )
+    assert mx.array_equal(candidate.video_latents, baseline.video_latents).item()
+    assert mx.array_equal(candidate.audio_latents, baseline.audio_latents).item()
+
+
+def test_terminal_target_only_rejects_trajectory_forecast():
+    cfg = tiny_config()
+    with pytest.raises(ValueError, match="resident dense transformer"):
+        MiniMaxH3Pipeline(MiniMaxH3DiT(cfg), None, None, None).sample_latents(
+            mx.random.normal((1, 3, cfg.text_dim)),
+            np.full((3,), TAG_TEXT, dtype=np.int32),
+            duration_seconds=5.0,
+            num_inference_steps=3,
+            seed=37,
+            height=32,
+            width=32,
+            drop_adaln=False,
+            verbose=False,
+            terminal_target_only=True,
+            trajectory_forecast_config=H3TrajectoryForecastConfig(
+                mode="manual",
+                max_forecast_fraction=0.0,
+            ),
+        )
+
+
+def test_transformer_only_ref2va_sampling_keeps_reference_rows_fixed():
+    cfg = tiny_config()
+    mx.random.seed(14)
+    pipeline = MiniMaxH3Pipeline(MiniMaxH3DiT(cfg), None, None, None)
+    reference = PreparedReference(
+        "video",
+        num_latent_frames=1,
+        latent_height=2,
+        latent_width=2,
+        num_audio_latents=2,
+    )
+    embeddings = mx.random.normal((1, 2, cfg.text_dim))
+    video_condition = mx.random.normal((1, cfg.video_patch_dim))
+    audio_condition = mx.random.normal((4, cfg.audio_latents_dim))
+    arguments = dict(
+        duration_seconds=5.0,
+        num_inference_steps=3,
+        seed=27,
+        height=32,
+        width=32,
+        drop_adaln=False,
+        verbose=False,
+        condition_video_rows=video_condition,
+        condition_audio_rows=audio_condition,
+        references=(reference,),
+    )
+    result = pipeline.sample_latents(
+        embeddings,
+        np.array([TAG_TEXT, TAG_VIDEO], dtype=np.int32),
+        **arguments,
+    )
+    explicit_defaults = pipeline.sample_latents(
+        embeddings,
+        np.array([TAG_TEXT, TAG_VIDEO], dtype=np.int32),
+        visual_condition_strength=0.999,
+        audio_condition_strength=1.0,
+        **arguments,
+    )
+    weakened = pipeline.sample_latents(
+        embeddings,
+        np.array([TAG_TEXT, TAG_VIDEO], dtype=np.int32),
+        visual_condition_strength=0.7,
+        audio_condition_strength=0.8,
+        **arguments,
+    )
+    mx.eval(
+        result.video_latents,
+        result.audio_latents,
+        explicit_defaults.video_latents,
+        explicit_defaults.audio_latents,
+        weakened.video_latents,
+        weakened.audio_latents,
+    )
+
+    assert result.video_latents.shape == (1, cfg.latents_dim, 37, 2, 2)
+    assert result.audio_latents.shape == (2, cfg.audio_latents_dim, 207)
+    assert result.transformer_evaluations == 2
+    assert mx.array_equal(result.video_latents, explicit_defaults.video_latents)
+    assert mx.array_equal(result.audio_latents, explicit_defaults.audio_latents)
+    assert not mx.array_equal(result.video_latents, weakened.video_latents)
+    assert not mx.array_equal(result.audio_latents, weakened.audio_latents)
 
 
 def test_h3_easycache_skips_joint_video_audio_evaluation():

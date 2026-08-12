@@ -342,7 +342,12 @@ class MiniMaxH3TextEncoder:
 
     # -- request presentation --------------------------------------------------------------
 
-    def build_request(self, prompt: str, images: list | None = None):
+    def build_request(
+        self,
+        prompt: str,
+        images: list | None = None,
+        references: list | None = None,
+    ):
         """Build H3's token sequence and its per-row modality tags.
 
         Returns ``(input_ids, token_tags, vision_inputs)``; ``vision_inputs`` is ``None`` for a
@@ -354,6 +359,14 @@ class MiniMaxH3TextEncoder:
         token_ids: list[int] = []
         token_tags: list[int] = []
         vision_inputs = None
+
+        if images and references:
+            raise ValueError(
+                "H3 conditioning cannot combine FL2VA keyframes and Ref2VA references."
+            )
+
+        if references:
+            return self._build_reference_request(prompt, references)
 
         if images:
             vision = self.processor.image_processor(images=images, return_tensors="np")
@@ -383,6 +396,82 @@ class MiniMaxH3TextEncoder:
             mx.array(np.array([token_ids], dtype=np.int32)),
             np.array(token_tags, dtype=np.int64),
             vision_inputs,
+        )
+
+    def _build_reference_request(self, prompt: str, references: list):
+        """Build Ref2VA labels and independently process each ordered visual block."""
+        from .ref2va import sample_reference_video_frames
+
+        token_ids: list[int] = []
+        token_tags: list[int] = []
+        visual_units = []
+        counts = {"image": 0, "video": 0, "audio": 0}
+        start = self.tokenizer.convert_tokens_to_ids("<|vision_start|>")
+        end = self.tokenizer.convert_tokens_to_ids("<|vision_end|>")
+        image_pad = self.tokenizer.convert_tokens_to_ids("<|image_pad|>")
+        video_pad = self.tokenizer.convert_tokens_to_ids("<|video_pad|>")
+
+        def emit_text(value: str) -> None:
+            ids = self.tokenizer(value, add_special_tokens=False)["input_ids"]
+            token_ids.extend(ids)
+            token_tags.extend([TAG_TEXT] * len(ids))
+
+        def emit_vision(pad_id: int, unit) -> None:
+            pixels, grid = unit
+            count = int(np.asarray(grid)[0].prod()) // self.merge_size**2
+            ids = [start] + [pad_id] * count + [end]
+            token_ids.extend(ids)
+            token_tags.extend([TAG_VIDEO] * len(ids))
+            visual_units.append((pad_id, pixels, np.asarray(grid)))
+
+        for reference in references:
+            if reference.has_audio:
+                counts["audio"] += 1
+                emit_text(f"<Audio {counts['audio']}>: ")
+            if reference.kind == "image":
+                counts["image"] += 1
+                emit_text(f"<Picture {counts['image']}>: ")
+                vision = self.processor.image_processor(
+                    images=[reference.image], return_tensors="np"
+                )
+                emit_vision(
+                    image_pad,
+                    (
+                        np.asarray(vision["pixel_values"]),
+                        np.asarray(vision["image_grid_thw"]),
+                    ),
+                )
+            elif reference.kind == "video":
+                counts["video"] += 1
+                emit_text(f"<Video {counts['video']}>: ")
+                sampled, timestamps = sample_reference_video_frames(reference.frames)
+                reference.block_timestamps = timestamps
+                if len(sampled) % 2:
+                    sampled.append(sampled[-1])
+                for block_index, timestamp in enumerate(timestamps):
+                    emit_text(f"<{timestamp:.1f} seconds>")
+                    pair = np.stack(sampled[2 * block_index : 2 * block_index + 2])
+                    processor = getattr(self.processor, "video_processor", None)
+                    if processor is None:
+                        raise ValueError(
+                            "The selected Qwen3-VL processor has no video processor. "
+                            "Use the released H3 processor for Ref2VA."
+                        )
+                    vision = processor(
+                        videos=[pair], do_sample_frames=False, return_tensors="np"
+                    )
+                    emit_vision(
+                        video_pad,
+                        (
+                            np.asarray(vision["pixel_values_videos"]),
+                            np.asarray(vision["video_grid_thw"]),
+                        ),
+                    )
+        emit_text(prompt)
+        return (
+            mx.array(np.asarray([token_ids], dtype=np.int32)),
+            np.asarray(token_tags, dtype=np.int64),
+            visual_units,
         )
 
     # -- forward ---------------------------------------------------------------------------
@@ -438,26 +527,75 @@ class MiniMaxH3TextEncoder:
         # No `model.norm(h)`: H3 conditions on the unnormalized state.
         return h
 
-    def encode(self, prompt: str, images: list | None = None) -> tuple[mx.array, np.ndarray]:
+    def encode(
+        self,
+        prompt: str,
+        images: list | None = None,
+        references: list | None = None,
+    ) -> tuple[mx.array, np.ndarray]:
         """Encode a request into ``((1, num_text_tokens, 5120), (num_text_tokens,))``."""
         from mlx_vlm.models.qwen3_vl.language import LanguageModel
 
-        input_ids, token_tags, vision_inputs = self.build_request(prompt, images)
+        input_ids, token_tags, vision_inputs = self.build_request(prompt, images, references)
 
         inputs_embeds = None
         visual_pos_masks = None
         deepstack_embeds = None
-        grid_thw = None
+        image_grid_thw = None
+        video_grid_thw = None
 
-        if vision_inputs is not None:
+        if references:
+            if self.vision is None:
+                raise ValueError(
+                    "This encoder was built with `load_vision=False`; it cannot take references."
+                )
+            features = []
+            deepstack_groups = []
+            image_grids = []
+            video_grids = []
+            for pad_id, pixels, grid_np in vision_inputs:
+                grid = mx.array(grid_np.astype(np.int32))
+                hidden, deep = self.vision(
+                    mx.array(pixels).astype(self.dtype), grid, output_hidden_states=True
+                )
+                features.append(hidden.astype(self.dtype))
+                deepstack_groups.append(deep)
+                if pad_id == self.image_token_id:
+                    image_grids.append(grid_np)
+                else:
+                    video_grids.append(grid_np)
+            inputs_embeds = self.language.embed_tokens(input_ids)
+            visual_mask = (input_ids == self.image_token_id) | (
+                input_ids == self.config.video_token_id
+            )
+            combined = mx.concatenate(features, axis=0)
+            expanded = mx.broadcast_to(visual_mask[..., None], inputs_embeds.shape)
+            if int(expanded.sum().item()) != combined.size:
+                raise ValueError(
+                    "The Ref2VA presentation rows do not match the Qwen3-VL vision features."
+                )
+            inputs_embeds = _masked_scatter(inputs_embeds, expanded, combined)
+            visual_pos_masks = visual_mask
+            if deepstack_groups:
+                deepstack_embeds = [
+                    mx.concatenate([group[layer] for group in deepstack_groups], axis=0)
+                    for layer in range(len(deepstack_groups[0]))
+                ]
+            if image_grids:
+                image_grid_thw = mx.array(np.concatenate(image_grids).astype(np.int32))
+            if video_grids:
+                video_grid_thw = mx.array(np.concatenate(video_grids).astype(np.int32))
+        elif vision_inputs is not None:
             if self.vision is None:
                 raise ValueError(
                     "This encoder was built with `load_vision=False`; it cannot take images."
                 )
             pixel_values, grid_np = vision_inputs
-            grid_thw = mx.array(grid_np.astype(np.int32))
+            image_grid_thw = mx.array(grid_np.astype(np.int32))
             hidden, deepstack_embeds = self.vision(
-                mx.array(pixel_values).astype(self.dtype), grid_thw, output_hidden_states=True
+                mx.array(pixel_values).astype(self.dtype),
+                image_grid_thw,
+                output_hidden_states=True,
             )
             inputs_embeds = self.language.embed_tokens(input_ids)
             image_mask = input_ids == self.image_token_id
@@ -478,7 +616,11 @@ class MiniMaxH3TextEncoder:
 
         # Qwen3-VL's 3D M-RoPE index, derived from the vision-start/pad token ids.
         position_ids, _ = LanguageModel.get_rope_index(
-            self, input_ids, image_grid_thw=grid_thw, video_grid_thw=None, attention_mask=None
+            self,
+            input_ids,
+            image_grid_thw=image_grid_thw,
+            video_grid_thw=video_grid_thw,
+            attention_mask=None,
         )
 
         hidden_states = self._hidden_states(

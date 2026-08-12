@@ -1,0 +1,103 @@
+{
+  "1": {
+    "class_type": "WeeToddH3ComponentLoader",
+    "inputs": {
+      "checkpoint": "MiniMax-H3/FL2VA",
+      "task": "t2va",
+      "transformer": "MiniMax-H3/transformers/q8_extended_paged",
+      "text_encoder": "MiniMax-H3/text_encoders/q8-paged",
+      "processor": "MiniMax-H3/FL2VA/processor",
+      "tokenizer": "MiniMax-H3/FL2VA/tokenizer",
+      "video_vae": "MiniMax-H3/vae/q8/video_vae_affine_q8.safetensors",
+      "audio_vae": "MiniMax-H3/FL2VA/audio_vae",
+      "allow_fl2va_weights_for_ref2va": false
+    }
+  },
+  "2": {
+    "class_type": "WeeToddH3GenerationConfig",
+    "inputs": {
+      "duration_seconds": 5.0,
+      "steps": 8,
+      "seed": 0,
+      "resolution_mode": "ratio + size",
+      "resolution_tier": "384 px short edge — fast smoke",
+      "aspect_ratio": "16:9 — widescreen landscape",
+      "short_edge": 384,
+      "custom_width": 640,
+      "custom_height": 384,
+      "drop_adaln": true,
+      "memory_mode": "normal",
+      "attention_chunk_size": "automatic",
+      "projection_backend": "mlx",
+      "sampling_method": "euler"
+    }
+  },
+  "3": {
+    "class_type": "WeeToddH3Preflight",
+    "inputs": {
+      "components": ["1", 0],
+      "config": ["2", 0],
+      "prompt_tokens": 512,
+      "available_memory_gb": 0.0
+    }
+  },
+  "4": {
+    "class_type": "WeeToddH3TextEncode",
+    "inputs": {
+      "components": ["3", 0],
+      "prompt": "integrated_multimodal_description: [Shot 1] Live-action cinematic medium-wide shot inside a warm repair workshop. A small red wind-up robot walks steadily across a worn wooden workbench, stops at the edge, looks toward the camera, and raises one hand in a deliberate wave. The camera trucks gently beside it while the silver key turns and dust floats through a shaft of sunlight.\n\noverall_soundscape: Light metal footsteps tap against wood, the winding key clicks rhythmically, and quiet workshop ambience continues without music.\n\nnon_diegetic_music: N/A",
+      "unload_after_encode": true
+    }
+  },
+  "5": {
+    "class_type": "WeeToddH3Sample",
+    "inputs": {
+      "components": ["3", 0],
+      "conditioning": ["4", 0],
+      "config": ["2", 0],
+      "unload_after_sample": true
+    }
+  },
+  "6": {
+    "class_type": "WeeToddH3VideoVAEDecode",
+    "inputs": {
+      "components": ["3", 0],
+      "latents": ["5", 0],
+      "unload_after_decode": true
+    }
+  },
+  "7": {
+    "class_type": "WeeToddH3AudioVAEDecode",
+    "inputs": {
+      "components": ["3", 0],
+      "latents": ["5", 0],
+      "unload_after_decode": true
+    }
+  },
+  "8": {
+    "class_type": "WeeToddLTX23ModelLoader",
+    "inputs": {
+      "model_directory": "LTX-2.3/q8",
+      "gemma_model": "mlx-community/gemma-3-12b-it-4bit"
+    }
+  },
+  "9": {
+    "class_type": "WeeToddLTX23UpscalerLoader",
+    "inputs": {
+      "model": ["8", 0],
+      "upscaler_name": "spatial_upscaler_x2_v1_1"
+    }
+  },
+  "10": {
+    "class_type": "WeeToddLTX23UpscalePublish",
+    "inputs": {
+      "upscaler": ["9", 0],
+      "images": ["6", 0],
+      "audio": ["7", 0],
+      "filename_prefix": "WeeTodd/H3_LTX23_2x",
+      "fps": 24.0,
+      "max_av_drift_seconds": 0.025,
+      "generation_metadata": "{\"workflow\": \"h3_to_ltx23_2x_upscale\"}"
+    }
+  }
+}

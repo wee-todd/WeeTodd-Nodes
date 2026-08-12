@@ -1,0 +1,120 @@
+{
+  "1": {
+    "class_type": "WeeToddH3ComponentLoader",
+    "inputs": {
+      "checkpoint": "MiniMax-H3/FL2VA",
+      "task": "t2va",
+      "transformer": "MiniMax-H3/transformers/q8_extended_paged",
+      "text_encoder": "MiniMax-H3/text_encoders/q8-paged",
+      "processor": "MiniMax-H3/FL2VA/processor",
+      "tokenizer": "MiniMax-H3/FL2VA/tokenizer",
+      "video_vae": "MiniMax-H3/vae/q8/video_vae_affine_q8.safetensors",
+      "audio_vae": "MiniMax-H3/FL2VA/audio_vae",
+      "allow_fl2va_weights_for_ref2va": false
+    }
+  },
+  "2": {
+    "class_type": "WeeToddH3GenerationConfig",
+    "inputs": {
+      "duration_seconds": 15.0,
+      "steps": 7,
+      "seed": 20260811,
+      "resolution_mode": "exact dimensions",
+      "resolution_tier": "768 px short edge \u2014 native",
+      "aspect_ratio": "16:9 \u2014 widescreen landscape",
+      "short_edge": 768,
+      "custom_width": 1344,
+      "custom_height": 768,
+      "drop_adaln": true,
+      "memory_mode": "normal",
+      "attention_chunk_size": "automatic",
+      "projection_backend": "mlx",
+      "sampling_method": "euler"
+    }
+  },
+  "3": {
+    "class_type": "WeeToddH3ValidatedSamplingPreset",
+    "inputs": {
+      "config": [
+        "2",
+        0
+      ],
+      "preset": "One-shot staged Turbo \u2014 drbaph v4 step-600 \u2014 15-second quality baseline"
+    }
+  },
+  "4": {
+    "class_type": "WeeToddH3Preflight",
+    "inputs": {
+      "components": [
+        "1",
+        0
+      ],
+      "config": [
+        "3",
+        0
+      ],
+      "prompt_tokens": 1024,
+      "available_memory_gb": 0.0,
+      "ffmpeg_path": ""
+    }
+  },
+  "5": {
+    "class_type": "WeeToddH3TextEncode",
+    "inputs": {
+      "components": [
+        "4",
+        0
+      ],
+      "prompt": "integrated_multimodal_description: [Shot 1] Live-action mockumentary crossover parody with realistic skin, clothing, soil, and physically natural movement, presented as one continuous handheld shot at a barren desert excavation site in harsh afternoon sunlight. Jesse, a lean young white man with a shaved head, dusty dark hoodie, work gloves, and black work trousers, stands inside a deep grave-sized hole. During the opening four seconds, Jesse angrily throws several heavy shovelfuls of dirt over the rim; the shovel strikes compact soil, loose dirt scatters, and his breathing grows heavier. Dwight, a rigid middle-aged white man with neatly parted brown hair, wire-frame glasses, and a mustard-yellow short-sleeve shirt, walks into frame above the hole, studies it suspiciously, adjusts his glasses, looks down with a smug expression, and says <d>[English] Hello, little man. Digging your own grave? </d> Jesse immediately stops digging, slowly turns his head and shoulders toward Dwight, plants his boots, grips the shovel tightly with both hands, and replies with a cold threatening expression <d>[English] No, no, no... I'm digging it for you. Just like I did for Michael. </d> Dwight's confidence collapses. His eyes widen behind his glasses, his face fills with horror, and he begins crying and panicking. He drops to his knees at the rim, grabs Jesse by both shoulders, shakes him once, and screams <d>[English] No! What did you do to Michael?! Where is he? Tell me now! </d> Jesse remains completely emotionless and silent, holding the shovel upright. The handheld camera makes restrained documentary corrections, pushes closer as Dwight panics, and ends abruptly on a tight view of Dwight's terrified face with Jesse still visible in the shallow background. Do not cut, fade, teleport, duplicate either man, change clothing, reverse screen positions, or reset the action.\n\noverall_soundscape: Continuous dry desert wind and quiet outdoor ambience; synchronized shovel impacts, scraping soil, scattering dirt, Jesse's heavy breathing, Dwight's footsteps on gravel, clothing rustle as he adjusts his glasses, the final shovel scrape, knees striking loose soil, one brief shoulder shake, Dwight's crying and panicked breathing, and clean location-recorded dialogue synchronized to each speaker's mouth. Preserve one continuous acoustic space without an ambience reset.\n\nnon_diegetic_music: N/A",
+      "unload_after_encode": true,
+      "config": [
+        "3",
+        0
+      ]
+    }
+  },
+  "6": {
+    "class_type": "WeeToddH3Sample",
+    "inputs": {
+      "components": [
+        "4",
+        0
+      ],
+      "conditioning": [
+        "5",
+        0
+      ],
+      "config": [
+        "3",
+        0
+      ],
+      "unload_after_sample": true,
+      "loras": [
+        "3",
+        1
+      ]
+    }
+  },
+  "7": {
+    "class_type": "WeeToddH3DirectPublishLatents",
+    "inputs": {
+      "components": [
+        "4",
+        0
+      ],
+      "latents": [
+        "6",
+        0
+      ],
+      "filename_prefix": "WeeTodd/H3_768p_15s_OneShot_Staged_Turbo",
+      "crf": 18,
+      "max_av_drift_seconds": 0.025,
+      "generation_metadata": "{\"workflow\": \"h3_768p_15s_one_clip_staged_turbo\", \"seed\": 20260811, \"lora\": \"minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors\"}",
+      "sampling_info": [
+        "6",
+        1
+      ],
+      "ffmpeg_path": ""
+    }
+  }
+}

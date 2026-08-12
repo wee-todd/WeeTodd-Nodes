@@ -36,10 +36,14 @@ class H3GenerationConfig:
     memory_mode: str = "normal"
     attention_chunk_size: str = "automatic"
     projection_backend: str = "mlx"
+    sampling_method: str = "euler"
 
     def validate(self) -> None:
-        if not 5.0 <= self.duration_seconds <= 15.0:
-            raise ValueError("MiniMax H3 duration must be between 5 and 15 seconds")
+        if not 2.5 <= self.duration_seconds <= 15.0:
+            raise ValueError(
+                "MiniMax H3 duration must be between 2.5 and 15 seconds; "
+                "durations below 5 seconds are experimental"
+            )
         if self.steps < 2:
             raise ValueError("steps must be at least 2")
         if self.width < 32 or self.height < 32:
@@ -54,6 +58,8 @@ class H3GenerationConfig:
             raise ValueError("attention_chunk_size must be automatic, 512, 1024, or 2048")
         if self.projection_backend not in {"mlx", "mpp_experimental"}:
             raise ValueError("projection_backend must be mlx or mpp_experimental")
+        if self.sampling_method not in {"euler", "res_multistep"}:
+            raise ValueError("sampling_method must be euler or res_multistep")
 
     @property
     def attention_query_chunk_size(self) -> int | None:

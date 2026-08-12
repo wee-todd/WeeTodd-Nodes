@@ -12,7 +12,7 @@ from mlx.utils import tree_flatten, tree_unflatten
 from minimax_h3_mlx.algorithm_search.block_quantization import quantize_selected_blocks
 from minimax_h3_mlx.config import TAG_AUDIO, TAG_TEXT, TAG_VIDEO, DiTConfig
 from minimax_h3_mlx.dit import MiniMaxH3DiT
-from minimax_h3_mlx.load import load_dit
+from minimax_h3_mlx.load import is_fp32_key, load_dit
 from minimax_h3_mlx.mixed_checkpoint import (
     MIXED_CHECKPOINT_FORMAT,
     Q8_CONSERVATIVE_PROFILE,
@@ -98,6 +98,16 @@ def test_accepted_recipe_selects_only_late_core_blocks():
     assert set(recipe.overrides.values()) == {8}
     assert min(int(path.split(".")[1]) for path in recipe.overrides) == 38
     assert max(int(path.split(".")[1]) for path in recipe.overrides) == 49
+
+
+def test_curve_form_adaln_projections_are_runtime_fp32_islands():
+    block_weight = "blocks.0.adaln_proj.linear.weight"
+    final_bias = "final_layer.adaln_proj.linear.bias"
+
+    assert not is_fp32_key(block_weight)
+    assert is_fp32_key(block_weight, curve_form=True)
+    assert is_fp32_key(final_bias, curve_form=True)
+    assert not is_fp32_key("blocks.0.attn.qkv_proj.weight", curve_form=True)
 
 
 def test_extended_recipe_adds_only_middle_mlp_projections():

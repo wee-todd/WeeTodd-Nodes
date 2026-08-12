@@ -2,21 +2,22 @@
   "1": {
     "class_type": "WeeToddH3ComponentLoader",
     "inputs": {
-      "audio_vae": "",
+      "audio_vae": "MiniMax-H3/FL2VA/audio_vae",
       "checkpoint": "MiniMax-H3/FL2VA",
-      "processor": "",
+      "processor": "MiniMax-H3/FL2VA/processor",
       "task": "t2va",
-      "text_encoder": "",
-      "tokenizer": "",
-      "transformer": "",
-      "video_vae": ""
+      "text_encoder": "MiniMax-H3/text_encoders/q8-paged",
+      "tokenizer": "MiniMax-H3/FL2VA/tokenizer",
+      "transformer": "MiniMax-H3/transformers/q8_extended_paged",
+      "video_vae": "MiniMax-H3/vae/q8/video_vae_affine_q8.safetensors",
+      "allow_fl2va_weights_for_ref2va": false
     },
     "_meta": {"title": "H3 Component Loader"}
   },
   "2": {
     "class_type": "WeeToddH3Preflight",
     "inputs": {
-      "components": ["1", 0],
+      "components": ["10", 0],
       "config": ["3", 0],
       "prompt_tokens": 512,
       "available_memory_gb": 0.0
@@ -37,7 +38,9 @@
       "custom_width": 640,
       "custom_height": 384,
       "seed": 0,
-      "steps": 8
+      "steps": 8,
+      "projection_backend": "mlx",
+      "sampling_method": "euler"
     },
     "_meta": {"title": "H3 Generation Config"}
   },
@@ -105,5 +108,19 @@
       "max_skip_fraction": 0.25
     },
     "_meta": {"title": "H3 EasyCache"}
+  },
+  "10": {
+    "class_type": "WeeToddH3PreviewOverride",
+    "inputs": {
+      "components": ["1", 0],
+      "tae_model": "taeh3.safetensors",
+      "preview_backend": "auto",
+      "coreml_model": "taeh3_coreml_256.mlpackage",
+      "preview_every": 1,
+      "preview_frames": 6,
+      "max_preview_edge": 256,
+      "safety_guard": "conservative collapse guard"
+    },
+    "_meta": {"title": "H3 Model Preview Override"}
   }
 }

@@ -76,6 +76,13 @@ class H3Conditioning:
     load_vision: bool
     encoder_spec: H3TextEncoderSpec
     paging_report: dict[str, Any] | None = None
+    task: str = "t2va"
+    condition_video_rows: Any | None = None
+    condition_audio_rows: Any | None = None
+    keyframe_anchors: tuple[str | int, ...] = ()
+    references: tuple[Any, ...] = ()
+    visual_condition_strength: float = 0.999
+    audio_condition_strength: float = 1.0
 
 
 EncoderFactory = Callable[[H3TextEncoderSpec], Any]
@@ -117,6 +124,9 @@ class H3TextEncoderCache:
         spec: H3TextEncoderSpec,
         prompt: str,
         *,
+        images: list[Any] | None = None,
+        references: list[Any] | None = None,
+        task: str = "t2va",
         unload_after: bool = True,
         prepare_stage: Callable[[], None] | None = None,
     ) -> H3Conditioning:
@@ -131,7 +141,14 @@ class H3TextEncoderCache:
                 self._encoder = self._factory(spec)
                 self._spec = spec
             try:
-                embeddings, token_tags = self._encoder.encode(prompt)
+                if images is None and references is None:
+                    embeddings, token_tags = self._encoder.encode(prompt)
+                elif references is not None:
+                    embeddings, token_tags = self._encoder.encode(
+                        prompt, references=references
+                    )
+                else:
+                    embeddings, token_tags = self._encoder.encode(prompt, images)
                 # Materialize the only live outputs before dropping the encoder. Otherwise MLX's
                 # lazy graph can retain encoder parameters into the transformer stage.
                 try:
@@ -151,6 +168,7 @@ class H3TextEncoderCache:
                     load_vision=spec.load_vision,
                     encoder_spec=spec,
                     paging_report=pager.report() if pager is not None else None,
+                    task=task,
                 )
             except BaseException:
                 self._release_locked()

@@ -1,0 +1,41 @@
+{
+  "_class_name": "MiniMaxH3Pipeline",
+  "_diffusers_version": "0.32.2",
+  "transformer": [
+    "diffusers",
+    "MiniMaxH3DiTModel"
+  ],
+  "text_encoder": [
+    "transformers",
+    "MiniMaxH3Qwen3VLHFEncoder"
+  ],
+  "processor": [
+    "transformers",
+    "Qwen3VLProcessor"
+  ],
+  "tokenizer": [
+    "transformers",
+    "Qwen2TokenizerFast"
+  ],
+  "video_vae": [
+    "diffusers",
+    "MiniMaxH3VideoVAE"
+  ],
+  "audio_vae": [
+    "diffusers",
+    "MiniMaxH3AudioVAE"
+  ],
+  "scheduler": null,
+  "_minimax_h3": {
+    "schema_version": 1,
+    "partition": "ref2va",
+    "tasks": [
+      "ref2va"
+    ],
+    "task_aliases": {},
+    "sigma_shift_scales": {
+      "video": 12.0,
+      "audio": 3.0
+    }
+  }
+}

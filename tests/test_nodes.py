@@ -2,19 +2,51 @@ import json
 import sys
 from types import SimpleNamespace
 
+import mlx.core as mx
+import numpy as np
 import pytest
 
 from wee_todd_nodes.nodes import (
     NODE_CLASS_MAPPINGS,
     WeeToddH3ComponentLoader,
+    WeeToddH3FirstFrame,
+    WeeToddH3FirstLastFrame,
     WeeToddH3GenerationConfig,
+    WeeToddH3KeyframeEncode,
+    WeeToddH3LastFrame,
+    WeeToddH3LatentHiresFix,
+    WeeToddH3LoRALoader,
     WeeToddH3QuantizedTransformerLoader,
+    WeeToddH3ReferenceAudio,
+    WeeToddH3ReferenceEncode,
+    WeeToddH3ReferenceImage,
+    WeeToddH3ReferenceStrength,
+    WeeToddH3ReferenceVideo,
     WeeToddH3TrajectoryForecast,
+    WeeToddH3ValidatedSamplingPreset,
     _output_directory,
+    _parse_media_timing_info,
     _publication_environment,
     _resolve_h3_resolution,
     _safe_output_target,
 )
+
+
+def test_trim_timing_metadata_explicitly_authorizes_changed_frame_count():
+    timing = {
+        "context_frames_removed": 22,
+        "output_frames": 102,
+        "fps": 24,
+        "sample_rate": 32000,
+    }
+
+    assert _parse_media_timing_info(
+        json.dumps(timing), image_frames=102, sample_rate=32000
+    ) == timing
+    with pytest.raises(ValueError, match="frame count"):
+        _parse_media_timing_info(json.dumps(timing), image_frames=101, sample_rate=32000)
+    with pytest.raises(ValueError, match="sample rate"):
+        _parse_media_timing_info(json.dumps(timing), image_frames=102, sample_rate=48000)
 
 
 def test_sampling_metadata_preserves_exact_prompt(monkeypatch):
@@ -67,26 +99,626 @@ def test_sampling_metadata_preserves_exact_prompt(monkeypatch):
     }
 
 
+def test_hires_fix_resolves_target_and_preserves_audio_contract(monkeypatch):
+    from minimax_h3_mlx.trajectory_forecast import H3TrajectoryForecastConfig
+    from wee_todd_nodes.runtime import H3GenerationConfig
+
+    inputs = WeeToddH3LatentHiresFix.INPUT_TYPES()
+    resize_input = inputs["optional"]["latent_resize_method"]
+    assert "latent_resize_method" not in inputs["required"]
+    assert resize_input[0] == ["bilinear", "nearest exact", "bicubic", "lanczos-3"]
+    assert resize_input[1]["default"] == "bilinear"
+
+    source = SimpleNamespace(
+        width=640,
+        height=384,
+        generation_config=H3GenerationConfig(
+            width=640,
+            height=384,
+            duration_seconds=5.0,
+            steps=8,
+        ),
+    )
+    refined = SimpleNamespace(
+        transformer_evaluations=2,
+        refinement_audio_preserved=True,
+        trajectory_forecasts=2,
+        trajectory_fallbacks=0,
+        trajectory_offline_replay=True,
+        trajectory_replay_steps=6,
+        trajectory_replay_anchor_steps=4,
+        trajectory_replay_smoothed_steps=2,
+        trajectory_replay_seconds=0.125,
+        trajectory_replay_fallback_reason=None,
+    )
+    forecast = H3TrajectoryForecastConfig(
+        mode="automatic_speed",
+        offline_smoothing_replay=True,
+    )
+    calls = []
+
+    def sample(*args, **kwargs):
+        calls.append((args, kwargs))
+        return refined
+
+    monkeypatch.setattr(
+        "wee_todd_nodes.nodes.H3TransformerSpec.from_components",
+        lambda components: "transformer-spec",
+    )
+    monkeypatch.setattr(
+        "wee_todd_nodes.nodes.TRANSFORMER_RUNTIME",
+        SimpleNamespace(sample=sample, loaded=False),
+    )
+
+    result, refined_config, metadata = WeeToddH3LatentHiresFix().refine(
+        "components",
+        "conditioning",
+        source,
+        "1.5x — balanced",
+        5,
+        0.35,
+        True,
+        trajectory_forecast=forecast,
+        latent_resize_method="bicubic",
+    )
+
+    assert result is refined
+    config = calls[0][0][2]
+    assert refined_config is config
+    assert (config.width, config.height, config.steps) == (960, 576, 5)
+    assert calls[0][1]["refinement_source"] is source
+    assert calls[0][1]["refinement_strength"] == 0.35
+    assert calls[0][1]["refinement_resize_method"] == "bicubic"
+    assert calls[0][1]["trajectory_forecast"] is forecast
+    parsed = json.loads(metadata)
+    assert parsed["audio_preserved"] is True
+    assert parsed["latent_resize_method"] == "bicubic"
+    assert parsed["trajectory_forecasts"] == 2
+    assert parsed["transformer_evaluations"] == 2
+    assert parsed["trajectory_replay_seconds"] == 0.125
+    assert parsed["trajectory_replay_fallback_reason"] is None
+
+
 def test_expected_nodes_are_registered():
-    assert len(NODE_CLASS_MAPPINGS) == 22
+    assert len(NODE_CLASS_MAPPINGS) == 48
     assert "WeeToddH3ComponentLoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3QuantizedTransformerLoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3Preflight" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3FirstFrame" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3LastFrame" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3FirstLastFrame" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3ChainedTimeline" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3TimedKeyframe" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3ReferenceImage" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3ReferenceVideo" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3ReferenceAudio" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3KeyframeEncode" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3TimedKeyframeEncode" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3ReferenceEncode" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3ReferenceStrength" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3TextEncode" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3TrajectoryForecast" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3UnloadTextEncoder" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3ContinuationContext" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3ChainAppend" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3Sample" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3LatentHiresFix" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3EasyCache" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3BlockCache" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3HierarchicalBlockCache" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3LoRALoader" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3ValidatedSamplingPreset" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3UnloadTransformer" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3VideoVAEDecode" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3UnloadVideoVAE" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3AudioVAEDecode" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3UnloadAudioVAE" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3TrimContinuation" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3PublishVideoAudio" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3DirectPublishLatents" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3DirectPublishChain" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX23ModelLoader" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX23GenerationConfig" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX23Preflight" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX23Generate" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX23UpscalerLoader" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX23UpscalePublish" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX23Unload" in NODE_CLASS_MAPPINGS
+
+
+def test_continuation_context_defaults_to_quality_first_22_frames():
+    node_class = NODE_CLASS_MAPPINGS["WeeToddH3ContinuationContext"]
+    specification = node_class.INPUT_TYPES()["required"]["context_frames"]
+
+    assert specification[0] == ["5", "22", "39", "56"]
+    assert specification[1]["default"] == "22"
+
+
+def test_lora_loader_exposes_qkv_layout_and_staged_activation(tmp_path):
+    path = tmp_path / "example_turbo.safetensors"
+    mx.save_safetensors(
+        str(path),
+        {
+            "blocks.0.attn.qkv_proj.lora_A.weight": mx.zeros((1, 2)),
+            "blocks.0.attn.qkv_proj.lora_B.weight": mx.zeros((6, 1)),
+        },
+    )
+    inputs = WeeToddH3LoRALoader.INPUT_TYPES()
+
+    stack, raw_info = WeeToddH3LoRALoader().load(
+        str(path),
+        1.0,
+        "turbo",
+        qkv_layout="auto",
+        start_after_evaluations=2,
+    )
+    info = json.loads(raw_info)
+
+    assert inputs["required"]["qkv_layout"][0] == [
+        "auto",
+        "native_interleaved",
+        "contiguous_qkv",
+    ]
+    assert stack.adapters[0].resolved_qkv_layout == "contiguous_qkv"
+    assert stack.adapters[0].start_after_evaluations == 2
+    assert info["qkv_layout"] == "contiguous_qkv"
+    assert info["start_after_evaluations"] == 2
+    assert inputs["optional"]["start_after_evaluations"][1]["default"] == 0
+
+
+def test_validated_sampling_preset_applies_dense_and_trajectory_policies():
+    from wee_todd_nodes.runtime import H3GenerationConfig
+
+    source = H3GenerationConfig(
+        duration_seconds=7.0,
+        steps=8,
+        seed=42,
+        width=896,
+        height=512,
+        memory_mode="low_memory_bf16",
+        sampling_method="res_multistep",
+    )
+    node = WeeToddH3ValidatedSamplingPreset()
+
+    dense, dense_loras, dense_forecast, dense_raw = node.apply(
+        source, "Dense baseline — 20 points / 19 evaluations"
+    )
+    dense_info = json.loads(dense_raw)
+    assert dense.steps == 20
+    assert dense.sampling_method == "euler"
+    assert (dense.width, dense.height) == (896, 512)
+    assert dense.duration_seconds == 7.0
+    assert dense.seed == 42
+    assert dense.memory_mode == "low_memory_bf16"
+    assert dense_loras is None
+    assert dense_forecast is None
+    assert dense_info["policy"] == "dense"
+    assert dense_info["transformer_evaluations_without_forecast"] == 19
+
+    replay, replay_loras, replay_forecast, replay_raw = node.apply(
+        source,
+        "Trajectory speed + offline replay — 20 points / up to 11 evaluations",
+    )
+    replay_info = json.loads(replay_raw)
+    assert replay.steps == 20
+    assert replay_loras is None
+    assert replay_forecast.mode == "automatic_speed"
+    assert replay_forecast.bootstrap_first_forecast is False
+    assert replay_forecast.offline_smoothing_replay is True
+    assert replay_forecast.offline_video_blend == 0.5
+    assert replay_forecast.offline_audio_blend == 0.0
+    assert replay_info["trajectory_offline_replay"] is True
+
+    ref2va, ref2va_loras, ref2va_forecast, ref2va_raw = node.apply(
+        source,
+        (
+            "Ref2VA four-reference BF16 — Forward Attention replay — "
+            "20 points / up to 11 evaluations"
+        ),
+    )
+    ref2va_info = json.loads(ref2va_raw)
+    assert ref2va.steps == 20
+    assert ref2va_loras is None
+    assert ref2va_forecast.mode == "automatic_speed"
+    assert ref2va_forecast.offline_smoothing_replay is True
+    assert ref2va_info["measurement"] == {
+        "task": "ref2va",
+        "reference_images": 4,
+        "canvas": [896, 512],
+        "duration_seconds": 5.0,
+        "memory_mode": "normal",
+        "checkpoint_policy": "experimental_fl2va_weights_for_ref2va",
+        "transformer_evaluations": 11,
+        "mlx_peak_bytes": 47323507330,
+    }
+
+
+def test_validated_chained_context_presets_match_measured_policies(tmp_path, monkeypatch):
+    from wee_todd_nodes.runtime import H3GenerationConfig
+
+    lora_name = (
+        "minimax_h3_fl2v_lightx2v_turbo_4step_v0.1_comfy_"
+        "resized_avg_rank_21_bf16.safetensors"
+    )
+    path = tmp_path / lora_name
+    mx.save_safetensors(
+        str(path),
+        {
+            "blocks.0.attn.qkv_proj.lora_A.weight": mx.zeros((1, 2)),
+            "blocks.0.attn.qkv_proj.lora_B.weight": mx.zeros((6, 1)),
+        },
+    )
+    monkeypatch.setattr("wee_todd_nodes.nodes._resolve_lora_path", lambda name: tmp_path / name)
+    source = H3GenerationConfig(width=960, height=544, duration_seconds=5.17)
+    node = WeeToddH3ValidatedSamplingPreset()
+
+    turbo, loras, forecast, turbo_raw = node.apply(
+        source,
+        "Chained context — Dense Turbo LightX2V rank 21 — 5 points / 4 evaluations",
+    )
+    turbo_info = json.loads(turbo_raw)
+    assert turbo.steps == 5
+    assert forecast is None
+    assert loras.has_turbo is True
+    assert turbo_info["measurement"]["complete_workflow_seconds"] == 1570
+
+    replay, loras, forecast, replay_raw = node.apply(
+        source,
+        (
+            "Chained context — Trajectory target-only replay — "
+            "20 points / up to 11 evaluations"
+        ),
+    )
+    replay_info = json.loads(replay_raw)
+    assert replay.steps == 20
+    assert loras is None
+    assert forecast.offline_smoothing_replay is True
+    assert forecast.conditioned_row_policy == "target_only"
+    assert replay_info["measurement"]["complete_workflow_seconds"] == 3765
+
+
+@pytest.mark.parametrize(
+    ("preset", "filename"),
+    [
+        (
+            "Turbo — Larry EMA-850 — 5 points / 4 evaluations",
+            "minimax_h3_turbo_4step_ema_ckpt850.safetensors",
+        ),
+        (
+            "Turbo — Larry v4 step-600 — 5 points / 4 evaluations",
+            "minimax_h3_turbo_v4_step600_ema.safetensors",
+        ),
+        (
+            "Staged Turbo — drbaph v4 step-600 — 2 base + 4 Turbo evaluations",
+            "minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors",
+        ),
+        (
+            "One-shot staged Turbo — drbaph v4 step-600 — 15-second quality baseline",
+            "minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors",
+        ),
+        (
+            "Chained staged Turbo — drbaph v4 step-600 — 4 windows / 22-frame context",
+            "minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors",
+        ),
+        (
+            "Turbo — LightX2V full rank — 5 points / 4 evaluations",
+            "minimax_h3_fl2v_lightx2v_turbo_4step_v0.1_comfy.safetensors",
+        ),
+        (
+            "Turbo — LightX2V dynamic rank 21 — 5 points / 4 evaluations",
+            (
+                "minimax_h3_fl2v_lightx2v_turbo_4step_v0.1_comfy_"
+                "resized_avg_rank_21_bf16.safetensors"
+            ),
+        ),
+    ],
+)
+def test_validated_sampling_preset_builds_each_lazy_turbo_stack(
+    tmp_path, monkeypatch, preset, filename
+):
+    from wee_todd_nodes.runtime import H3GenerationConfig
+
+    path = tmp_path / filename
+    mx.save_safetensors(
+        str(path),
+        {
+            "blocks.0.attn.qkv_proj.lora_A.weight": mx.zeros((1, 2)),
+            "blocks.0.attn.qkv_proj.lora_B.weight": mx.zeros((6, 1)),
+        },
+    )
+    monkeypatch.setattr("wee_todd_nodes.nodes._resolve_lora_path", lambda name: tmp_path / name)
+
+    config, loras, forecast, raw_info = WeeToddH3ValidatedSamplingPreset().apply(
+        H3GenerationConfig(width=896, height=512), preset
+    )
+    info = json.loads(raw_info)
+
+    assert config.sampling_method == "euler"
+    assert forecast is None
+    assert len(loras.adapters) == 1
+    assert loras.adapters[0].resolved_profile == "turbo"
+    assert loras.adapters[0].resolved_qkv_layout == "contiguous_qkv"
+    assert loras.adapters[0].strength == 1.0
+    assert info["lora_file"] == filename
+    if loras.adapters[0].start_after_evaluations == 2:
+        assert config.steps == 7
+        assert loras.adapters[0].start_after_evaluations == 2
+        assert info["lora_start_after_evaluations"] == 2
+        assert info["transformer_evaluations_without_forecast"] == 6
+        assert info["measurement"]["base_evaluations"] == 2
+        assert info["measurement"]["lora_evaluations"] == 4
+    else:
+        assert config.steps == 5
+        assert info["lora_start_after_evaluations"] == 0
+        assert info["transformer_evaluations_without_forecast"] == 4
+
+
+def test_validated_15_second_comparison_presets_record_measured_boundaries(
+    tmp_path, monkeypatch
+):
+    from wee_todd_nodes.runtime import H3GenerationConfig
+
+    filename = "minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors"
+    mx.save_safetensors(
+        str(tmp_path / filename),
+        {
+            "blocks.0.attn.qkv_proj.lora_A.weight": mx.zeros((1, 2)),
+            "blocks.0.attn.qkv_proj.lora_B.weight": mx.zeros((6, 1)),
+        },
+    )
+    monkeypatch.setattr("wee_todd_nodes.nodes._resolve_lora_path", lambda name: tmp_path / name)
+    node = WeeToddH3ValidatedSamplingPreset()
+    source = H3GenerationConfig(width=1344, height=768, duration_seconds=15.0)
+
+    _, _, _, one_shot_raw = node.apply(
+        source,
+        "One-shot staged Turbo — drbaph v4 step-600 — 15-second quality baseline",
+    )
+    _, _, _, chain_raw = node.apply(
+        source,
+        "Chained staged Turbo — drbaph v4 step-600 — 4 windows / 22-frame context",
+    )
+    one_shot = json.loads(one_shot_raw)["measurement"]
+    chain = json.loads(chain_raw)["measurement"]
+
+    assert one_shot["complete_workflow_seconds"] == pytest.approx(8207.699172)
+    assert one_shot["mlx_peak_bytes"] == 30783349650
+    assert one_shot["seed"] == 20260811
+    assert chain["complete_workflow_seconds"] == 5089.0
+    assert chain["mlx_peak_bytes"] == 14453992534
+    assert chain["context_frames"] == 22
+    assert chain["join_policy"].startswith("motion-matched overlap")
+
+
+def test_reference_strength_node_preserves_defaults_and_warns_for_weak_fl2va():
+    from wee_todd_nodes.conditioning import H3Conditioning, H3TextEncoderSpec
+
+    conditioning = H3Conditioning(
+        embeddings="embeddings",
+        token_tags="tags",
+        token_count=1,
+        prompt="prompt",
+        load_vision=True,
+        encoder_spec=H3TextEncoderSpec("text", "processor", "tokenizer", True),
+        task="fl2va",
+        condition_video_rows="rows",
+        keyframe_anchors=("first", "last"),
+    )
+
+    default, default_info = WeeToddH3ReferenceStrength().configure(conditioning, 0.999, 1.0)
+    weak, weak_info = WeeToddH3ReferenceStrength().configure(conditioning, 0.5, 0.9)
+
+    assert default.visual_condition_strength == 0.999
+    assert default.audio_condition_strength == 1.0
+    assert json.loads(default_info)["warning"] is None
+    assert weak.visual_condition_strength == 0.5
+    assert weak.audio_condition_strength == 0.9
+    assert "last-frame anchor" in json.loads(weak_info)["warning"]
+
+
+def test_keyframe_nodes_emit_explicit_anchor_contracts():
+    image = SimpleNamespace(shape=(1, 384, 640, 3))
+    first, _ = WeeToddH3FirstFrame().configure(image)
+    last, _ = WeeToddH3LastFrame().configure(image)
+    both, _ = WeeToddH3FirstLastFrame().configure(image, image)
+
+    assert first.anchors == ("first",)
+    assert last.anchors == ("last",)
+    assert both.anchors == ("first", "last")
+
+
+def test_reference_nodes_build_one_ordered_stack():
+    image = SimpleNamespace(shape=(1, 384, 640, 3))
+    video = SimpleNamespace(shape=(48, 384, 640, 3))
+    audio = {
+        "waveform": SimpleNamespace(shape=(1, 2, 32000)),
+        "sample_rate": 32000,
+    }
+    references, _ = WeeToddH3ReferenceImage().append(image, 100)
+    references, _ = WeeToddH3ReferenceVideo().append(
+        video,
+        24.0,
+        soundtrack=audio,
+        previous_references=references,
+    )
+    references, _ = WeeToddH3ReferenceAudio().append(audio, references)
+
+    references.validate_request()
+    assert [reference.kind for reference in references.references] == ["image", "video", "audio"]
+
+
+def test_keyframe_encode_stages_qwen_and_video_vae(monkeypatch):
+    from wee_todd_nodes.conditioning import H3Conditioning
+
+    calls = []
+
+    class FakeTextRuntime:
+        loaded = False
+
+        def encode(self, spec, prompt, **kwargs):
+            kwargs["prepare_stage"]()
+            calls.append(("text", spec, len(kwargs["images"])))
+            return H3Conditioning(
+                embeddings="vision-conditioning",
+                token_tags="vision-tags",
+                token_count=7,
+                prompt=prompt,
+                load_vision=True,
+                encoder_spec=spec,
+                task="fl2va",
+            )
+
+    class FakeVideoRuntime:
+        loaded = False
+
+        def encode_keyframes(self, spec, images, **kwargs):
+            kwargs["prepare_stage"]()
+            calls.append(("video_vae", spec, len(images)))
+            return np.zeros((480, 96), dtype=np.float32)
+
+    monkeypatch.setattr("wee_todd_nodes.nodes.TEXT_ENCODER_RUNTIME", FakeTextRuntime())
+    monkeypatch.setattr("wee_todd_nodes.nodes.VIDEO_VAE_RUNTIME", FakeVideoRuntime())
+    monkeypatch.setattr(
+        "wee_todd_nodes.nodes.H3TextEncoderSpec.from_components",
+        lambda components, load_vision: "vision-spec",
+    )
+    monkeypatch.setattr(
+        "wee_todd_nodes.nodes.H3VideoVAESpec.from_components",
+        lambda components: "video-vae-spec",
+    )
+    monkeypatch.setattr(
+        "wee_todd_nodes.nodes.prepare_low_memory_stage",
+        lambda stage, mode: (f"released-for-{stage}",),
+    )
+
+    frame = np.zeros((1, 384, 640, 3), dtype=np.float32)
+    keyframes, _ = WeeToddH3FirstLastFrame().configure(frame, frame)
+    config = SimpleNamespace(
+        height=384,
+        width=640,
+        memory_mode="low_memory_bf16",
+        validate=lambda: None,
+    )
+    conditioning, encoded_info = WeeToddH3KeyframeEncode().encode(
+        SimpleNamespace(task="fl2va"),
+        config,
+        keyframes,
+        "A precise test prompt.",
+    )
+
+    info = json.loads(encoded_info)
+    assert calls == [
+        ("text", "vision-spec", 2),
+        ("video_vae", "video-vae-spec", 2),
+    ]
+    assert conditioning.keyframe_anchors == ("first", "last")
+    assert conditioning.condition_video_rows.shape == (480, 96)
+    assert info["staged_releases"] == {
+        "text_encoder": ["released-for-text_encoder"],
+        "video_vae": ["released-for-video_vae"],
+    }
+
+
+def test_reference_encode_stages_qwen_and_both_vaes(monkeypatch):
+    from wee_todd_nodes.conditioning import H3Conditioning
+
+    calls = []
+    prepared = [
+        SimpleNamespace(
+            has_audio=True,
+            kind="video",
+            num_latent_frames=3,
+            latent_height=24,
+            latent_width=40,
+            num_audio_latents=10,
+        ),
+        SimpleNamespace(
+            has_audio=True,
+            kind="audio",
+            num_latent_frames=0,
+            latent_height=0,
+            latent_width=0,
+            num_audio_latents=10,
+        ),
+    ]
+    stack = SimpleNamespace(
+        validate_request=lambda: None,
+        prepare=lambda **kwargs: prepared,
+        metadata=lambda: {"references": [{"kind": "video"}, {"kind": "audio"}]},
+    )
+
+    class FakeTextRuntime:
+        loaded = False
+
+        def encode(self, spec, prompt, **kwargs):
+            kwargs["prepare_stage"]()
+            calls.append(("text", len(kwargs["references"])))
+            return H3Conditioning(
+                embeddings="reference-conditioning",
+                token_tags="reference-tags",
+                token_count=11,
+                prompt=prompt,
+                load_vision=True,
+                encoder_spec=spec,
+                task="ref2va",
+            )
+
+    class FakeVideoRuntime:
+        loaded = False
+
+        def encode_references(self, spec, references, **kwargs):
+            kwargs["prepare_stage"]()
+            calls.append(("video_vae", len(references)))
+            return np.zeros((32, 96), dtype=np.float32)
+
+    class FakeAudioRuntime:
+        loaded = False
+
+        def encode_references(self, spec, references, **kwargs):
+            kwargs["prepare_stage"]()
+            calls.append(("audio_vae", len(references)))
+            return np.zeros((20, 32), dtype=np.float32)
+
+    monkeypatch.setattr("wee_todd_nodes.nodes.TEXT_ENCODER_RUNTIME", FakeTextRuntime())
+    monkeypatch.setattr("wee_todd_nodes.nodes.VIDEO_VAE_RUNTIME", FakeVideoRuntime())
+    monkeypatch.setattr("wee_todd_nodes.nodes.AUDIO_VAE_RUNTIME", FakeAudioRuntime())
+    monkeypatch.setattr(
+        "wee_todd_nodes.nodes.H3TextEncoderSpec.from_components",
+        lambda components, load_vision: "vision-spec",
+    )
+    monkeypatch.setattr(
+        "wee_todd_nodes.nodes.H3VideoVAESpec.from_components",
+        lambda components: "video-vae-spec",
+    )
+    monkeypatch.setattr(
+        "wee_todd_nodes.nodes.H3AudioVAESpec.from_components",
+        lambda components: "audio-vae-spec",
+    )
+    monkeypatch.setattr(
+        "wee_todd_nodes.nodes.prepare_low_memory_stage",
+        lambda stage, mode: (f"released-for-{stage}",),
+    )
+    config = SimpleNamespace(
+        duration_seconds=5.0,
+        width=640,
+        height=384,
+        memory_mode="low_memory_bf16",
+        validate=lambda: None,
+    )
+
+    conditioning, encoded_info = WeeToddH3ReferenceEncode().encode(
+        SimpleNamespace(task="ref2va"), config, stack, "A reference test."
+    )
+
+    assert calls == [("text", 2), ("video_vae", 2), ("audio_vae", 2)]
+    assert conditioning.condition_video_rows.shape == (32, 96)
+    assert conditioning.condition_audio_rows.shape == (20, 32)
+    assert conditioning.references == tuple(prepared)
+    assert json.loads(encoded_info)["staged_releases"] == {
+        "text_encoder": ["released-for-text_encoder"],
+        "video_vae": ["released-for-video_vae"],
+        "audio_vae": ["released-for-audio_vae"],
+    }
 
 
 def test_trajectory_forecast_node_exposes_opt_in_bootstrap():
@@ -135,11 +767,44 @@ def test_trajectory_forecast_node_exposes_opt_in_offline_audio_isolation():
     assert optional["offline_smoothing_replay"][1]["default"] is False
 
 
+def test_trajectory_forecast_node_defaults_to_context_safe_target_rows():
+    (config,) = WeeToddH3TrajectoryForecast().configure(
+        "automatic_speed",
+        1.0,
+        2,
+        1,
+        2,
+        0.5,
+        2.5,
+    )
+
+    assert config.conditioned_row_policy == "target_only"
+    choices, options = WeeToddH3TrajectoryForecast.INPUT_TYPES()["optional"][
+        "conditioned_row_policy"
+    ]
+    assert choices == ["target_only", "all_rows_legacy"]
+    assert options["default"] == "target_only"
+
+
 def test_component_loader_returns_lazy_immutable_spec():
     (spec,) = WeeToddH3ComponentLoader().specify("MiniMax-H3/FL2VA", "t2va")
 
     assert spec.task == "t2va"
     assert spec.transformer is None
+    assert spec.allow_fl2va_weights_for_ref2va is False
+
+
+def test_component_loader_exposes_cross_partition_ref2va_opt_in_last():
+    optional = WeeToddH3ComponentLoader.INPUT_TYPES()["optional"]
+    assert list(optional)[-1] == "allow_fl2va_weights_for_ref2va"
+
+    (spec,) = WeeToddH3ComponentLoader().specify(
+        "MiniMax-H3/FL2VA",
+        "ref2va",
+        allow_fl2va_weights_for_ref2va=True,
+    )
+
+    assert spec.allow_fl2va_weights_for_ref2va is True
 
 
 def test_component_loader_resolves_relative_root_below_comfy_models(monkeypatch, tmp_path):
@@ -279,6 +944,7 @@ def test_generation_config_node_returns_validated_value():
     assert config.memory_mode == "low_memory_bf16"
     assert config.attention_query_chunk_size == 1024
     assert config.projection_backend == "mlx"
+    assert config.sampling_method == "euler"
     assert resolved == "1344 × 768 pixels — 16:9 — 768 px short edge"
 
 
@@ -298,6 +964,7 @@ def test_generation_config_exposes_clear_ratio_size_controls():
     assert slider["max"] == 1088
     assert slider["step"] == 32
     assert slider["display"] == "slider"
+    assert inputs["optional"]["sampling_method"][0] == ["euler", "res_multistep"]
 
 
 def test_manual_nonstandard_resolution_records_custom_aspect_ratio():

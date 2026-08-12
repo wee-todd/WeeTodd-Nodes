@@ -76,7 +76,6 @@ def test_selected_diagnostics_preserve_tiny_transformer_output(tmp_path):
         "attention_qkv",
     }
     assert all(item.block in {0, None} for item in diagnostics.measurements)
-
     q_only_diagnostics = DiagnosticSession(
         CaptureConfig(
             enabled=True,
@@ -90,3 +89,28 @@ def test_selected_diagnostics_preserve_tiny_transformer_output(tmp_path):
     mx.eval(*q_only_result)
     assert q_only_diagnostics.captures
     assert {item["name"] for item in q_only_diagnostics.captures} == {"q_output"}
+    names = {item.name for item in diagnostics.measurements}
+    assert "input.video_projection" in names
+    assert "output.video_projection" in names
+
+
+def test_external_diagnostic_measurement_is_opt_in(tmp_path):
+    inactive = DiagnosticSession(CaptureConfig(output_directory=str(tmp_path / "inactive")))
+    inactive.record_external("packing.layout", 0.25, metadata={"sequence_rows": 12})
+    assert inactive.measurements == []
+
+    active = DiagnosticSession(
+        CaptureConfig(
+            output_directory=str(tmp_path / "active"),
+            profile_regions=True,
+        )
+    )
+    active.begin_evaluation(2, timestep=0.5)
+    active.record_external("scheduler.step_and_repack", 0.125, metadata={"rows": 12})
+
+    assert len(active.measurements) == 1
+    measurement = active.measurements[0]
+    assert measurement.name == "scheduler.step_and_repack"
+    assert measurement.duration_seconds == 0.125
+    assert measurement.evaluation_index == 2
+    assert measurement.metadata == {"rows": 12}

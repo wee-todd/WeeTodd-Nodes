@@ -2,14 +2,15 @@
   "1": {
     "class_type": "WeeToddH3ComponentLoader",
     "inputs": {
-      "audio_vae": "",
+      "audio_vae": "MiniMax-H3/FL2VA/audio_vae",
       "checkpoint": "MiniMax-H3/FL2VA",
-      "processor": "",
+      "processor": "MiniMax-H3/FL2VA/processor",
       "task": "t2va",
       "text_encoder": "MiniMax-H3/text_encoders/q8-paged",
-      "tokenizer": "",
+      "tokenizer": "MiniMax-H3/FL2VA/tokenizer",
       "transformer": "MiniMax-H3/transformers/q8_extended_paged",
-      "video_vae": "MiniMax-H3/vae/q8/video_vae_affine_q8.safetensors"
+      "video_vae": "MiniMax-H3/vae/q8/video_vae_affine_q8.safetensors",
+      "allow_fl2va_weights_for_ref2va": false
     },
     "_meta": {"title": "H3 Component Loader"}
   },
@@ -38,7 +39,8 @@
       "resolution_tier": "384 px short edge — fast smoke",
       "short_edge": 384,
       "seed": 0,
-      "steps": 5
+      "steps": 5,
+      "sampling_method": "euler"
     },
     "_meta": {"title": "H3 Generation Config"}
   },

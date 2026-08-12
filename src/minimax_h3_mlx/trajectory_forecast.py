@@ -27,6 +27,7 @@ class H3TrajectoryForecastConfig:
     offline_video_blend: float = 0.5
     offline_audio_blend: float = 0.0
     offline_ridge_lambda: float = 1e-6
+    conditioned_row_policy: str = "target_only"
 
     def validate(self) -> None:
         modes = {
@@ -67,6 +68,11 @@ class H3TrajectoryForecastConfig:
                 raise ValueError(f"Trajectory Forecast offline {label} must be between 0 and 1.")
         if self.offline_ridge_lambda < 0:
             raise ValueError("Trajectory Forecast offline ridge lambda must be zero or positive.")
+        if self.conditioned_row_policy not in {"target_only", "all_rows_legacy"}:
+            raise ValueError(
+                "Trajectory Forecast conditioned-row policy must be 'target_only' or "
+                "'all_rows_legacy'."
+            )
 
 
 @dataclass(frozen=True)

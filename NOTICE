@@ -10,3 +10,11 @@ subsequent MLX changes are maintained independently in this repository.
 
 MiniMax H3 model weights are not included. They are distributed separately
 under the MiniMax H3 Community License Agreement.
+
+Optional LTX 2.3 support integrates the MIT-licensed dgrauet/ltx-2-mlx
+packages as pinned, separately installed runtime dependencies:
+https://github.com/dgrauet/ltx-2-mlx
+
+Lightricks/LTX-2 was consulted as a technical reference. Its source and model
+weights are not vendored here.
+https://github.com/Lightricks/LTX-2

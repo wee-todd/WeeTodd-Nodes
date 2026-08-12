@@ -1,0 +1,67 @@
+{
+  "1": {
+    "class_type": "WeeToddH3ComponentLoader",
+    "inputs": {
+      "checkpoint": "MiniMax-H3/FL2VA",
+      "task": "fl2va",
+      "transformer": "MiniMax-H3/transformers/q8_extended_paged",
+      "text_encoder": "MiniMax-H3/FL2VA/text_encoder",
+      "processor": "MiniMax-H3/FL2VA/processor",
+      "tokenizer": "MiniMax-H3/FL2VA/tokenizer",
+      "video_vae": "MiniMax-H3/vae/q8/video_vae_affine_q8.safetensors",
+      "audio_vae": "MiniMax-H3/FL2VA/audio_vae",
+      "allow_fl2va_weights_for_ref2va": false
+    }
+  },
+  "2": {
+    "class_type": "WeeToddH3GenerationConfig",
+    "inputs": {
+      "duration_seconds": 5.0,
+      "steps": 8,
+      "seed": 0,
+      "resolution_mode": "ratio + size",
+      "resolution_tier": "384 px short edge — fast smoke",
+      "aspect_ratio": "16:9 — widescreen landscape",
+      "short_edge": 384,
+      "custom_width": 640,
+      "custom_height": 384,
+      "drop_adaln": true,
+      "memory_mode": "low_memory_bf16",
+      "attention_chunk_size": "automatic",
+      "projection_backend": "mlx",
+      "sampling_method": "euler"
+    }
+  },
+  "3": {"class_type": "LoadImage", "inputs": {"image": "first_frame.png"}},
+  "4": {"class_type": "WeeToddH3FirstFrame", "inputs": {"first_frame": ["3", 0]}},
+  "5": {
+    "class_type": "WeeToddH3KeyframeEncode",
+    "inputs": {
+      "components": ["1", 0],
+      "config": ["2", 0],
+      "keyframes": ["4", 0],
+      "prompt": "integrated_multimodal_description: Live-action cinematic realism. Continue naturally from the supplied first frame. Describe the subject action, camera motion, lighting, and final state in chronological order.\n\noverall_soundscape: Describe synchronized environmental sound, movement impacts, and any speech.\n\nnon_diegetic_music: N/A"
+    }
+  },
+  "6": {
+    "class_type": "WeeToddH3Sample",
+    "inputs": {
+      "components": ["1", 0],
+      "conditioning": ["5", 0],
+      "config": ["2", 0],
+      "unload_after_sample": true
+    }
+  },
+  "7": {
+    "class_type": "WeeToddH3DirectPublishLatents",
+    "inputs": {
+      "components": ["1", 0],
+      "latents": ["6", 0],
+      "sampling_info": ["6", 1],
+      "filename_prefix": "WeeTodd/H3_FL2VA_First_Frame",
+      "crf": 18,
+      "max_av_drift_seconds": 0.025,
+      "generation_metadata": "{\"workflow\": \"fl2va_first_frame\"}"
+    }
+  }
+}

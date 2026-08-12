@@ -20,10 +20,11 @@
         "t2va",
         "MiniMax-H3/transformers/q8_extended_paged",
         "MiniMax-H3/text_encoders/q8-paged",
-        "",
-        "",
+        "MiniMax-H3/FL2VA/processor",
+        "MiniMax-H3/FL2VA/tokenizer",
         "MiniMax-H3/vae/q8/video_vae_affine_q8.safetensors",
-        ""
+        "MiniMax-H3/FL2VA/audio_vae",
+        false
       ]
     },
     {
@@ -48,7 +49,7 @@
         {"name": "preflight_report", "type": "STRING", "links": null, "slot_index": 1}
       ],
       "properties": {"Node name for S&R": "WeeToddH3Preflight"},
-      "widgets_values": [512, 0.0]
+      "widgets_values": [512, 0.0, ""]
     },
     {
       "id": 3,
@@ -77,7 +78,8 @@
         true,
         "low_memory_bf16",
         "automatic",
-        "mlx"
+        "mlx",
+        "euler"
       ]
     },
     {
@@ -148,7 +150,8 @@
         "WeeTodd/H3_Dual_Paged_Low_Memory",
         18,
         0.025,
-        "{\"workflow\": \"t2va_low_memory_paged\", \"quality_label\": \"off-distribution 384P smoke test\"}"
+        "{\"workflow\": \"t2va_low_memory_paged\", \"quality_label\": \"off-distribution 384P smoke test\"}",
+        ""
       ]
     }
   ],

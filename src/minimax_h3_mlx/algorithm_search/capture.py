@@ -123,6 +123,30 @@ class DiagnosticSession:
         self.timestep = float(timestep)
         self.audio_timestep = None if audio_timestep is None else float(audio_timestep)
 
+    def record_external(
+        self,
+        name: str,
+        duration_seconds: float,
+        *,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """Record already-materialized host or scheduler work outside a diagnostic callable."""
+        if not self.config.profile_regions:
+            return
+        self.measurements.append(
+            RegionMeasurement(
+                name=name,
+                block=None,
+                duration_seconds=float(duration_seconds),
+                output_shapes=[],
+                output_dtypes=[],
+                peak_memory_bytes=None,
+                evaluation_index=self.evaluation_index,
+                timestep=self.timestep,
+                metadata=metadata or {},
+            )
+        )
+
     def _selected(self, name: str, block: int | None) -> bool:
         if not self.config.enabled or name not in self.config.targets:
             return False

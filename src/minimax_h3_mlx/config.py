@@ -11,6 +11,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+# The rank-64 curve export is the validated production recipe. A local rank-8 Ref2VA export
+# repeatedly produced featureless video despite loading cleanly, so smaller experimental curve
+# ranks are rejected until they have independent visual parity evidence.
+MIN_VALIDATED_ADALN_CURVE_RANK = 32
+
 # Every row of the packed sequence carries a modality tag: 0 = video, 1 = text, 2 = audio.
 # One set of AdaLN modulation parameters is kept per (timestep, modality) pair.
 MODALITY_NUM = 3
@@ -69,7 +74,7 @@ class DiTConfig:
         return 2 * 3 * self.rope_inv_freq_len
 
     @classmethod
-    def from_dict(cls, raw: dict[str, Any]) -> "DiTConfig":
+    def from_dict(cls, raw: dict[str, Any]) -> DiTConfig:
         known = {f for f in cls.__dataclass_fields__}
         kwargs = {k: v for k, v in raw.items() if k in known}
         if "patch_size" in kwargs:
@@ -77,7 +82,7 @@ class DiTConfig:
         return cls(**kwargs)
 
     @classmethod
-    def from_json(cls, path: str | Path) -> "DiTConfig":
+    def from_json(cls, path: str | Path) -> DiTConfig:
         with open(path) as fh:
             return cls.from_dict(json.load(fh))
 
@@ -92,7 +97,7 @@ class PipelineConfig:
     sigma_shift_audio: float = 3.0
 
     @classmethod
-    def from_model_index(cls, path: str | Path) -> "PipelineConfig":
+    def from_model_index(cls, path: str | Path) -> PipelineConfig:
         with open(path) as fh:
             raw = json.load(fh)
         meta = raw.get("_minimax_h3", {})

@@ -1,4 +1,5 @@
 import json
+import shutil
 import struct
 from pathlib import Path
 
@@ -84,6 +85,104 @@ def _component_tree(tmp_path: Path, tasks=("t2va", "fl2va")) -> Path:
     return root
 
 
+def _portable_optimized_spec(tmp_path: Path) -> H3ComponentSetSpec:
+    """Create the documented shared T2VA layout with tiny valid fixtures."""
+
+    models = tmp_path / "MiniMax-H3"
+    root = _component_tree(models)
+    transformer = models / "transformers" / "q8_extended_paged"
+    text_encoder = models / "text_encoders" / "q8-paged"
+    video_vae = models / "vae" / "q8" / "video_vae_affine_q8.safetensors"
+
+    _json(
+        transformer / "config.json",
+        {"latents_dim": 24, "audio_latents_dim": 32, "text_dim": 5120},
+    )
+    _safetensors(
+        transformer / "pages" / "fixed.safetensors",
+        {"video_patch_proj.weight": ("F16", [4, 4], 32)},
+    )
+    _safetensors(
+        transformer / "pages" / "block-000.safetensors",
+        {"blocks.0.attn.weight": ("F16", [4, 4], 32)},
+    )
+    _json(
+        transformer / "paged_manifest.json",
+        {
+            "format": "weetodd-h3-paged-v1",
+            "num_blocks": 1,
+            "source_tensor_bytes": 64,
+            "fixed": {
+                "file": "pages/fixed.safetensors",
+                "tensor_count": 1,
+                "tensor_bytes": 32,
+                "sha256": "0" * 64,
+            },
+            "blocks": [
+                {
+                    "file": "pages/block-000.safetensors",
+                    "tensor_count": 1,
+                    "tensor_bytes": 32,
+                    "sha256": "0" * 64,
+                }
+            ],
+        },
+    )
+
+    _json(text_encoder / "config.json", {"hidden_size": 5120})
+    _safetensors(
+        text_encoder / "pages" / "fixed.safetensors",
+        {"model.embed_tokens.weight": ("F16", [4, 4], 32)},
+    )
+    _safetensors(
+        text_encoder / "pages" / "layer-000.safetensors",
+        {"model.layers.0.weight": ("F16", [4, 4], 32)},
+    )
+    _json(
+        text_encoder / "paged_text_encoder_manifest.json",
+        {
+            "format": "weetodd-h3-qwen-paged-v1",
+            "num_layers": 1,
+            "source_tensor_bytes": 64,
+            "fixed": {
+                "file": "pages/fixed.safetensors",
+                "tensor_count": 1,
+                "tensor_bytes": 32,
+                "sha256": "0" * 64,
+            },
+            "layers": [
+                {
+                    "file": "pages/layer-000.safetensors",
+                    "tensor_count": 1,
+                    "tensor_bytes": 32,
+                    "sha256": "0" * 64,
+                }
+            ],
+        },
+    )
+
+    wrapper = {
+        "format": "minimax-h3-mlx-video-vae",
+        "format_version": 1,
+        "tensor_layout": "ODHWI",
+    }
+    _safetensors(
+        video_vae,
+        {"decoder.weight": ("F16", [4, 4], 32)},
+        metadata={"minimax_h3_video_vae": json.dumps(wrapper)},
+    )
+    return H3ComponentSetSpec(
+        checkpoint=str(root),
+        task="t2va",
+        transformer=str(transformer),
+        text_encoder=str(text_encoder),
+        processor=str(root / "processor"),
+        tokenizer=str(root / "tokenizer"),
+        video_vae=str(video_vae),
+        audio_vae=str(root / "audio_vae"),
+    )
+
+
 def test_header_reader_does_not_interpret_tensor_payload(tmp_path: Path):
     path = tmp_path / "opaque.safetensors"
     _safetensors(path, {"weight": ("F16", [4, 4], 32)})
@@ -128,6 +227,98 @@ def test_preflight_validates_complete_stack_and_estimates_stages(tmp_path: Path)
     }
 
 
+def test_preflight_accepts_experimental_two_and_a_half_second_window(tmp_path: Path):
+    root = _component_tree(tmp_path)
+
+    report = preflight_components(
+        H3ComponentSetSpec(str(root), task="t2va"),
+        H3PreflightRequest(
+            duration_seconds=2.5,
+            steps=8,
+            width=640,
+            height=384,
+            prompt_tokens=64,
+        ),
+    )
+
+    assert report.frames == 73
+
+
+def test_preflight_validates_portable_optimized_component_layout(tmp_path: Path):
+    spec = _portable_optimized_spec(tmp_path)
+
+    report = preflight_components(spec, H3PreflightRequest())
+    by_name = {component.name: component for component in report.components}
+
+    assert by_name["transformer"].paging_format == "weetodd-h3-paged-v1"
+    assert by_name["text_encoder"].paging_format == "weetodd-h3-qwen-paged-v1"
+    assert by_name["processor"].path.endswith("FL2VA/processor")
+    assert by_name["tokenizer"].path.endswith("FL2VA/tokenizer")
+    assert by_name["video_vae"].files == ("video_vae_affine_q8.safetensors",)
+
+
+def test_preflight_allows_one_native_asset_directory_for_processor_and_tokenizer(
+    tmp_path: Path,
+):
+    root = _component_tree(tmp_path)
+    assets = root / "tokenizer"
+
+    report = preflight_components(
+        H3ComponentSetSpec(
+            str(root),
+            processor=str(assets),
+            tokenizer=str(assets),
+        ),
+        H3PreflightRequest(),
+    )
+
+    by_name = {component.name: component for component in report.components}
+    assert by_name["processor"].path == str(assets)
+    assert by_name["tokenizer"].path == str(assets)
+
+
+def test_missing_native_fallback_requests_an_explicit_override(tmp_path: Path):
+    root = _component_tree(tmp_path)
+    shutil.rmtree(root / "transformer")
+
+    with pytest.raises(FileNotFoundError) as caught:
+        preflight_components(H3ComponentSetSpec(str(root)), H3PreflightRequest())
+
+    message = str(caught.value)
+    assert "No transformer override is selected" in message
+    assert "native partition fallback" in message
+    assert "shared physical folder named 'transformers'" in message
+
+
+def test_nested_component_root_error_identifies_selectable_directory(tmp_path: Path):
+    root = _component_tree(tmp_path)
+    nested = root / "transformer" / "q8_extended_paged"
+    nested.mkdir(parents=True)
+    (root / "transformer" / "config.json").replace(nested / "config.json")
+    (root / "transformer" / "model.safetensors").replace(nested / "model.safetensors")
+
+    with pytest.raises(FileNotFoundError) as caught:
+        preflight_components(H3ComponentSetSpec(str(root)), H3PreflightRequest())
+
+    message = str(caught.value)
+    assert "A nested component root was found" in message
+    assert str(nested) in message
+
+
+def test_vision_tasks_reject_text_only_paged_qwen_before_loading(tmp_path: Path):
+    spec = _portable_optimized_spec(tmp_path)
+    root = Path(spec.checkpoint)
+    manifest = json.loads((root / "model_index.json").read_text())
+    manifest["_minimax_h3"] = {"partition": "ref2va", "tasks": ["ref2va"]}
+    _json(root / "model_index.json", manifest)
+
+    with pytest.raises(ValueError, match="paged text_encoder is text-only"):
+        preflight_components(
+            H3ComponentSetSpec(**{**spec.__dict__, "task": "ref2va"}),
+            H3PreflightRequest(),
+        )
+
+
 def test_preflight_rejects_missing_component_before_weight_loading(tmp_path: Path):
     root = _component_tree(tmp_path)
     (root / "audio_vae" / "model.safetensors").unlink()
@@ -144,6 +335,23 @@ def test_preflight_rejects_wrong_task(tmp_path: Path):
             H3ComponentSetSpec(str(root), task="ref2va"),
             H3PreflightRequest(),
         )
+
+
+def test_preflight_explicitly_allows_fl2va_weights_for_ref2va(tmp_path: Path):
+    root = _component_tree(tmp_path)
+
+    report = preflight_components(
+        H3ComponentSetSpec(
+            str(root),
+            task="ref2va",
+            allow_fl2va_weights_for_ref2va=True,
+        ),
+        H3PreflightRequest(),
+    )
+
+    assert report.task == "ref2va"
+    assert report.partition == "fl2va"
+    assert any("different learned tensor payloads" in warning for warning in report.warnings)
 
 
 def test_preflight_rejects_unsupported_quantization(tmp_path: Path):
@@ -296,6 +504,21 @@ def test_preflight_rejects_native_single_file_transformer_as_not_mlx_ready(tmp_p
     with pytest.raises(ValueError, match="adaln_t_table is missing"):
         preflight_components(
             H3ComponentSetSpec(str(root), transformer=str(native_transformer)),
+            H3PreflightRequest(),
+        )
+
+
+def test_preflight_rejects_unvalidated_low_rank_adaln_curve(tmp_path: Path):
+    root = _component_tree(tmp_path)
+    transformer = tmp_path / "rank8_transformer.safetensors"
+    _safetensors(
+        transformer,
+        {"adaln_t_table": ("F16", [1025, 8], 1025 * 8 * 2)},
+    )
+
+    with pytest.raises(ValueError, match="rank 8 is below the validated minimum 32"):
+        preflight_components(
+            H3ComponentSetSpec(str(root), transformer=str(transformer)),
             H3PreflightRequest(),
         )
 

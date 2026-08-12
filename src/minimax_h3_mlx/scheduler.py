@@ -90,8 +90,10 @@ class MiniMaxH3Scheduler:
                 if not values or v != values[-1]:
                     values.append(v)
         else:
-            values = [float(v) for v in (sigmas.tolist() if isinstance(sigmas, mx.array) else sigmas)]
-            decreasing = all(b < a for a, b in zip(values, values[1:]))
+            values = [
+                float(v) for v in (sigmas.tolist() if isinstance(sigmas, mx.array) else sigmas)
+            ]
+            decreasing = all(b < a for a, b in zip(values, values[1:], strict=False))
             if len(values) < 2 or not decreasing or values[-1] != 0.0:
                 raise ValueError(
                     "`sigmas` must hold at least two strictly decreasing values ending at 0.0."
@@ -113,7 +115,9 @@ class MiniMaxH3Scheduler:
         )
 
     def scale_noise(self, sample: mx.array, timestep: float, noise: mx.array) -> mx.array:
-        """Rectified-flow forward process in MiniMax-H3's ``t`` convention: ``x_t = t*x0 + (1-t)*noise``.
+        """Apply rectified-flow noise in H3's ``t`` convention.
+
+        The forward process is ``x_t = t*x0 + (1-t)*noise``.
 
         Used to noise conditioning anchors, where ``t`` is a ``noise_aug`` level rather than a
         schedule entry, so it is taken at face value and never looked up in ``self.timesteps``.
@@ -150,6 +154,75 @@ class MiniMaxH3Scheduler:
         ratio = sigma_next / sigma
         one_minus_ratio = float(np.float32(1.0) - ratio)
 
-        prev = float(ratio) * sample.astype(mx.float32) + one_minus_ratio * denoised.astype(mx.float32)
+        prev = float(ratio) * sample.astype(mx.float32) + one_minus_ratio * denoised.astype(
+            mx.float32
+        )
         self._step_index += 1
         return prev.astype(sample.dtype)
+
+
+class MiniMaxH3ResMultistepScheduler(MiniMaxH3Scheduler):
+    """Deterministic second-order residual multistep solver for H3 flow trajectories.
+
+    The update is independently derived from the exponential-integrator formulation in
+    Zheng et al., *Accelerating Diffusion Models with Parallel Sampling: Inference at
+    Sub-Linear Time Complexity* (arXiv:2308.02157). The first and terminal updates use Euler;
+    interior updates reuse the previous denoised estimate. No ancestral noise is added.
+    """
+
+    def __init__(self, shift: float = 12.0):
+        super().__init__(shift=shift)
+        self._old_denoised: mx.array | None = None
+        self._old_sigma_down: np.float32 | None = None
+
+    def set_timesteps(
+        self,
+        num_inference_steps: int | None = None,
+        sigmas: list[float] | mx.array | None = None,
+    ) -> None:
+        super().set_timesteps(num_inference_steps=num_inference_steps, sigmas=sigmas)
+        self._old_denoised = None
+        self._old_sigma_down = None
+
+    def step(self, model_output: mx.array, timestep: float, sample: mx.array) -> mx.array:
+        if isinstance(timestep, int):
+            raise ValueError(
+                "Passing integer indices as timesteps is not supported; pass one of the "
+                "`scheduler.timesteps` values."
+            )
+        if self._step_index is None:
+            self._step_index = self.index_for_timestep(timestep)
+
+        index = self._step_index
+        sigma = np.float32(self.sigmas[index].item())
+        sigma_next = np.float32(self.sigmas[index + 1].item())
+        sigma_from_timestep = np.float32(1.0) - np.float32(timestep)
+        denoised = sample + float(sigma_from_timestep) * model_output
+
+        if sigma_next == 0.0 or self._old_denoised is None:
+            if sigma_next == 0.0:
+                result = denoised
+            else:
+                derivative = (sample - denoised) / float(sigma)
+                result = sample + derivative * float(sigma_next - sigma)
+        else:
+            t = np.float32(-np.log(sigma))
+            t_old = np.float32(-np.log(self._old_sigma_down))
+            t_next = np.float32(-np.log(sigma_next))
+            t_prev = np.float32(-np.log(np.float32(self.sigmas[index - 1].item())))
+            h = np.float32(t_next - t)
+            c2 = np.float32((t_prev - t_old) / h)
+            minus_h = np.float32(-h)
+            phi1 = np.float32(np.expm1(minus_h) / minus_h)
+            phi2 = np.float32((phi1 - np.float32(1.0)) / minus_h)
+            b1 = np.float32(np.nan_to_num(phi1 - phi2 / c2, nan=0.0))
+            b2 = np.float32(np.nan_to_num(phi2 / c2, nan=0.0))
+            decay = np.float32(np.exp(np.float32(-h)))
+            result = float(decay) * sample + float(h) * (
+                float(b1) * denoised + float(b2) * self._old_denoised
+            )
+
+        self._old_denoised = denoised
+        self._old_sigma_down = sigma_next
+        self._step_index += 1
+        return result.astype(sample.dtype)

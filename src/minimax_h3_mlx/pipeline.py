@@ -16,6 +16,7 @@ the 13B of `adaln_proj` is then dropped — see :mod:`minimax_h3_mlx.adaln`.
 
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -25,11 +26,13 @@ import mlx.core as mx
 import numpy as np
 
 from .adaln import ModulationCache, drop_adaln_weights
-from .config import TAG_TEXT, PipelineConfig
+from .config import TAG_TEXT, TAG_VIDEO, PipelineConfig
 from .packing import (
     AUDIO_CHANNELS,
     FPS,
     KEYFRAME_NOISE_AUG,
+    MAX_DURATION,
+    MIN_DURATION,
     PIXEL_MEAN,
     PIXEL_STD,
     align_num_frames,
@@ -42,7 +45,7 @@ from .packing import (
     unpatchify_video_tokens,
     video_latent_num_frames,
 )
-from .scheduler import MiniMaxH3Scheduler
+from .scheduler import MiniMaxH3ResMultistepScheduler, MiniMaxH3Scheduler
 
 
 def encode_keyframe_rows(
@@ -142,6 +145,11 @@ class LatentResult:
     trajectory_capture_seconds: float = 0.0
     trajectory_replay_seconds: float = 0.0
     trajectory_replay_fallback_reason: str | None = None
+    trajectory_conditioned_row_policy: str | None = None
+    trajectory_excluded_video_rows: int = 0
+    trajectory_excluded_audio_rows: int = 0
+    refinement_strength: float | None = None
+    refinement_audio_preserved: bool = False
     seconds_per_evaluation: float = 0.0
     total_seconds: float = 0.0
 
@@ -212,24 +220,43 @@ class MiniMaxH3Pipeline:
 
     # -- schedule -----------------------------------------------------------------------------
 
-    def _build_schedules(self, num_inference_steps: int):
-        video = MiniMaxH3Scheduler(shift=self.config.sigma_shift_video)
-        audio = MiniMaxH3Scheduler(shift=self.config.sigma_shift_audio)
+    def _build_schedules(self, num_inference_steps: int, sampling_method: str = "euler"):
+        if sampling_method not in {"euler", "res_multistep"}:
+            raise ValueError("`sampling_method` must be 'euler' or 'res_multistep'.")
+        scheduler_type = (
+            MiniMaxH3ResMultistepScheduler
+            if sampling_method == "res_multistep"
+            else MiniMaxH3Scheduler
+        )
+        video = scheduler_type(shift=self.config.sigma_shift_video)
+        audio = scheduler_type(shift=self.config.sigma_shift_audio)
         video.set_timesteps(num_inference_steps)
         audio.set_timesteps(num_inference_steps)
         return video, audio
 
-    def _row_timestep_plan(self, layout, video_timesteps, audio_timesteps):
+    def _row_timestep_plan(
+        self,
+        layout,
+        video_timesteps,
+        audio_timesteps,
+        visual_condition_strength: float = KEYFRAME_NOISE_AUG,
+        audio_condition_strength: float = 1.0,
+    ):
         """Per-step ``(timestep_indices,)`` against one global timestep table.
 
         The transformer is handed the same table at every step, so a single
         :class:`ModulationCache` covers the whole run. Conditioning video rows sit at
-        ``max(t, 0.999)`` and reference audio rows at ``1.0``, matching the reference.
+        ``max(t, visual strength)`` and reference audio rows at
+        ``max(audio t, audio strength)``. Defaults preserve the released behavior.
         """
         per_step = []
         for t, at in zip(video_timesteps.tolist(), audio_timesteps.tolist(), strict=True):
             distinct, inverse = build_row_timesteps(
-                layout, float(t), float(at), max(float(t), KEYFRAME_NOISE_AUG), 1.0
+                layout,
+                float(t),
+                float(at),
+                max(float(t), visual_condition_strength),
+                max(float(at), audio_condition_strength),
             )
             per_step.append((np.array(distinct), np.array(inverse)))
 
@@ -282,29 +309,67 @@ class MiniMaxH3Pipeline:
         drop_adaln: bool = True,
         verbose: bool = True,
         step_callback: Callable[[int, int], None] | None = None,
+        latent_preview_callback: Callable[[int, int, mx.array], None] | None = None,
         easycache_config=None,
         blockcache_config=None,
         trajectory_forecast_config=None,
         diagnostics=None,
+        condition_video_rows: mx.array | None = None,
+        condition_audio_rows: mx.array | None = None,
+        continuation_video_latents: mx.array | None = None,
+        continuation_audio_latents: mx.array | None = None,
+        continuation_frames: int = 0,
+        keyframe_anchors: tuple[str | int, ...] = (),
+        references: tuple | list = (),
+        sampling_method: str = "euler",
+        visual_condition_strength: float = KEYFRAME_NOISE_AUG,
+        audio_condition_strength: float = 1.0,
+        terminal_target_only: bool = False,
+        initial_video_latents: mx.array | None = None,
+        initial_audio_latents: mx.array | None = None,
+        refinement_strength: float = 1.0,
+        preserve_initial_audio: bool = False,
     ) -> LatentResult:
-        """Sample synchronized text-only video and audio latents without loading either VAE."""
+        """Sample synchronized T2VA, FL2VA, or Ref2VA latents without loading a VAE."""
         run_started = time.perf_counter()
-        if not 5.0 <= duration_seconds <= 15.0:
-            raise ValueError("`duration_seconds` must be between 5 and 15 seconds.")
+        if not MIN_DURATION <= duration_seconds <= MAX_DURATION:
+            raise ValueError(
+                f"`duration_seconds` must be between {MIN_DURATION:g} and "
+                f"{MAX_DURATION:g} seconds. Durations below 5 seconds are experimental."
+            )
         if num_inference_steps < 2:
             raise ValueError("`num_inference_steps` must be at least 2.")
         if height < 32 or width < 32 or height % 32 or width % 32:
             raise ValueError(
                 f"`height` and `width` must be positive multiples of 32, got {height}x{width}."
             )
+        for name, value in (
+            ("visual_condition_strength", visual_condition_strength),
+            ("audio_condition_strength", audio_condition_strength),
+        ):
+            if not 0.0 <= value <= 1.0:
+                raise ValueError(f"`{name}` must be between 0 and 1, got {value}.")
+        has_initial_latents = initial_video_latents is not None or initial_audio_latents is not None
+        if has_initial_latents and (
+            initial_video_latents is None or initial_audio_latents is None
+        ):
+            raise ValueError("H3 refinement requires both initial video and audio latents.")
+        if has_initial_latents and not 0.0 < refinement_strength <= 1.0:
+            raise ValueError("`refinement_strength` must be greater than 0 and no more than 1.")
+        if preserve_initial_audio and not has_initial_latents:
+            raise ValueError("Preserving initial audio requires H3 refinement latents.")
 
         tags = np.asarray(text_token_tags, dtype=np.int32)
         if tags.ndim != 1 or tags.size == 0:
             raise ValueError(
                 "`text_token_tags` must contain one modality tag per conditioning row."
             )
-        if np.any(tags != TAG_TEXT):
-            raise ValueError("Text-only sampling accepts text modality tags only.")
+        has_visual_conditioning = condition_video_rows is not None
+        allowed_tags = (
+            {int(TAG_VIDEO), int(TAG_TEXT)} if has_visual_conditioning else {int(TAG_TEXT)}
+        )
+        if any(int(tag) not in allowed_tags for tag in tags):
+            raise ValueError("H3 conditioning contains unsupported modality tags.")
         if prompt_embeds.ndim != 3 or prompt_embeds.shape[0] != 1:
             raise ValueError("`prompt_embeds` must have shape (1, tokens, text_dim).")
         if prompt_embeds.shape[1] != tags.size:
@@ -322,33 +387,271 @@ class MiniMaxH3Pipeline:
         latent_height, latent_width = height // 16, width // 16
         num_audio_latents = audio_latent_num_frames(num_frames)
         patch_size = self.dit.config.patch_size
-        layout = build_packed_sequence(
-            tags,
+        has_continuation = continuation_frames > 0
+        if has_initial_latents and has_continuation:
+            raise ValueError("H3 refinement cannot be combined with motion continuation.")
+        expected_initial_video_shape = (
+            1,
+            self.dit.config.latents_dim,
             num_latent_frames,
             latent_height,
             latent_width,
-            num_audio_latents,
-            patch_size,
         )
-
-        mx.random.seed(seed)
-        video_latents = mx.random.normal(
-            (
+        expected_initial_audio_shape = (
+            AUDIO_CHANNELS,
+            self.dit.config.audio_latents_dim,
+            num_audio_latents,
+        )
+        if initial_video_latents is not None and tuple(initial_video_latents.shape) != (
+            expected_initial_video_shape
+        ):
+            raise ValueError(
+                "Initial H3 video latent shape does not match the refinement canvas: "
+                f"expected {expected_initial_video_shape}, got "
+                f"{tuple(initial_video_latents.shape)}."
+            )
+        if initial_audio_latents is not None and tuple(initial_audio_latents.shape) != (
+            expected_initial_audio_shape
+        ):
+            raise ValueError(
+                "Initial H3 audio latent shape does not match the refinement duration: "
+                f"expected {expected_initial_audio_shape}, got "
+                f"{tuple(initial_audio_latents.shape)}."
+            )
+        if has_continuation:
+            if continuation_video_latents is None or continuation_audio_latents is None:
+                raise ValueError("Continuation requires both video and audio latent streams.")
+            expected_video_frames = video_latent_num_frames(continuation_frames)
+            expected_audio_frames = audio_latent_num_frames(continuation_frames)
+            expected_video_shape = (
                 1,
                 self.dit.config.latents_dim,
-                num_latent_frames,
+                expected_video_frames,
                 latent_height,
                 latent_width,
             )
-        ).astype(mx.float32)
-        video_rows = patchify_video_latents(video_latents, patch_size)
-        audio_rows = mx.random.normal(
-            (num_audio_latents * AUDIO_CHANNELS, self.dit.config.audio_latents_dim)
-        ).astype(mx.float32)
+            if tuple(continuation_video_latents.shape) != expected_video_shape:
+                raise ValueError(
+                    "Continuation video latent shape does not match the target canvas and context: "
+                    f"expected {expected_video_shape}, got "
+                    f"{tuple(continuation_video_latents.shape)}."
+                )
+            expected_audio_shape = (
+                AUDIO_CHANNELS,
+                self.dit.config.audio_latents_dim,
+                expected_audio_frames,
+            )
+            if tuple(continuation_audio_latents.shape) != expected_audio_shape:
+                raise ValueError(
+                    "Continuation audio latent shape does not match the context: "
+                    f"expected {expected_audio_shape}, got "
+                    f"{tuple(continuation_audio_latents.shape)}."
+                )
+        elif continuation_video_latents is not None or continuation_audio_latents is not None:
+            raise ValueError(
+                "Continuation latent streams require a positive continuation frame count."
+            )
+        layout_started = time.perf_counter()
+        if references:
+            if keyframe_anchors:
+                raise ValueError("Ref2VA references cannot be combined with FL2VA keyframes.")
+            if condition_video_rows is None:
+                raise ValueError("Ref2VA requires encoded image or video reference rows.")
+            from .ref2va import validate_reference_set
 
-        video_sched, audio_sched = self._build_schedules(num_inference_steps)
+            validate_reference_set(references, patch_size)
+            if condition_video_rows.ndim != 2 or int(condition_video_rows.shape[1]) != (
+                self.dit.config.video_patch_dim
+            ):
+                raise ValueError("Ref2VA video rows must have shape (rows, video_patch_dim).")
+            if condition_audio_rows is not None and (
+                condition_audio_rows.ndim != 2
+                or int(condition_audio_rows.shape[1]) != self.dit.config.audio_latents_dim
+            ):
+                raise ValueError("Ref2VA audio rows must have shape (rows, audio_latents_dim).")
+            expected_video_rows = sum(reference.video_rows(patch_size) for reference in references)
+            expected_audio_rows = sum(reference.audio_rows for reference in references)
+            if int(condition_video_rows.shape[0]) != expected_video_rows:
+                raise ValueError(
+                    "Ref2VA encoded video row count does not match the prepared references."
+                )
+            actual_audio_rows = (
+                0 if condition_audio_rows is None else int(condition_audio_rows.shape[0])
+            )
+            if actual_audio_rows != expected_audio_rows:
+                raise ValueError(
+                    "Ref2VA encoded audio row count does not match the prepared references."
+                )
+        elif condition_video_rows is None:
+            if keyframe_anchors:
+                raise ValueError("FL2VA keyframe anchors require encoded condition video rows.")
+            if condition_audio_rows is not None:
+                raise ValueError("Reference audio rows require a Ref2VA reference set.")
+        else:
+            if not keyframe_anchors or len(keyframe_anchors) > 8:
+                raise ValueError("FL2VA requires between one and eight keyframe anchors.")
+            for anchor in keyframe_anchors:
+                if anchor in {"first", "last"}:
+                    continue
+                if not isinstance(anchor, int) or isinstance(anchor, bool):
+                    raise ValueError(
+                        "FL2VA keyframe anchors must be 'first', 'last', or zero-based "
+                        "pixel-frame indices."
+                    )
+                if not 0 <= anchor < num_frames:
+                    raise ValueError(
+                        f"FL2VA timed keyframe {anchor} is outside 0..{num_frames - 1}."
+                    )
+            if condition_video_rows.ndim != 2:
+                raise ValueError(
+                    "FL2VA condition video rows must have shape (rows, video_patch_dim)."
+                )
+            if int(condition_video_rows.shape[1]) != self.dit.config.video_patch_dim:
+                raise ValueError(
+                    f"FL2VA condition row width must be {self.dit.config.video_patch_dim}."
+                )
+            _, patch_height, patch_width = patch_size
+            rows_per_frame = (latent_height // patch_height) * (latent_width // patch_width)
+            expected_rows = len(keyframe_anchors) * rows_per_frame
+            if int(condition_video_rows.shape[0]) != expected_rows:
+                raise ValueError(
+                    f"FL2VA encoded {int(condition_video_rows.shape[0])} condition rows; "
+                    f"the target canvas and anchors require {expected_rows}."
+                )
+        if references:
+            from .ref2va import build_ref2va_packed_sequence
+
+            layout = build_ref2va_packed_sequence(
+                tags,
+                references,
+                num_latent_frames,
+                latent_height,
+                latent_width,
+                num_audio_latents,
+                patch_size,
+                continuation_video_frames=(
+                    video_latent_num_frames(continuation_frames) if has_continuation else 0
+                ),
+                continuation_audio_latents=(
+                    audio_latent_num_frames(continuation_frames) if has_continuation else 0
+                ),
+            )
+        else:
+            layout = build_packed_sequence(
+                tags,
+                num_latent_frames,
+                latent_height,
+                latent_width,
+                num_audio_latents,
+                patch_size,
+                keyframe_anchors,
+                continuation_video_frames=(
+                    video_latent_num_frames(continuation_frames) if has_continuation else 0
+                ),
+                continuation_audio_latents=(
+                    audio_latent_num_frames(continuation_frames) if has_continuation else 0
+                ),
+            )
+        if diagnostics is not None and hasattr(diagnostics, "record_external"):
+            diagnostics.record_external(
+                "packing.layout",
+                time.perf_counter() - layout_started,
+                metadata={
+                    "sequence_rows": int(layout.sequence_length),
+                    "condition_video_rows": int(layout.num_condition_video_rows),
+                    "condition_audio_rows": int(layout.num_condition_audio_rows),
+                },
+            )
+
+        video_sched, audio_sched = self._build_schedules(
+            num_inference_steps, sampling_method=sampling_method
+        )
+        if has_initial_latents and refinement_strength < 1.0:
+            full_steps = len(video_sched.timesteps)
+            active_steps = max(1, min(full_steps, int(math.ceil(full_steps * refinement_strength))))
+            video_sigmas = video_sched.sigmas.tolist()[-(active_steps + 1) :]
+            audio_sigmas = audio_sched.sigmas.tolist()[-(active_steps + 1) :]
+            video_sched.set_timesteps(sigmas=video_sigmas)
+            audio_sched.set_timesteps(sigmas=audio_sigmas)
+
+        mx.random.seed(seed)
+        keyframe_video_rows = condition_video_rows
+        continuation_video_rows = None
+        continuation_audio_rows = None
+        if has_continuation:
+            continuation_video_rows = patchify_video_latents(
+                continuation_video_latents.astype(mx.float32), patch_size
+            )
+            continuation_audio_rows = (
+                continuation_audio_latents.astype(mx.float32)
+                .transpose(0, 2, 1)
+                .reshape(-1, self.dit.config.audio_latents_dim)
+            )
+        if keyframe_video_rows is not None:
+            keyframe_video_rows = keyframe_video_rows.astype(mx.float32)
+            condition_noise = mx.random.normal(keyframe_video_rows.shape).astype(mx.float32)
+            keyframe_video_rows = MiniMaxH3Scheduler(
+                shift=self.config.sigma_shift_video
+            ).scale_noise(keyframe_video_rows, visual_condition_strength, condition_noise)
+        packed_condition_video_rows = [
+            rows for rows in (continuation_video_rows, keyframe_video_rows) if rows is not None
+        ]
+        condition_video_rows = (
+            mx.concatenate(packed_condition_video_rows)
+            if len(packed_condition_video_rows) > 1
+            else (packed_condition_video_rows[0] if packed_condition_video_rows else None)
+        )
+        video_noise = mx.random.normal(expected_initial_video_shape).astype(mx.float32)
+        video_latents = video_noise
+        if initial_video_latents is not None:
+            video_latents = video_sched.scale_noise(
+                initial_video_latents.astype(mx.float32),
+                float(video_sched.timesteps[0].item()),
+                video_noise,
+            )
+        video_rows = patchify_video_latents(video_latents, patch_size)
+        if condition_video_rows is not None:
+            video_rows = mx.concatenate([condition_video_rows, video_rows])
+        audio_noise = mx.random.normal(expected_initial_audio_shape).astype(mx.float32)
+        audio_latents_working = audio_noise
+        if initial_audio_latents is not None:
+            audio_latents_working = audio_sched.scale_noise(
+                initial_audio_latents.astype(mx.float32),
+                float(audio_sched.timesteps[0].item()),
+                audio_noise,
+            )
+        audio_rows = audio_latents_working.transpose(0, 2, 1).reshape(
+            num_audio_latents * AUDIO_CHANNELS, self.dit.config.audio_latents_dim
+        )
+        if condition_audio_rows is not None:
+            condition_audio_rows = condition_audio_rows.astype(mx.float32)
+            if audio_condition_strength < 1.0:
+                audio_noise = mx.random.normal(
+                    condition_audio_rows.shape,
+                    key=mx.random.key(int(seed) + 1),
+                ).astype(mx.float32)
+                condition_audio_rows = MiniMaxH3Scheduler(
+                    shift=self.config.sigma_shift_audio
+                ).scale_noise(
+                    condition_audio_rows,
+                    audio_condition_strength,
+                    audio_noise,
+                )
+        if continuation_audio_rows is not None:
+            condition_audio_rows = (
+                mx.concatenate([continuation_audio_rows, condition_audio_rows])
+                if condition_audio_rows is not None
+                else continuation_audio_rows
+            )
+        if condition_audio_rows is not None:
+            audio_rows = mx.concatenate([condition_audio_rows, audio_rows])
+
         timestep_table, plan = self._row_timestep_plan(
-            layout, video_sched.timesteps, audio_sched.timesteps
+            layout,
+            video_sched.timesteps,
+            audio_sched.timesteps,
+            visual_condition_strength,
+            audio_condition_strength,
         )
         self._ensure_cache(timestep_table, drop_adaln, verbose)
         embeds = prompt_embeds.astype(mx.bfloat16)
@@ -403,9 +706,19 @@ class MiniMaxH3Pipeline:
         transformer_evaluations = 0
         trajectory_capture_seconds = 0.0
         trajectory_replay_seconds = 0.0
+        condition_video_count = layout.num_condition_video_rows
+        condition_audio_count = layout.num_condition_audio_rows
+        target_only_forecast = bool(
+            trajectory_forecast is not None
+            and trajectory_forecast.config.conditioned_row_policy == "target_only"
+        )
+        trajectory_video_row_start = condition_video_count if target_only_forecast else 0
+        trajectory_audio_row_start = condition_audio_count if target_only_forecast else 0
 
         def run_pass(start_video_rows, start_audio_rows, progress_offset, progress_total):
             nonlocal transformer_evaluations
+
+            from .lora import lora_evaluation
 
             current_video_rows = start_video_rows
             current_audio_rows = start_audio_rows
@@ -432,25 +745,31 @@ class MiniMaxH3Pipeline:
                             timestep=float(timestep),
                             audio_timestep=float(audio_sched.timesteps[index].item()),
                         )
-                    video_pred, audio_pred = self.dit(
-                        video_input,
-                        audio_input,
-                        embeds,
-                        timestep_table,
-                        plan[index],
-                        layout.token_tags,
-                        layout.position_ids,
-                        layout.video_indices,
-                        layout.audio_indices,
-                        layout.text_indices,
-                        modulation_cache=self._cache,
-                        blockcache=blockcache,
-                        trajectory_forecast=trajectory_forecast,
-                        forecast_coordinate=float(timestep),
-                        step_index=index,
-                        total_steps=total_steps,
-                        diagnostics=diagnostics,
-                    )
+                    with lora_evaluation(index, total_steps):
+                        video_pred, audio_pred = self.dit(
+                            video_input,
+                            audio_input,
+                            embeds,
+                            timestep_table,
+                            plan[index],
+                            layout.token_tags,
+                            layout.position_ids,
+                            layout.video_indices,
+                            layout.audio_indices,
+                            layout.text_indices,
+                            modulation_cache=self._cache,
+                            blockcache=blockcache,
+                            trajectory_forecast=trajectory_forecast,
+                            forecast_coordinate=float(timestep),
+                            trajectory_video_row_start=trajectory_video_row_start,
+                            trajectory_audio_row_start=trajectory_audio_row_start,
+                            terminal_target_only=terminal_target_only,
+                            terminal_video_row_start=condition_video_count,
+                            terminal_audio_row_start=condition_audio_count,
+                            step_index=index,
+                            total_steps=total_steps,
+                            diagnostics=diagnostics,
+                        )
                     actual_transformer = not replaying and (
                         hierarchical_blockcache
                         or (
@@ -467,17 +786,64 @@ class MiniMaxH3Pipeline:
                         easycache.update(video_input, audio_input, video_pred, audio_pred)
                 else:
                     video_pred, audio_pred = reused
-                current_video_rows = video_sched.step(
-                    video_pred[0].astype(mx.float32),
+                scheduler_started = time.perf_counter()
+                preview_latents = None
+                if latent_preview_callback is not None:
+                    sigma_from_timestep = float(
+                        np.float32(1.0) - np.float32(timestep)
+                    )
+                    denoised_video_rows = (
+                        current_video_rows[condition_video_count:]
+                        + sigma_from_timestep
+                        * video_pred[0, condition_video_count:].astype(mx.float32)
+                    )
+                    preview_latents = unpatchify_video_tokens(
+                        denoised_video_rows,
+                        num_latent_frames,
+                        latent_height,
+                        latent_width,
+                        self.dit.config.latents_dim,
+                        patch_size,
+                    )
+                stepped_video = video_sched.step(
+                    video_pred[0, condition_video_count:].astype(mx.float32),
                     float(timestep),
-                    current_video_rows,
+                    current_video_rows[condition_video_count:],
                 )
-                current_audio_rows = audio_sched.step(
-                    audio_pred[0].astype(mx.float32),
+                stepped_audio = audio_sched.step(
+                    audio_pred[0, condition_audio_count:].astype(mx.float32),
                     float(audio_sched.timesteps[index].item()),
-                    current_audio_rows,
+                    current_audio_rows[condition_audio_count:],
                 )
-                mx.eval(current_video_rows, current_audio_rows)
+                current_video_rows = (
+                    mx.concatenate([current_video_rows[:condition_video_count], stepped_video])
+                    if condition_video_count
+                    else stepped_video
+                )
+                current_audio_rows = (
+                    mx.concatenate([current_audio_rows[:condition_audio_count], stepped_audio])
+                    if condition_audio_count
+                    else stepped_audio
+                )
+                if preview_latents is not None:
+                    mx.eval(current_video_rows, current_audio_rows, preview_latents)
+                else:
+                    mx.eval(current_video_rows, current_audio_rows)
+                if diagnostics is not None and hasattr(diagnostics, "record_external"):
+                    diagnostics.record_external(
+                        "scheduler.step_and_repack",
+                        time.perf_counter() - scheduler_started,
+                        metadata={
+                            "condition_video_rows": int(condition_video_count),
+                            "condition_audio_rows": int(condition_audio_count),
+                        },
+                    )
+                if preview_latents is not None:
+                    latent_preview_callback(
+                        progress_offset + index + 1,
+                        progress_total,
+                        preview_latents,
+                    )
                 elapsed = time.perf_counter() - started
                 step_times.append(elapsed)
                 forecast_hit = bool(
@@ -584,14 +950,16 @@ class MiniMaxH3Pipeline:
             diagnostics.write_metadata()
 
         video_latents = unpatchify_video_tokens(
-            video_rows,
+            video_rows[condition_video_count:],
             num_latent_frames,
             latent_height,
             latent_width,
             self.dit.config.latents_dim,
             patch_size,
         )
-        audio_latents = unpack_audio_tokens(audio_rows, num_audio_latents)
+        audio_latents = unpack_audio_tokens(audio_rows[condition_audio_count:], num_audio_latents)
+        if preserve_initial_audio:
+            audio_latents = initial_audio_latents
         mx.eval(video_latents, audio_latents)
         return LatentResult(
             video_latents=video_latents,
@@ -636,6 +1004,15 @@ class MiniMaxH3Pipeline:
             trajectory_capture_seconds=trajectory_capture_seconds,
             trajectory_replay_seconds=trajectory_replay_seconds,
             trajectory_replay_fallback_reason=trajectory_replay_fallback_reason,
+            trajectory_conditioned_row_policy=(
+                trajectory_forecast_config.conditioned_row_policy
+                if trajectory_forecast_config is not None
+                else None
+            ),
+            trajectory_excluded_video_rows=trajectory_video_row_start,
+            trajectory_excluded_audio_rows=trajectory_audio_row_start,
+            refinement_strength=(refinement_strength if has_initial_latents else None),
+            refinement_audio_preserved=bool(preserve_initial_audio),
             seconds_per_evaluation=(sum(transformer_times) / max(len(transformer_times), 1)),
             total_seconds=time.perf_counter() - run_started,
         )
@@ -660,7 +1037,8 @@ class MiniMaxH3Pipeline:
         """Generate a clip.
 
         Args:
-            duration_seconds: 5 to 15; snapped up to the ``17n + 5`` frame grid the VAE encodes.
+            duration_seconds: 2.5 to 15; snapped up to the ``17n + 5`` frame grid the VAE encodes.
+                Durations below 5 seconds are experimental.
             num_inference_steps: the weights are CFG-distilled, so each step is one forward.
             keyframe_anchors: ``"first"`` / ``"last"`` per conditioning keyframe, in packed order.
             height, width: override the canvas ``aspect`` would resolve to. Both must be multiples

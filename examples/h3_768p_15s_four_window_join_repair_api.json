@@ -1,0 +1,342 @@
+{
+  "1": {
+    "class_type": "WeeToddH3ComponentLoader",
+    "inputs": {
+      "checkpoint": "MiniMax-H3/FL2VA",
+      "task": "t2va",
+      "transformer": "MiniMax-H3/transformers/q8_extended_paged",
+      "text_encoder": "MiniMax-H3/text_encoders/q8-paged",
+      "processor": "MiniMax-H3/FL2VA/processor",
+      "tokenizer": "MiniMax-H3/FL2VA/tokenizer",
+      "video_vae": "MiniMax-H3/vae/q8/video_vae_affine_q8.safetensors",
+      "audio_vae": "MiniMax-H3/FL2VA/audio_vae",
+      "allow_fl2va_weights_for_ref2va": false
+    }
+  },
+  "2": {
+    "class_type": "WeeToddH3GenerationConfig",
+    "inputs": {
+      "duration_seconds": 4.0,
+      "steps": 7,
+      "seed": 20260812,
+      "resolution_mode": "ratio + size",
+      "resolution_tier": "768 px short edge \u2014 native",
+      "aspect_ratio": "16:9 \u2014 widescreen landscape",
+      "short_edge": 768,
+      "custom_width": 1344,
+      "custom_height": 768,
+      "drop_adaln": true,
+      "memory_mode": "normal",
+      "attention_chunk_size": "automatic",
+      "projection_backend": "mlx",
+      "sampling_method": "euler"
+    }
+  },
+  "3": {
+    "class_type": "WeeToddH3ValidatedSamplingPreset",
+    "inputs": {
+      "config": [
+        "2",
+        0
+      ],
+      "preset": "Chained staged Turbo \u2014 drbaph v4 step-600 \u2014 4 windows / 22-frame context"
+    }
+  },
+  "4": {
+    "class_type": "WeeToddH3Preflight",
+    "inputs": {
+      "components": [
+        "1",
+        0
+      ],
+      "config": [
+        "3",
+        0
+      ],
+      "prompt_tokens": 1024,
+      "available_memory_gb": 0.0,
+      "ffmpeg_path": ""
+    }
+  },
+  "5": {
+    "class_type": "WeeToddH3ChainedTimeline",
+    "inputs": {
+      "window_duration_seconds": 4.0,
+      "window_count": 4,
+      "context_frames": "22",
+      "target_duration_seconds": 15.0
+    }
+  },
+  "6": {
+    "class_type": "WeeToddH3TextEncode",
+    "inputs": {
+      "components": [
+        "4",
+        0
+      ],
+      "prompt": "integrated_multimodal_description: [Shot 1] Live-action mockumentary crossover parody with realistic skin, clothing, soil, and natural handheld camera movement. In a barren desert excavation site under harsh afternoon sunlight, Jesse, a lean young white man with a shaved head wearing a dusty dark hoodie and work gloves, stands inside a deep grave-sized hole. He angrily throws several heavy shovelfuls of dirt over the edge. Each shovel strikes compact soil, dirt scatters realistically, and his breathing grows heavier. Dwight, a rigid middle-aged white man with neatly parted brown hair, wire-frame glasses, and a mustard-yellow short-sleeve shirt, suddenly walks into frame above the hole. Dwight studies the hole suspiciously, adjusts his glasses, looks down with a smug expression, and says <d>[English] Hello, little man. Digging your own grave? </d> The handheld camera makes small documentary-style corrections and ends with Jesse frozen mid-dig below Dwight.\n\noverall_soundscape: Dry desert wind, heavy breathing, shovel impacts against compact soil, loose dirt scattering, footsteps approaching on gravel, a faint clothing rustle as Dwight adjusts his glasses, and clean location-recorded dialogue synchronized to Dwight's mouth. No crowd and no machinery.\n\nnon_diegetic_music: N/A",
+      "unload_after_encode": false,
+      "config": [
+        "3",
+        0
+      ]
+    }
+  },
+  "7": {
+    "class_type": "WeeToddH3Sample",
+    "inputs": {
+      "components": [
+        "4",
+        0
+      ],
+      "conditioning": [
+        "6",
+        0
+      ],
+      "config": [
+        "3",
+        0
+      ],
+      "unload_after_sample": false,
+      "loras": [
+        "3",
+        1
+      ]
+    }
+  },
+  "8": {
+    "class_type": "WeeToddH3ChainAppend",
+    "inputs": {
+      "timeline": [
+        "5",
+        0
+      ],
+      "latents": [
+        "7",
+        0
+      ]
+    }
+  },
+  "9": {
+    "class_type": "WeeToddH3ContinuationContext",
+    "inputs": {
+      "latents": [
+        "7",
+        0
+      ],
+      "context_frames": "22"
+    }
+  },
+  "10": {
+    "class_type": "WeeToddH3TextEncode",
+    "inputs": {
+      "components": [
+        "4",
+        0
+      ],
+      "prompt": "integrated_multimodal_description: [Shot 1] Continue the same unbroken live-action mockumentary crossover shot at the same desert excavation site. Preserve Jesse's shaved head, dusty dark hoodie, gloves, shovel, position inside the deep hole, and Dwight's mustard-yellow shirt, brown parted hair, glasses, and position at the rim. Jesse immediately stops digging. He slowly turns his head and shoulders toward Dwight, plants his boots, and tightens both hands around the shovel handle. His face becomes cold and threatening. Looking directly up at Dwight, Jesse says <d>[English] No, no, no... I'm digging it for you. Just like I did for Michael. </d> Dwight's smug expression begins to fail as the sentence ends. The handheld camera subtly pushes closer without a cut and ends on both men holding tense eye contact.\n\noverall_soundscape: Continue the same dry wind and quiet desert ambience without an audible reset. The shovel movement stops with one final scrape, loose soil settles, Jesse's heavy breathing slows, his gloves tighten audibly against the wooden handle, and his clean threatening dialogue remains synchronized to his mouth.\n\nnon_diegetic_music: N/A",
+      "unload_after_encode": false,
+      "config": [
+        "3",
+        0
+      ]
+    }
+  },
+  "11": {
+    "class_type": "WeeToddH3Sample",
+    "inputs": {
+      "components": [
+        "4",
+        0
+      ],
+      "conditioning": [
+        "10",
+        0
+      ],
+      "config": [
+        "3",
+        0
+      ],
+      "unload_after_sample": false,
+      "loras": [
+        "3",
+        1
+      ],
+      "continuation": [
+        "9",
+        0
+      ]
+    }
+  },
+  "12": {
+    "class_type": "WeeToddH3ChainAppend",
+    "inputs": {
+      "timeline": [
+        "5",
+        0
+      ],
+      "latents": [
+        "11",
+        0
+      ],
+      "previous_chain": [
+        "8",
+        0
+      ]
+    }
+  },
+  "13": {
+    "class_type": "WeeToddH3ContinuationContext",
+    "inputs": {
+      "latents": [
+        "11",
+        0
+      ],
+      "context_frames": "22"
+    }
+  },
+  "14": {
+    "class_type": "WeeToddH3TextEncode",
+    "inputs": {
+      "components": [
+        "4",
+        0
+      ],
+      "prompt": "integrated_multimodal_description: [Shot 1] Continue the same unbroken realistic handheld shot with the same Jesse and Dwight, unchanged clothing, excavation site, shovel, grave, sunlight, and screen positions. Dwight's confidence collapses. His eyes widen behind his glasses, his face fills with horror, and he begins crying and panicking dramatically. Dwight drops to his knees at the edge of the hole, reaches down, grabs Jesse by both shoulders, shakes him once, and screams <d>[English] No! What did you do to Michael?! Where is he? Tell me now! </d> Jesse remains completely emotionless and keeps one hand firmly around the shovel. The camera jolts with Dwight's movement, then pushes toward his terrified face while retaining Jesse in the background.\n\noverall_soundscape: Continue the same desert wind and roomless outdoor ambience. Dwight's knees hit loose soil, fabric pulls as he grabs Jesse, one brief shoulder shake rustles both men's clothing, Dwight cries and screams with synchronized mouth movement, and Jesse remains silent. The shovel gives one small wooden creak.\n\nnon_diegetic_music: N/A",
+      "unload_after_encode": false,
+      "config": [
+        "3",
+        0
+      ]
+    }
+  },
+  "15": {
+    "class_type": "WeeToddH3Sample",
+    "inputs": {
+      "components": [
+        "4",
+        0
+      ],
+      "conditioning": [
+        "14",
+        0
+      ],
+      "config": [
+        "3",
+        0
+      ],
+      "unload_after_sample": false,
+      "loras": [
+        "3",
+        1
+      ],
+      "continuation": [
+        "13",
+        0
+      ]
+    }
+  },
+  "16": {
+    "class_type": "WeeToddH3ChainAppend",
+    "inputs": {
+      "timeline": [
+        "5",
+        0
+      ],
+      "latents": [
+        "15",
+        0
+      ],
+      "previous_chain": [
+        "12",
+        0
+      ]
+    }
+  },
+  "17": {
+    "class_type": "WeeToddH3ContinuationContext",
+    "inputs": {
+      "latents": [
+        "15",
+        0
+      ],
+      "context_frames": "22"
+    }
+  },
+  "18": {
+    "class_type": "WeeToddH3TextEncode",
+    "inputs": {
+      "components": [
+        "4",
+        0
+      ],
+      "prompt": "integrated_multimodal_description: [Shot 1] Continue the same unbroken live-action mockumentary shot at the same desert grave. Preserve both men's faces, clothing, positions, lighting, and the shovel. The handheld camera completes its push into a tight close-up of Dwight's terrified face. Tears run down his cheeks, his eyes remain wide behind his glasses, and his breathing becomes rapid and uneven. Dwight looks from Jesse to the grave and back again. Jesse remains silent and completely emotionless in the shallow background, staring at Dwight while holding the shovel upright. Hold the dreadful silence for a beat, then end abruptly on Dwight's horrified face without a fade.\n\noverall_soundscape: Continue the same wind and location ambience without a reset. Dwight's panicked breathing and quiet sobbing dominate the close-up. Jesse makes no sound. A few grains of dirt fall into the hole, followed by an abrupt hard ending with no musical sting.\n\nnon_diegetic_music: N/A",
+      "unload_after_encode": true,
+      "config": [
+        "3",
+        0
+      ]
+    }
+  },
+  "19": {
+    "class_type": "WeeToddH3Sample",
+    "inputs": {
+      "components": [
+        "4",
+        0
+      ],
+      "conditioning": [
+        "18",
+        0
+      ],
+      "config": [
+        "3",
+        0
+      ],
+      "unload_after_sample": true,
+      "loras": [
+        "3",
+        1
+      ],
+      "continuation": [
+        "17",
+        0
+      ]
+    }
+  },
+  "20": {
+    "class_type": "WeeToddH3ChainAppend",
+    "inputs": {
+      "timeline": [
+        "5",
+        0
+      ],
+      "latents": [
+        "19",
+        0
+      ],
+      "previous_chain": [
+        "16",
+        0
+      ]
+    }
+  },
+  "21": {
+    "class_type": "WeeToddH3DirectPublishChain",
+    "inputs": {
+      "components": [
+        "4",
+        0
+      ],
+      "chain": [
+        "20",
+        0
+      ],
+      "filename_prefix": "WeeTodd/H3_768p_15s_Chain_JoinRepair",
+      "crf": 18,
+      "max_av_drift_seconds": 0.025,
+      "generation_metadata": "{\"workflow\": \"h3_768p_15s_four_window_join_repair\", \"seed\": 20260812, \"lora\": \"minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors\", \"join_policy\": \"motion-matched overlap + 4-frame cosine blend + 50-ms audio crossfade\"}",
+      "ffmpeg_path": ""
+    }
+  }
+}
