@@ -314,6 +314,7 @@ _H3_VALIDATED_SAMPLING_PRESETS = {
         "start_after_evaluations": 2,
         "measurement": {
             "task": "t2va",
+            "seed": 20260811,
             "canvas": [1344, 768],
             "duration_seconds": 15.083333333333334,
             "transformer_evaluations": 6,

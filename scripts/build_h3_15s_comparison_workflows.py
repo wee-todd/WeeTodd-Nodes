@@ -19,7 +19,8 @@ ONE_SHOT_PRESET = (
 CHAIN_PRESET = (
     "Chained staged Turbo — drbaph v4 step-600 — 4 windows / 22-frame context"
 )
-SEED = 20_260_812
+ONE_SHOT_SEED = 20_260_811
+CHAIN_SEED = 20_260_812
 PORTABLE_COMPONENTS = {
     "checkpoint": "MiniMax-H3/FL2VA",
     "task": "t2va",
@@ -33,26 +34,34 @@ PORTABLE_COMPONENTS = {
 }
 ONE_SHOT_PROMPT = (
     "integrated_multimodal_description: [Shot 1] Live-action mockumentary crossover "
-    "parody with realistic skin, clothing, soil, and restrained handheld camera movement. "
-    "0:00-0:04, in a barren desert excavation site under harsh afternoon sunlight, Jesse, "
-    "a lean young white man with a shaved head, dusty dark hoodie, work gloves, and heavy "
-    "boots, angrily throws several shovelfuls of dirt from a deep grave-sized hole. Dirt "
-    "scatters naturally and his breathing is heavy. Dwight, a rigid middle-aged white man "
-    "with neatly parted brown hair, wire-frame glasses, and a mustard-yellow shirt, walks "
-    "to the rim, studies the hole, adjusts his glasses, and looks down. 0:04-0:07, Dwight "
-    "smiles smugly and says <d>[English] Hello, little man. Digging your own grave? </d> "
-    "0:07-0:11, Jesse stops, slowly turns, grips the shovel tightly, looks up with a cold "
-    "threatening expression, and says <d>[English] No, no, no... I'm digging it for you. "
-    "Just like I did for Michael. </d> 0:11-0:15, Dwight's confidence collapses. His eyes "
-    "widen, he cries, grabs Jesse by both shoulders, and screams <d>[English] No! What did "
-    "you do to Michael?! Where is he? Tell me now! </d> Jesse remains emotionless, silently "
-    "holding the shovel. The camera pushes into Dwight's terrified face and ends abruptly "
-    "without a fade. Preserve both identities, clothing, screen direction, daylight, and "
-    "location for the entire continuous shot.\n\n"
-    "overall_soundscape: Continuous dry desert wind and quiet outdoor ambience. Realistic "
-    "shovel impacts, dirt scattering, gravel footsteps, clothing rustle, heavy breathing, "
-    "synchronized clean dialogue, Dwight's crying, and one small wooden shovel creak. The "
-    "ambience never resets and there is no crowd or machinery.\n\n"
+    "parody with realistic skin, clothing, soil, and physically natural movement, presented "
+    "as one continuous handheld shot at a barren desert excavation site in harsh afternoon "
+    "sunlight. Jesse, a lean young white man with a shaved head, dusty dark hoodie, work "
+    "gloves, and black work trousers, stands inside a deep grave-sized hole. During the "
+    "opening four seconds, Jesse angrily throws several heavy shovelfuls of dirt over the "
+    "rim; the shovel strikes compact soil, loose dirt scatters, and his breathing grows "
+    "heavier. Dwight, a rigid middle-aged white man with neatly parted brown hair, wire-frame "
+    "glasses, and a mustard-yellow short-sleeve shirt, walks into frame above the hole, "
+    "studies it suspiciously, adjusts his glasses, looks down with a smug expression, and "
+    "says <d>[English] Hello, little man. Digging your own grave? </d> Jesse immediately "
+    "stops digging, slowly turns his head and shoulders toward Dwight, plants his boots, "
+    "grips the shovel tightly with both hands, and replies with a cold threatening expression "
+    "<d>[English] No, no, no... I'm digging it for you. Just like I did for Michael. </d> "
+    "Dwight's confidence collapses. His eyes widen behind his glasses, his face fills with "
+    "horror, and he begins crying and panicking. He drops to his knees at the rim, grabs Jesse "
+    "by both shoulders, shakes him once, and screams <d>[English] No! What did you do to "
+    "Michael?! Where is he? Tell me now! </d> Jesse remains completely emotionless and "
+    "silent, holding the shovel upright. The handheld camera makes restrained documentary "
+    "corrections, pushes closer as Dwight panics, and ends abruptly on a tight view of "
+    "Dwight's terrified face with Jesse still visible in the shallow background. Do not cut, "
+    "fade, teleport, duplicate either man, change clothing, reverse screen positions, or "
+    "reset the action.\n\n"
+    "overall_soundscape: Continuous dry desert wind and quiet outdoor ambience; synchronized "
+    "shovel impacts, scraping soil, scattering dirt, Jesse's heavy breathing, Dwight's "
+    "footsteps on gravel, clothing rustle as he adjusts his glasses, the final shovel scrape, "
+    "knees striking loose soil, one brief shoulder shake, Dwight's crying and panicked "
+    "breathing, and clean location-recorded dialogue synchronized to each speaker's mouth. "
+    "Preserve one continuous acoustic space without an ambience reset.\n\n"
     "non_diegetic_music: N/A"
 )
 
@@ -190,12 +199,14 @@ class Workflow:
         }
 
 
-def generation_values(duration: float) -> dict[str, object]:
+def generation_values(
+    duration: float, seed: int, *, exact_dimensions: bool = False
+) -> dict[str, object]:
     return {
         "duration_seconds": duration,
         "steps": 7,
-        "seed": SEED,
-        "resolution_mode": "ratio + size",
+        "seed": seed,
+        "resolution_mode": "exact dimensions" if exact_dimensions else "ratio + size",
         "resolution_tier": "768 px short edge — native",
         "aspect_ratio": "16:9 — widescreen landscape",
         "short_edge": 768,
@@ -209,7 +220,14 @@ def generation_values(duration: float) -> dict[str, object]:
     }
 
 
-def common_prefix(workflow: Workflow, duration: float, preset: str) -> None:
+def common_prefix(
+    workflow: Workflow,
+    duration: float,
+    preset: str,
+    seed: int,
+    *,
+    exact_dimensions: bool = False,
+) -> None:
     workflow.add(
         1,
         "WeeToddH3ComponentLoader",
@@ -220,7 +238,7 @@ def common_prefix(workflow: Workflow, duration: float, preset: str) -> None:
     workflow.add(
         2,
         "WeeToddH3GenerationConfig",
-        generation_values(duration),
+        generation_values(duration, seed, exact_dimensions=exact_dimensions),
         pos=(40, 450),
         size=(410, 420),
     )
@@ -247,7 +265,13 @@ def common_prefix(workflow: Workflow, duration: float, preset: str) -> None:
 
 def build_one_shot() -> Workflow:
     workflow = Workflow("15-second one-shot staged-Turbo quality baseline")
-    common_prefix(workflow, 15.0, ONE_SHOT_PRESET)
+    common_prefix(
+        workflow,
+        15.0,
+        ONE_SHOT_PRESET,
+        ONE_SHOT_SEED,
+        exact_dimensions=True,
+    )
     workflow.add(
         5,
         "WeeToddH3TextEncode",
@@ -282,7 +306,11 @@ def build_one_shot() -> Workflow:
             "crf": 18,
             "max_av_drift_seconds": 0.025,
             "generation_metadata": json.dumps(
-                {"workflow": "h3_768p_15s_one_clip_staged_turbo", "seed": SEED, "lora": LORA}
+                {
+                    "workflow": "h3_768p_15s_one_clip_staged_turbo",
+                    "seed": ONE_SHOT_SEED,
+                    "lora": LORA,
+                }
             ),
             "sampling_info": Ref(6, 1),
             "ffmpeg_path": "",
@@ -295,7 +323,7 @@ def build_one_shot() -> Workflow:
 
 def build_chain() -> Workflow:
     workflow = Workflow("15-second four-window H3 chain with repaired audiovisual joins")
-    common_prefix(workflow, 4.0, CHAIN_PRESET)
+    common_prefix(workflow, 4.0, CHAIN_PRESET, CHAIN_SEED)
     workflow.add(
         5,
         "WeeToddH3ChainedTimeline",
@@ -371,7 +399,7 @@ def build_chain() -> Workflow:
             "generation_metadata": json.dumps(
                 {
                     "workflow": "h3_768p_15s_four_window_join_repair",
-                    "seed": SEED,
+                    "seed": CHAIN_SEED,
                     "lora": LORA,
                     "join_policy": (
                         "motion-matched overlap + 4-frame cosine blend + "

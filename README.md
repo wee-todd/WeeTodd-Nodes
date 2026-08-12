@@ -61,8 +61,10 @@ For a complete 15-second T2VA comparison, load either the
 [`one-shot staged-Turbo workflow`](workflows/h3_768p_15s_one_clip_staged_turbo.json) or the
 [`four-window repaired-chain workflow`](workflows/h3_768p_15s_four_window_join_repair.json).
 Both use the same 1344 by 768 canvas, staged adapter, six transformer evaluations per sampling
-window, portable component paths, and seed. The one-shot graph is the quality baseline. The chain
-is the faster and lower-peak experimental option and includes one-pass synchronized publication.
+window, and portable component paths. The one-shot graph preserves the accepted seed `20260811`
+and exact prompt from the measured quality baseline. The chain uses seed `20260812`, so its speed
+and memory measurements are useful capacity results but not a same-seed quality comparison. The
+chain is the faster and lower-peak experimental option and includes synchronized publication.
 
 ## Current scope
 

@@ -18,8 +18,8 @@
     "inputs": {
       "duration_seconds": 15.0,
       "steps": 7,
-      "seed": 20260812,
-      "resolution_mode": "ratio + size",
+      "seed": 20260811,
+      "resolution_mode": "exact dimensions",
       "resolution_tier": "768 px short edge \u2014 native",
       "aspect_ratio": "16:9 \u2014 widescreen landscape",
       "short_edge": 768,
@@ -65,7 +65,7 @@
         "4",
         0
       ],
-      "prompt": "integrated_multimodal_description: [Shot 1] Live-action mockumentary crossover parody with realistic skin, clothing, soil, and restrained handheld camera movement. 0:00-0:04, in a barren desert excavation site under harsh afternoon sunlight, Jesse, a lean young white man with a shaved head, dusty dark hoodie, work gloves, and heavy boots, angrily throws several shovelfuls of dirt from a deep grave-sized hole. Dirt scatters naturally and his breathing is heavy. Dwight, a rigid middle-aged white man with neatly parted brown hair, wire-frame glasses, and a mustard-yellow shirt, walks to the rim, studies the hole, adjusts his glasses, and looks down. 0:04-0:07, Dwight smiles smugly and says <d>[English] Hello, little man. Digging your own grave? </d> 0:07-0:11, Jesse stops, slowly turns, grips the shovel tightly, looks up with a cold threatening expression, and says <d>[English] No, no, no... I'm digging it for you. Just like I did for Michael. </d> 0:11-0:15, Dwight's confidence collapses. His eyes widen, he cries, grabs Jesse by both shoulders, and screams <d>[English] No! What did you do to Michael?! Where is he? Tell me now! </d> Jesse remains emotionless, silently holding the shovel. The camera pushes into Dwight's terrified face and ends abruptly without a fade. Preserve both identities, clothing, screen direction, daylight, and location for the entire continuous shot.\n\noverall_soundscape: Continuous dry desert wind and quiet outdoor ambience. Realistic shovel impacts, dirt scattering, gravel footsteps, clothing rustle, heavy breathing, synchronized clean dialogue, Dwight's crying, and one small wooden shovel creak. The ambience never resets and there is no crowd or machinery.\n\nnon_diegetic_music: N/A",
+      "prompt": "integrated_multimodal_description: [Shot 1] Live-action mockumentary crossover parody with realistic skin, clothing, soil, and physically natural movement, presented as one continuous handheld shot at a barren desert excavation site in harsh afternoon sunlight. Jesse, a lean young white man with a shaved head, dusty dark hoodie, work gloves, and black work trousers, stands inside a deep grave-sized hole. During the opening four seconds, Jesse angrily throws several heavy shovelfuls of dirt over the rim; the shovel strikes compact soil, loose dirt scatters, and his breathing grows heavier. Dwight, a rigid middle-aged white man with neatly parted brown hair, wire-frame glasses, and a mustard-yellow short-sleeve shirt, walks into frame above the hole, studies it suspiciously, adjusts his glasses, looks down with a smug expression, and says <d>[English] Hello, little man. Digging your own grave? </d> Jesse immediately stops digging, slowly turns his head and shoulders toward Dwight, plants his boots, grips the shovel tightly with both hands, and replies with a cold threatening expression <d>[English] No, no, no... I'm digging it for you. Just like I did for Michael. </d> Dwight's confidence collapses. His eyes widen behind his glasses, his face fills with horror, and he begins crying and panicking. He drops to his knees at the rim, grabs Jesse by both shoulders, shakes him once, and screams <d>[English] No! What did you do to Michael?! Where is he? Tell me now! </d> Jesse remains completely emotionless and silent, holding the shovel upright. The handheld camera makes restrained documentary corrections, pushes closer as Dwight panics, and ends abruptly on a tight view of Dwight's terrified face with Jesse still visible in the shallow background. Do not cut, fade, teleport, duplicate either man, change clothing, reverse screen positions, or reset the action.\n\noverall_soundscape: Continuous dry desert wind and quiet outdoor ambience; synchronized shovel impacts, scraping soil, scattering dirt, Jesse's heavy breathing, Dwight's footsteps on gravel, clothing rustle as he adjusts his glasses, the final shovel scrape, knees striking loose soil, one brief shoulder shake, Dwight's crying and panicked breathing, and clean location-recorded dialogue synchronized to each speaker's mouth. Preserve one continuous acoustic space without an ambience reset.\n\nnon_diegetic_music: N/A",
       "unload_after_encode": true,
       "config": [
         "3",
@@ -109,7 +109,7 @@
       "filename_prefix": "WeeTodd/H3_768p_15s_OneShot_Staged_Turbo",
       "crf": 18,
       "max_av_drift_seconds": 0.025,
-      "generation_metadata": "{\"workflow\": \"h3_768p_15s_one_clip_staged_turbo\", \"seed\": 20260812, \"lora\": \"minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors\"}",
+      "generation_metadata": "{\"workflow\": \"h3_768p_15s_one_clip_staged_turbo\", \"seed\": 20260811, \"lora\": \"minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors\"}",
       "sampling_info": [
         "6",
         1

@@ -483,6 +483,7 @@ def test_validated_15_second_comparison_presets_record_measured_boundaries(
 
     assert one_shot["complete_workflow_seconds"] == pytest.approx(8207.699172)
     assert one_shot["mlx_peak_bytes"] == 30783349650
+    assert one_shot["seed"] == 20260811
     assert chain["complete_workflow_seconds"] == 5089.0
     assert chain["mlx_peak_bytes"] == 14453992534
     assert chain["context_frames"] == 22

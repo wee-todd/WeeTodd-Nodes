@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 
@@ -285,6 +286,8 @@ def test_h3_15_second_one_shot_workflow_is_the_portable_quality_control():
 
     assert prompt["1"]["inputs"] == PORTABLE_T2VA_INPUTS
     assert prompt["2"]["inputs"]["duration_seconds"] == 15.0
+    assert prompt["2"]["inputs"]["seed"] == 20260811
+    assert prompt["2"]["inputs"]["resolution_mode"] == "exact dimensions"
     assert prompt["2"]["inputs"]["custom_width"] == 1344
     assert prompt["2"]["inputs"]["custom_height"] == 768
     assert prompt["3"]["inputs"]["preset"] == (
@@ -294,6 +297,9 @@ def test_h3_15_second_one_shot_workflow_is_the_portable_quality_control():
     assert prompt["6"]["inputs"]["unload_after_sample"] is True
     assert prompt["7"]["class_type"] == "WeeToddH3DirectPublishLatents"
     assert prompt["7"]["inputs"]["sampling_info"] == ["6", 1]
+    assert hashlib.sha256(prompt["5"]["inputs"]["prompt"].encode()).hexdigest() == (
+        "056473f39220c73477b8a9ef6d0cb5f322c93ccf508dee509657da86948f50c9"
+    )
 
 
 def test_h3_15_second_chain_uses_four_windows_and_direct_join_repair():
@@ -303,6 +309,7 @@ def test_h3_15_second_chain_uses_four_windows_and_direct_join_repair():
 
     assert prompt["1"]["inputs"] == PORTABLE_T2VA_INPUTS
     assert prompt["2"]["inputs"]["duration_seconds"] == 4.0
+    assert prompt["2"]["inputs"]["seed"] == 20260812
     assert prompt["3"]["inputs"]["preset"] == (
         "Chained staged Turbo — drbaph v4 step-600 — 4 windows / 22-frame context"
     )
