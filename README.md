@@ -13,6 +13,45 @@ The measured low-memory profile reduced complete ComfyUI process peak by approxi
 while increasing workflow time by approximately 5 to 16 percent. See
 [Validated sampling presets](#validated-sampling-presets) for the measurement boundary.
 
+## Live H3 previews and early failure protection
+
+Use **H3 Component Loader → H3 Model Preview Override → H3 Preflight → H3 Sampler** to see a
+true-color six-frame contact sheet after each requested sampling interval. The preview decodes the
+predicted clean video latent, so structure becomes clearer as sampling advances. The conservative
+guard waits until the schedule midpoint and requires two consecutive low-structure previews before
+stopping; non-finite latents always stop immediately. The tiny decoder releases after success,
+failure, or cancellation and never replaces the production video VAE.
+
+Download the MIT-licensed `taeh3.safetensors` decoder from
+[madebyollin/taehv](https://github.com/madebyollin/taehv/blob/main/safetensors/taeh3.safetensors)
+into:
+
+```text
+ComfyUI/models/vae_approx/taeh3.safetensors
+```
+
+The default `auto` backend uses MLX immediately. On macOS, it prefers an optional fixed-shape Core
+ML model when present, which keeps preview convolution off the transformer's Metal execution path.
+Install the optional converter runtime into ComfyUI's existing arm64 environment, then make the
+portable 256-pixel package:
+
+```bash
+COMFYUI_ROOT=/path/to/ComfyUI
+
+"$COMFYUI_ROOT/.venv/bin/python" -m pip install 'coremltools==9.0'
+"$COMFYUI_ROOT/.venv/bin/python" \
+  "$COMFYUI_ROOT/custom_nodes/WeeTodd-Nodes/scripts/convert_h3_tae_coreml.py" \
+  "$COMFYUI_ROOT/models/vae_approx/taeh3.safetensors" \
+  "$COMFYUI_ROOT/models/vae_approx/taeh3_coreml_256.mlpackage" \
+  --edge 256
+```
+
+Core ML is loaded with CPU-and-Neural-Engine compute units, excluding the GPU. If the package or
+optional dependency is absent, `auto` records the reason and falls back to MLX. Select `neural
+engine` to require Core ML instead. The shipped
+[`T2VA smoke workflow`](examples/t2va_smoke_workflow.json) includes this preview node and uses the
+conservative guard by default.
+
 ## Recommended 768p quality/performance workflow
 
 [`h3_768p_fl2va_staged_turbo_drbaph_v4.json`](workflows/h3_768p_fl2va_staged_turbo_drbaph_v4.json)
@@ -66,6 +105,20 @@ and exact prompt from the measured quality baseline. The chain uses seed `202608
 and memory measurements are useful capacity results but not a same-seed quality comparison. The
 chain is the faster and lower-peak experimental option and includes synchronized publication.
 
+[`h3_768p_15s_ref2va_aliens_staged_turbo.json`](workflows/h3_768p_15s_ref2va_aliens_staged_turbo.json)
+adapts the accepted one-shot schedule to strict two-image Ref2VA. It expects
+`tall_white_reference_sheet.png` as Picture 1 and `grey_alien_reference_sheet.png` as Picture 2 in
+the ComfyUI input directory. Reference media is not bundled. The graph requires a genuine Ref2VA
+partition at `MiniMax-H3/Ref2VA`; its FL2VA compatibility switch remains disabled. It uses visual
+reference strength `0.999`, audio strength `1.0`, seed `20260811`, and the same two-base plus
+four-Turbo schedule as the accepted T2VA baseline. The matching API prompt is
+[`h3_768p_15s_ref2va_aliens_staged_turbo_api.json`](examples/h3_768p_15s_ref2va_aliens_staged_turbo_api.json).
+The corresponding
+[`four-window Ref2VA chain`](workflows/h3_768p_15s_ref2va_aliens_chained_staged_turbo.json)
+adds the same two character sheets to every window and carries both synchronized latent context
+and an ordered prior-video reference. Its matching API prompt is
+[`h3_768p_15s_ref2va_aliens_chained_staged_turbo_api.json`](examples/h3_768p_15s_ref2va_aliens_chained_staged_turbo_api.json).
+
 ## Current scope
 
 - Apple Silicon and macOS
@@ -81,7 +134,7 @@ chain is the faster and lower-peak experimental option and includes synchronized
 - Experimental H3-native 1.5x or 2x latent Hi Res Fix with original-audio preservation
 - Independent visual and audio reference-strength control
 - Synchronized H.264 video and 32 kHz stereo AAC audio
-- 40 composable nodes under `WeeTodd/H3`
+- 41 composable nodes under `WeeTodd/H3`
 - Optional standalone LTX 2.3 T2VA and I2VA pipelines under `WeeTodd/LTX 2.3`
 - Learned LTX latent upscaling for decoded H3 `IMAGE` plus `AUDIO`
 
@@ -93,8 +146,7 @@ release. One separately compressed Ref2VA checkpoint produced invalid low-varian
 eight and 20 requested schedule points and was rejected. The Component Loader also offers an
 advanced, explicit FL2VA-to-Ref2VA compatibility switch for comparisons when only FL2VA weights
 are installed. That switch is off by default: the official partitions share transformer
-architecture and sampling shifts but contain different learned weights. The current sampler does
-not provide a live latent preview.
+architecture and sampling shifts but contain different learned weights.
 
 Reference images use an output-relative pixel budget. The 100-percent default matches the output
 canvas area while preserving the source aspect ratio. Values from 50 to 400 percent trade

@@ -87,8 +87,8 @@ def continuation_context_from_latents(latents, context_frames: int) -> H3Continu
 
 def validate_continuation_for_sample(context: H3ContinuationContext, spec, config) -> None:
     """Reject geometry or provenance mismatches before transformer execution."""
-    if spec.task not in {"t2va", "fl2va"}:
-        raise ValueError("H3 motion continuation supports T2VA and FL2VA checkpoints.")
+    if spec.task not in {"t2va", "fl2va", "ref2va"}:
+        raise ValueError("H3 motion continuation supports T2VA, FL2VA, and Ref2VA checkpoints.")
     if context.width != config.width or context.height != config.height:
         raise ValueError(
             "Continuation canvas must match the new generation: "

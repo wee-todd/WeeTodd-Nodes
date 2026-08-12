@@ -155,6 +155,7 @@ def test_transformer_only_text_sampling_shapes():
     dit = MiniMaxH3DiT(cfg)
     pipeline = MiniMaxH3Pipeline(dit, None, None, None)
     progress = []
+    previews = []
 
     result = pipeline.sample_latents(
         mx.random.normal((1, 3, cfg.text_dim)),
@@ -166,12 +167,19 @@ def test_transformer_only_text_sampling_shapes():
         drop_adaln=False,
         verbose=False,
         step_callback=lambda completed, total: progress.append((completed, total)),
+        latent_preview_callback=lambda completed, total, latents: previews.append(
+            (completed, total, tuple(latents.shape))
+        ),
     )
 
     assert result.video_latents.shape == (1, cfg.latents_dim, 37, 2, 2)
     assert result.audio_latents.shape == (2, cfg.audio_latents_dim, 207)
     assert result.transformer_evaluations == 2
     assert progress == [(0, 2), (1, 2), (2, 2)]
+    assert previews == [
+        (1, 2, tuple(result.video_latents.shape)),
+        (2, 2, tuple(result.video_latents.shape)),
+    ]
 
 
 def test_transformer_only_continuation_sampling_shapes():
@@ -188,6 +196,40 @@ def test_transformer_only_continuation_sampling_shapes():
         width=32,
         drop_adaln=False,
         verbose=False,
+        continuation_video_latents=mx.random.normal((1, cfg.latents_dim, 7, 2, 2)),
+        continuation_audio_latents=mx.random.normal((2, cfg.audio_latents_dim, 37)),
+        continuation_frames=22,
+    )
+
+    assert result.video_latents.shape == (1, cfg.latents_dim, 37, 2, 2)
+    assert result.audio_latents.shape == (2, cfg.audio_latents_dim, 207)
+    assert result.transformer_evaluations == 2
+
+
+def test_transformer_only_ref2va_continuation_sampling_shapes():
+    cfg = tiny_config()
+    mx.random.seed(15)
+    pipeline = MiniMaxH3Pipeline(MiniMaxH3DiT(cfg), None, None, None)
+    reference = PreparedReference(
+        "video",
+        num_latent_frames=1,
+        latent_height=2,
+        latent_width=2,
+        num_audio_latents=1,
+    )
+
+    result = pipeline.sample_latents(
+        mx.random.normal((1, 3, cfg.text_dim)),
+        np.full((3,), TAG_TEXT, dtype=np.int32),
+        duration_seconds=5.0,
+        num_inference_steps=3,
+        height=32,
+        width=32,
+        drop_adaln=False,
+        verbose=False,
+        condition_video_rows=mx.random.normal((1, cfg.video_patch_dim)),
+        condition_audio_rows=mx.random.normal((2, cfg.audio_latents_dim)),
+        references=(reference,),
         continuation_video_latents=mx.random.normal((1, cfg.latents_dim, 7, 2, 2)),
         continuation_audio_latents=mx.random.normal((2, cfg.audio_latents_dim, 37)),
         continuation_frames=22,

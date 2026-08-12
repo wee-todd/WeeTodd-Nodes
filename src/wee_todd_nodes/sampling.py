@@ -14,6 +14,7 @@ from .conditioning import H3Conditioning, H3TextEncoderSpec
 from .continuation import H3ContinuationContext, validate_continuation_for_sample
 from .lora import H3LoRAStack
 from .preflight import H3ComponentSetSpec, validate_task_partition
+from .preview import H3PreviewConfig, H3PreviewSession
 from .runtime import H3GenerationConfig
 
 
@@ -123,6 +124,7 @@ class H3Latents:
     refinement_source_height: int | None = None
     refinement_strength: float | None = None
     refinement_audio_preserved: bool = False
+    preview_report: tuple[dict[str, Any], ...] = ()
 
 
 SamplerFactory = Callable[[H3TransformerSpec], Any]
@@ -178,6 +180,8 @@ class H3TransformerCache:
         refinement_strength: float = 1.0,
         refinement_resize_method: str = "bilinear",
         loras: H3LoRAStack | None = None,
+        preview_config: H3PreviewConfig | None = None,
+        preview_callback=None,
         prepare_stage: Callable[[], None] | None = None,
     ) -> H3Latents:
         spec.validate()
@@ -201,8 +205,10 @@ class H3TransformerCache:
             conditioning.condition_video_rows is not None or conditioning.keyframe_anchors
         ):
             raise ValueError("T2VA conditioning cannot contain first/last-frame rows.")
-        if spec.task == "fl2va" and not continuation_text_only_fl2va and (
-            conditioning.condition_video_rows is None or not conditioning.keyframe_anchors
+        if (
+            spec.task == "fl2va"
+            and not continuation_text_only_fl2va
+            and (conditioning.condition_video_rows is None or not conditioning.keyframe_anchors)
         ):
             raise ValueError("FL2VA conditioning requires encoded first/last-frame rows.")
         if spec.task == "ref2va" and (
@@ -360,40 +366,74 @@ class H3TransformerCache:
                     import mlx.core as mx
 
                     mx.eval(initial_video_latents, initial_audio_latents)
-                result = self._sampler.sample_latents(
-                    conditioning.embeddings,
-                    conditioning.token_tags,
-                    duration_seconds=config.duration_seconds,
-                    num_inference_steps=config.steps,
-                    seed=config.seed,
-                    height=config.height,
-                    width=config.width,
-                    drop_adaln=config.drop_adaln,
-                    step_callback=step_callback,
-                    easycache_config=easycache,
-                    blockcache_config=blockcache,
-                    trajectory_forecast_config=trajectory_forecast,
-                    continuation_video_latents=(
-                        continuation.video if continuation is not None else None
-                    ),
-                    continuation_audio_latents=(
-                        continuation.audio if continuation is not None else None
-                    ),
-                    continuation_frames=(
-                        continuation.context_frames if continuation is not None else 0
-                    ),
-                    condition_video_rows=conditioning.condition_video_rows,
-                    condition_audio_rows=conditioning.condition_audio_rows,
-                    keyframe_anchors=conditioning.keyframe_anchors,
-                    references=conditioning.references,
-                    sampling_method=config.sampling_method,
-                    visual_condition_strength=conditioning.visual_condition_strength,
-                    audio_condition_strength=conditioning.audio_condition_strength,
-                    initial_video_latents=initial_video_latents,
-                    initial_audio_latents=initial_audio_latents,
-                    refinement_strength=refinement_strength,
-                    preserve_initial_audio=refinement_source is not None,
+                preview_session = (
+                    H3PreviewSession(preview_config) if preview_config is not None else None
                 )
+                preview_reports: list[dict[str, Any]] = []
+
+                def on_latent_preview(completed, total, video_latents):
+                    if preview_session is None:
+                        return
+                    update = preview_session.update(video_latents, completed, total)
+                    if update is None:
+                        return
+                    report = {
+                        "completed": int(completed),
+                        "total": int(total),
+                        "backend": preview_session.backend,
+                        "fallback_reason": preview_session.fallback_reason,
+                        "statistics": (
+                            asdict(update.statistics) if update.statistics is not None else None
+                        ),
+                        "rejected": update.reject_reason is not None,
+                    }
+                    preview_reports.append(report)
+                    if preview_callback is not None:
+                        preview_callback(update, completed, total)
+                    if update.reject_reason is not None:
+                        raise RuntimeError(update.reject_reason)
+
+                try:
+                    result = self._sampler.sample_latents(
+                        conditioning.embeddings,
+                        conditioning.token_tags,
+                        duration_seconds=config.duration_seconds,
+                        num_inference_steps=config.steps,
+                        seed=config.seed,
+                        height=config.height,
+                        width=config.width,
+                        drop_adaln=config.drop_adaln,
+                        step_callback=step_callback,
+                        latent_preview_callback=(
+                            on_latent_preview if preview_session is not None else None
+                        ),
+                        easycache_config=easycache,
+                        blockcache_config=blockcache,
+                        trajectory_forecast_config=trajectory_forecast,
+                        continuation_video_latents=(
+                            continuation.video if continuation is not None else None
+                        ),
+                        continuation_audio_latents=(
+                            continuation.audio if continuation is not None else None
+                        ),
+                        continuation_frames=(
+                            continuation.context_frames if continuation is not None else 0
+                        ),
+                        condition_video_rows=conditioning.condition_video_rows,
+                        condition_audio_rows=conditioning.condition_audio_rows,
+                        keyframe_anchors=conditioning.keyframe_anchors,
+                        references=conditioning.references,
+                        sampling_method=config.sampling_method,
+                        visual_condition_strength=conditioning.visual_condition_strength,
+                        audio_condition_strength=conditioning.audio_condition_strength,
+                        initial_video_latents=initial_video_latents,
+                        initial_audio_latents=initial_audio_latents,
+                        refinement_strength=refinement_strength,
+                        preserve_initial_audio=refinement_source is not None,
+                    )
+                finally:
+                    if preview_session is not None:
+                        preview_session.release()
                 from minimax_h3_mlx.projection import mpp_runtime_status
 
                 paged = getattr(self._sampler.dit, "paged_blocks", None)
@@ -462,9 +502,8 @@ class H3TransformerCache:
                         refinement_source.height if refinement_source is not None else None
                     ),
                     refinement_strength=getattr(result, "refinement_strength", None),
-                    refinement_audio_preserved=getattr(
-                        result, "refinement_audio_preserved", False
-                    ),
+                    refinement_audio_preserved=getattr(result, "refinement_audio_preserved", False),
+                    preview_report=tuple(preview_reports),
                     seconds_per_evaluation=result.seconds_per_evaluation,
                     total_seconds=result.total_seconds,
                     transformer_spec=spec,

@@ -135,6 +135,50 @@ def test_ref2va_row_timesteps_keep_all_reference_rows_conditioned():
     )
 
 
+def test_ref2va_continuation_overlaps_target_after_ordered_references():
+    layout = build_ref2va_packed_sequence(
+        [TAG_TEXT],
+        [
+            PreparedReference("image", 1, 4, 4),
+            PreparedReference("video", 2, 4, 4, num_audio_latents=2),
+        ],
+        num_latent_frames=3,
+        latent_height=4,
+        latent_width=4,
+        num_audio_latents=4,
+        patch_size=PATCH,
+        continuation_video_frames=2,
+        continuation_audio_latents=2,
+    )
+    positions = np.asarray(layout.position_ids)
+    video_indices = np.asarray(layout.video_indices)
+    audio_indices = np.asarray(layout.audio_indices)
+
+    assert layout.num_continuation_video_rows == 8
+    assert layout.num_continuation_audio_rows == 4
+    assert layout.num_condition_video_rows == 20
+    assert layout.num_condition_audio_rows == 8
+    np.testing.assert_array_equal(
+        positions[video_indices[:8], 0],
+        positions[video_indices[20:28], 0],
+    )
+    np.testing.assert_array_equal(
+        positions[audio_indices[:2], 0],
+        positions[audio_indices[8:10], 0],
+    )
+    np.testing.assert_array_equal(
+        positions[audio_indices[2:4], 0],
+        positions[audio_indices[12:14], 0],
+    )
+
+    distinct, inverse = build_row_timesteps(layout, 0.5, 0.25, 0.999, 0.7)
+    rows = np.asarray(mx.take(distinct, inverse))
+    np.testing.assert_array_equal(rows[video_indices[:8]], 1.0)
+    np.testing.assert_allclose(rows[video_indices[8:20]], 0.999)
+    np.testing.assert_array_equal(rows[audio_indices[:4]], 1.0)
+    np.testing.assert_allclose(rows[audio_indices[4:8]], 0.7)
+
+
 def test_reference_strength_timestep_plan_tracks_schedule_above_requested_floor():
     layout = build_ref2va_packed_sequence(
         [TAG_TEXT],

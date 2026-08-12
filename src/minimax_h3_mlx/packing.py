@@ -82,7 +82,7 @@ class PackedSequence:
     position_ids: mx.array  # (seq, 3) float32 — cast from the float64 host grid
     token_tags: mx.array  # (seq,) int32
     video_indices: mx.array  # conditioning rows first, then target rows
-    audio_indices: mx.array  # reference rows first (ref2va), then target rows
+    audio_indices: mx.array  # conditioning rows first, then target rows
     text_indices: mx.array
     num_condition_video_rows: int
     num_condition_audio_rows: int

@@ -7,7 +7,7 @@ import pytest
 from wee_todd_nodes.nodes import NODE_CLASS_MAPPINGS
 
 ROOT = Path(__file__).parents[1]
-CORE_NODES = {"LoadImage"}
+CORE_NODES = {"GetVideoComponents", "LoadImage", "LoadVideo", "Video Slice"}
 VALIDATED_WORKFLOW_PRESETS = {
     "h3_512p_dense_baseline.json": "Dense baseline — 20 points / 19 evaluations",
     "h3_512p_trajectory_replay.json": (
@@ -25,8 +25,7 @@ CHAINED_WORKFLOW_PRESETS = {
         "Chained context — Dense Turbo LightX2V rank 21 — 5 points / 4 evaluations"
     ),
     "h3_544p_chained_trajectory_replay.json": (
-        "Chained context — Trajectory target-only replay — "
-        "20 points / up to 11 evaluations"
+        "Chained context — Trajectory target-only replay — 20 points / up to 11 evaluations"
     ),
 }
 PORTABLE_T2VA_COMPONENTS = [
@@ -75,9 +74,7 @@ def _input_schema(node_type):
 
 
 def _widget_schema(node):
-    connected = {
-        item["name"] for item in node.get("inputs", []) if item.get("link") is not None
-    }
+    connected = {item["name"] for item in node.get("inputs", []) if item.get("link") is not None}
     widgets = []
     for name, specification in _input_schema(node["type"]):
         input_type = specification[0]
@@ -90,9 +87,7 @@ def _widget_schema(node):
     # The H3 resolution extension deliberately renders the optional size slider beside
     # the aspect-ratio selector, rather than after every required widget.
     if node["type"] == "WeeToddH3GenerationConfig":
-        short_edge_index = next(
-            i for i, item in enumerate(widgets) if item[0] == "short_edge"
-        )
+        short_edge_index = next(i for i, item in enumerate(widgets) if item[0] == "short_edge")
         short_edge = widgets.pop(short_edge_index)
         aspect_ratio_index = next(i for i, item in enumerate(widgets) if item[0] == "aspect_ratio")
         widgets.insert(aspect_ratio_index + 1, short_edge)
@@ -230,9 +225,7 @@ def test_h3_to_ltx23_upscale_api_preserves_comfy_image_and_audio_contracts():
 
 
 def test_h3_native_hires_fix_api_preserves_audio_and_publishes_refined_latents():
-    prompt = json.loads(
-        (ROOT / "examples" / "h3_native_hires_fix_1p5x_api.json").read_text()
-    )
+    prompt = json.loads((ROOT / "examples" / "h3_native_hires_fix_1p5x_api.json").read_text())
 
     assert prompt["3"]["inputs"]["steps"] == 8
     assert prompt["5"]["inputs"]["unload_after_sample"] is False
@@ -262,10 +255,7 @@ def test_h3_768p_staged_turbo_workflow_uses_one_continuous_schedule():
     assert prompt["6"]["class_type"] == "WeeToddH3ValidatedSamplingPreset"
     assert prompt["6"]["inputs"] == {
         "config": ["2", 0],
-        "preset": (
-            "Staged Turbo — drbaph v4 step-600 — "
-            "2 base + 4 Turbo evaluations"
-        ),
+        "preset": ("Staged Turbo — drbaph v4 step-600 — 2 base + 4 Turbo evaluations"),
     }
     assert prompt["7"]["inputs"]["config"] == ["6", 0]
     assert prompt["7"]["inputs"]["loras"] == ["6", 1]
@@ -319,17 +309,11 @@ def test_h3_15_second_chain_uses_four_windows_and_direct_join_repair():
         "context_frames": "22",
         "target_duration_seconds": 15.0,
     }
-    samples = [
-        node for node in prompt.values() if node["class_type"] == "WeeToddH3Sample"
-    ]
+    samples = [node for node in prompt.values() if node["class_type"] == "WeeToddH3Sample"]
     contexts = [
-        node
-        for node in prompt.values()
-        if node["class_type"] == "WeeToddH3ContinuationContext"
+        node for node in prompt.values() if node["class_type"] == "WeeToddH3ContinuationContext"
     ]
-    appends = [
-        node for node in prompt.values() if node["class_type"] == "WeeToddH3ChainAppend"
-    ]
+    appends = [node for node in prompt.values() if node["class_type"] == "WeeToddH3ChainAppend"]
     assert len(samples) == len(appends) == 4
     assert len(contexts) == 3
     assert all(node["inputs"]["context_frames"] == "22" for node in contexts)
@@ -344,6 +328,84 @@ def test_h3_15_second_chain_uses_four_windows_and_direct_join_repair():
     assert metadata["join_policy"].startswith("motion-matched overlap")
 
 
+def test_h3_15_second_alien_ref2va_workflow_uses_strict_two_reference_order():
+    prompt = json.loads(
+        (ROOT / "examples" / "h3_768p_15s_ref2va_aliens_staged_turbo_api.json").read_text()
+    )
+
+    assert prompt["1"]["inputs"] == {
+        "checkpoint": "MiniMax-H3/Ref2VA",
+        "task": "ref2va",
+        "transformer": "MiniMax-H3/Ref2VA/transformer",
+        "text_encoder": "MiniMax-H3/Ref2VA/text_encoder",
+        "processor": "MiniMax-H3/Ref2VA/processor",
+        "tokenizer": "MiniMax-H3/Ref2VA/tokenizer",
+        "video_vae": "MiniMax-H3/Ref2VA/video_vae",
+        "audio_vae": "MiniMax-H3/Ref2VA/audio_vae",
+        "allow_fl2va_weights_for_ref2va": False,
+    }
+    assert prompt["2"]["inputs"]["seed"] == 20260811
+    assert prompt["2"]["inputs"]["duration_seconds"] == 15.0
+    assert prompt["3"]["inputs"]["preset"] == (
+        "One-shot staged Turbo — drbaph v4 step-600 — 15-second quality baseline"
+    )
+    assert prompt["5"]["inputs"]["image"] == "tall_white_reference_sheet.png"
+    assert prompt["7"]["inputs"]["image"] == "grey_alien_reference_sheet.png"
+    assert prompt["8"]["inputs"]["previous_references"] == ["6", 0]
+    reference_prompt = prompt["9"]["inputs"]["prompt"]
+    assert reference_prompt.startswith("<Picture 1> defines the single tall white")
+    assert "<Picture 2> defines the single short grey" in reference_prompt
+    assert "Dwight" not in reference_prompt
+    assert "Jesse" not in reference_prompt
+    assert prompt["10"]["inputs"]["visual_strength"] == 0.999
+    assert prompt["10"]["inputs"]["audio_strength"] == 1.0
+    assert prompt["11"]["inputs"]["loras"] == ["3", 1]
+    assert prompt["12"]["class_type"] == "WeeToddH3DirectPublishLatents"
+
+
+def test_h3_15_second_alien_ref2va_chain_keeps_media_and_latent_context():
+    prompt = json.loads(
+        (ROOT / "examples" / "h3_768p_15s_ref2va_aliens_chained_staged_turbo_api.json").read_text()
+    )
+
+    assert prompt["1"]["inputs"]["task"] == "ref2va"
+    assert prompt["1"]["inputs"]["allow_fl2va_weights_for_ref2va"] is False
+    assert prompt["10"]["inputs"]["file"] == (
+        "H3_768p_15s_One_Clip_Staged_Turbo_Benchmark_20260811.mp4"
+    )
+    assert [prompt[node]["inputs"]["start_time"] for node in ("11", "20", "29", "38")] == [
+        0.0,
+        85 / 24,
+        170 / 24,
+        255 / 24,
+    ]
+    assert all(
+        prompt[node]["inputs"]["previous_references"] == ["9", 0]
+        for node in ("13", "22", "31", "40")
+    )
+    assert all(
+        prompt[node]["inputs"]["soundtrack"] == [component, 1]
+        for node, component in zip(
+            ("13", "22", "31", "40"),
+            ("12", "21", "30", "39"),
+            strict=True,
+        )
+    )
+    assert [prompt[node]["inputs"].get("continuation") for node in ("16", "25", "34", "43")] == [
+        None,
+        ["18", 0],
+        ["27", 0],
+        ["36", 0],
+    ]
+    assert all(
+        "<Picture 1> defines the single tall white" in prompt[node]["inputs"]["prompt"]
+        and "<Picture 2> defines the single short grey" in prompt[node]["inputs"]["prompt"]
+        and "<Video 1> supplies" in prompt[node]["inputs"]["prompt"]
+        for node in ("14", "23", "32", "41")
+    )
+    assert prompt["45"]["class_type"] == "WeeToddH3DirectPublishChain"
+
+
 def test_t2va_api_prompt_uses_registered_nodes_and_staged_unloading():
     prompt = json.loads((ROOT / "examples" / "t2va_smoke_api.json").read_text())
 
@@ -351,6 +413,17 @@ def test_t2va_api_prompt_uses_registered_nodes_and_staged_unloading():
     assert prompt["4"]["inputs"]["unload_after_encode"] is True
     assert prompt["5"]["inputs"]["unload_after_sample"] is True
     assert prompt["5"]["inputs"]["easycache"] == ["9", 0]
+    assert prompt["2"]["inputs"]["components"] == ["10", 0]
+    assert prompt["10"]["inputs"] == {
+        "components": ["1", 0],
+        "tae_model": "taeh3.safetensors",
+        "preview_backend": "auto",
+        "coreml_model": "taeh3_coreml_256.mlpackage",
+        "preview_every": 1,
+        "preview_frames": 6,
+        "max_preview_edge": 256,
+        "safety_guard": "conservative collapse guard",
+    }
     assert prompt["2"]["inputs"]["config"] == ["3", 0]
     assert "width" not in prompt["2"]["inputs"]
     assert prompt["3"]["inputs"]["resolution_mode"] == "ratio + size"
@@ -382,8 +455,8 @@ def test_t2va_ui_workflow_links_are_consistent():
     nodes = {node["id"]: node for node in workflow["nodes"]}
     links = {link[0]: link for link in workflow["links"]}
 
-    assert len(nodes) == 9
-    assert set(links) == set(range(1, 17))
+    assert len(nodes) == 10
+    assert set(links) == set(range(1, 18))
     assert {node["type"] for node in nodes.values()} <= set(NODE_CLASS_MAPPINGS)
     assert nodes[3]["widgets_values"] == [
         5.0,
@@ -402,6 +475,15 @@ def test_t2va_ui_workflow_links_are_consistent():
         "euler",
     ]
     assert nodes[1]["widgets_values"] == PORTABLE_T2VA_COMPONENTS
+    assert nodes[10]["widgets_values"] == [
+        "taeh3.safetensors",
+        "auto",
+        "taeh3_coreml_256.mlpackage",
+        1,
+        6,
+        256,
+        "conservative collapse guard",
+    ]
     for link_id, origin_id, origin_slot, target_id, target_slot, link_type in links.values():
         assert link_id in nodes[origin_id]["outputs"][origin_slot]["links"]
         target_input = nodes[target_id]["inputs"][target_slot]

@@ -309,6 +309,7 @@ class MiniMaxH3Pipeline:
         drop_adaln: bool = True,
         verbose: bool = True,
         step_callback: Callable[[int, int], None] | None = None,
+        latent_preview_callback: Callable[[int, int, mx.array], None] | None = None,
         easycache_config=None,
         blockcache_config=None,
         trajectory_forecast_config=None,
@@ -418,10 +419,6 @@ class MiniMaxH3Pipeline:
                 f"{tuple(initial_audio_latents.shape)}."
             )
         if has_continuation:
-            if references:
-                raise ValueError(
-                    "Initial H3 continuation cannot yet be combined with Ref2VA rows."
-                )
             if continuation_video_latents is None or continuation_audio_latents is None:
                 raise ValueError("Continuation requires both video and audio latent streams.")
             expected_video_frames = video_latent_num_frames(continuation_frames)
@@ -532,6 +529,12 @@ class MiniMaxH3Pipeline:
                 latent_width,
                 num_audio_latents,
                 patch_size,
+                continuation_video_frames=(
+                    video_latent_num_frames(continuation_frames) if has_continuation else 0
+                ),
+                continuation_audio_latents=(
+                    audio_latent_num_frames(continuation_frames) if has_continuation else 0
+                ),
             )
         else:
             layout = build_packed_sequence(
@@ -620,8 +623,6 @@ class MiniMaxH3Pipeline:
         audio_rows = audio_latents_working.transpose(0, 2, 1).reshape(
             num_audio_latents * AUDIO_CHANNELS, self.dit.config.audio_latents_dim
         )
-        if continuation_audio_rows is not None:
-            condition_audio_rows = continuation_audio_rows
         if condition_audio_rows is not None:
             condition_audio_rows = condition_audio_rows.astype(mx.float32)
             if audio_condition_strength < 1.0:
@@ -636,6 +637,13 @@ class MiniMaxH3Pipeline:
                     audio_condition_strength,
                     audio_noise,
                 )
+        if continuation_audio_rows is not None:
+            condition_audio_rows = (
+                mx.concatenate([continuation_audio_rows, condition_audio_rows])
+                if condition_audio_rows is not None
+                else continuation_audio_rows
+            )
+        if condition_audio_rows is not None:
             audio_rows = mx.concatenate([condition_audio_rows, audio_rows])
 
         timestep_table, plan = self._row_timestep_plan(
@@ -779,6 +787,24 @@ class MiniMaxH3Pipeline:
                 else:
                     video_pred, audio_pred = reused
                 scheduler_started = time.perf_counter()
+                preview_latents = None
+                if latent_preview_callback is not None:
+                    sigma_from_timestep = float(
+                        np.float32(1.0) - np.float32(timestep)
+                    )
+                    denoised_video_rows = (
+                        current_video_rows[condition_video_count:]
+                        + sigma_from_timestep
+                        * video_pred[0, condition_video_count:].astype(mx.float32)
+                    )
+                    preview_latents = unpatchify_video_tokens(
+                        denoised_video_rows,
+                        num_latent_frames,
+                        latent_height,
+                        latent_width,
+                        self.dit.config.latents_dim,
+                        patch_size,
+                    )
                 stepped_video = video_sched.step(
                     video_pred[0, condition_video_count:].astype(mx.float32),
                     float(timestep),
@@ -799,7 +825,10 @@ class MiniMaxH3Pipeline:
                     if condition_audio_count
                     else stepped_audio
                 )
-                mx.eval(current_video_rows, current_audio_rows)
+                if preview_latents is not None:
+                    mx.eval(current_video_rows, current_audio_rows, preview_latents)
+                else:
+                    mx.eval(current_video_rows, current_audio_rows)
                 if diagnostics is not None and hasattr(diagnostics, "record_external"):
                     diagnostics.record_external(
                         "scheduler.step_and_repack",
@@ -808,6 +837,12 @@ class MiniMaxH3Pipeline:
                             "condition_video_rows": int(condition_video_count),
                             "condition_audio_rows": int(condition_audio_count),
                         },
+                    )
+                if preview_latents is not None:
+                    latent_preview_callback(
+                        progress_offset + index + 1,
+                        progress_total,
+                        preview_latents,
                     )
                 elapsed = time.perf_counter() - started
                 step_times.append(elapsed)

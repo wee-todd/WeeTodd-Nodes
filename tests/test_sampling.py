@@ -230,6 +230,49 @@ def test_transformer_cache_forwards_fl2va_timed_rows_with_continuation(tmp_path:
     assert kwargs["continuation_frames"] == 22
 
 
+def test_transformer_cache_forwards_ref2va_rows_with_continuation(tmp_path: Path):
+    created = []
+
+    def factory(spec):
+        sampler = FakeSampler(spec)
+        created.append(sampler)
+        return sampler
+
+    spec = _spec(tmp_path, task="ref2va")
+    context = H3ContinuationContext(
+        video="context-video",
+        audio="context-audio",
+        context_frames=22,
+        width=640,
+        height=384,
+        fps=24,
+        sample_rate=32000,
+        transformer_checkpoint=spec.checkpoint,
+        transformer_path=spec.transformer,
+    )
+    conditioning = _conditioning(
+        spec,
+        load_vision=True,
+        task="ref2va",
+        condition_video_rows="reference-video-rows",
+        condition_audio_rows="reference-audio-rows",
+        references=("picture-1", "video-2"),
+    )
+
+    H3TransformerCache(factory).sample(
+        spec,
+        conditioning,
+        H3GenerationConfig(steps=3, width=640, height=384),
+        continuation=context,
+    )
+
+    kwargs = created[0].calls[0][2]
+    assert kwargs["condition_video_rows"] == "reference-video-rows"
+    assert kwargs["condition_audio_rows"] == "reference-audio-rows"
+    assert kwargs["references"] == ("picture-1", "video-2")
+    assert kwargs["continuation_frames"] == 22
+
+
 def test_transformer_cache_accepts_text_only_fl2va_after_first_window(tmp_path: Path):
     created = []
 

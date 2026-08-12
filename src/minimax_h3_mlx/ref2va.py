@@ -263,8 +263,15 @@ def build_ref2va_packed_sequence(
     latent_width: int,
     num_audio_latents: int,
     patch_size: tuple[int, int, int],
+    continuation_video_frames: int = 0,
+    continuation_audio_latents: int = 0,
 ) -> PackedSequence:
-    """Build ``[text | ordered references | target audio | target video]`` geometry."""
+    """Build ordered reference rows, optional overlap context, and target geometry.
+
+    Continuation rows share the target rotary origin. They are indexed before the reference rows
+    within their modality so callers can provide ``[continuation, references, target]`` tensors
+    and keep the overlap pinned to its own timestep.
+    """
     validate_reference_set(references, patch_size)
     _, patch_height, patch_width = patch_size
     if num_latent_frames < 1 or num_audio_latents < 1:
@@ -281,12 +288,17 @@ def build_ref2va_packed_sequence(
     )
     reference_video_rows = sum(reference.video_rows(patch_size) for reference in references)
     reference_audio_rows = sum(reference.audio_rows for reference in references)
+    rows_per_frame = target_grid.shape[0]
+    continuation_video_rows = continuation_video_frames * rows_per_frame
+    continuation_audio_rows = continuation_audio_latents * AUDIO_CHANNELS
     target_audio_rows = num_audio_latents * AUDIO_CHANNELS
     target_video_rows = num_latent_frames * target_grid.shape[0]
     sequence_length = (
         text_tags.size
         + reference_video_rows
         + reference_audio_rows
+        + continuation_audio_rows
+        + continuation_video_rows
         + target_audio_rows
         + target_video_rows
     )
@@ -359,8 +371,26 @@ def build_ref2va_packed_sequence(
             _reference_video_span(reference.num_latent_frames),
         )
 
-    target_audio_start = cursor
+    continuation_audio_start = cursor
+    continuation_video_start = continuation_audio_start + continuation_audio_rows
+    target_audio_start = continuation_video_start + continuation_video_rows
     target_video_start = target_audio_start + target_audio_rows
+    if continuation_audio_rows:
+        _fill_audio_positions(
+            position_ids,
+            slice(continuation_audio_start, continuation_video_start),
+            continuation_audio_latents,
+            rotary_time,
+            target_width_grid,
+        )
+    if continuation_video_rows:
+        continuation_time = _temporal_position_grid(continuation_video_frames, rotary_time)
+        position_ids[continuation_video_start:target_audio_start, 0] = np.repeat(
+            continuation_time, rows_per_frame
+        )
+        position_ids[continuation_video_start:target_audio_start, 1:] = np.tile(
+            target_grid, (continuation_video_frames, 1)
+        )
     _fill_audio_positions(
         position_ids,
         slice(target_audio_start, target_video_start),
@@ -372,10 +402,24 @@ def build_ref2va_packed_sequence(
     position_ids[target_video_start:, 0] = np.repeat(target_time, target_grid.shape[0])
     position_ids[target_video_start:, 1:] = np.tile(target_grid, (num_latent_frames, 1))
 
-    video_indices.append(np.arange(target_video_start, sequence_length, dtype=np.int64))
-    audio_indices.append(np.arange(target_audio_start, target_video_start, dtype=np.int64))
-    video_index = np.concatenate(video_indices)
-    audio_index = np.concatenate(audio_indices)
+    target_video_index = np.arange(target_video_start, sequence_length, dtype=np.int64)
+    target_audio_index = np.arange(target_audio_start, target_video_start, dtype=np.int64)
+    reference_video_index = np.concatenate(video_indices)
+    reference_audio_index = (
+        np.concatenate(audio_indices) if audio_indices else np.empty(0, np.int64)
+    )
+    continuation_video_index = np.arange(
+        continuation_video_start, target_audio_start, dtype=np.int64
+    )
+    continuation_audio_index = np.arange(
+        continuation_audio_start, continuation_video_start, dtype=np.int64
+    )
+    video_index = np.concatenate(
+        [continuation_video_index, reference_video_index, target_video_index]
+    )
+    audio_index = np.concatenate(
+        [continuation_audio_index, reference_audio_index, target_audio_index]
+    )
     text_index = np.arange(text_tags.size, dtype=np.int64)
     token_tags = np.empty(sequence_length, dtype=np.int64)
     token_tags[text_index] = text_tags
@@ -389,6 +433,8 @@ def build_ref2va_packed_sequence(
         video_indices=mx.array(video_index.astype(np.int32)),
         audio_indices=mx.array(audio_index.astype(np.int32)),
         text_indices=mx.array(text_index.astype(np.int32)),
-        num_condition_video_rows=reference_video_rows,
-        num_condition_audio_rows=reference_audio_rows,
+        num_condition_video_rows=reference_video_rows + continuation_video_rows,
+        num_condition_audio_rows=reference_audio_rows + continuation_audio_rows,
+        num_continuation_video_rows=continuation_video_rows,
+        num_continuation_audio_rows=continuation_audio_rows,
     )

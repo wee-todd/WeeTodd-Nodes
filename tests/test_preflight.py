@@ -508,6 +508,21 @@ def test_preflight_rejects_native_single_file_transformer_as_not_mlx_ready(tmp_p
         )
 
 
+def test_preflight_rejects_unvalidated_low_rank_adaln_curve(tmp_path: Path):
+    root = _component_tree(tmp_path)
+    transformer = tmp_path / "rank8_transformer.safetensors"
+    _safetensors(
+        transformer,
+        {"adaln_t_table": ("F16", [1025, 8], 1025 * 8 * 2)},
+    )
+
+    with pytest.raises(ValueError, match="rank 8 is below the validated minimum 32"):
+        preflight_components(
+            H3ComponentSetSpec(str(root), transformer=str(transformer)),
+            H3PreflightRequest(),
+        )
+
+
 def test_preflight_rejects_unknown_native_video_vae_version(tmp_path: Path):
     root = _component_tree(tmp_path)
     native_video_vae = tmp_path / "native_video_vae.safetensors"

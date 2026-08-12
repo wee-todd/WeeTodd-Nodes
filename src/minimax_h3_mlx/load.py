@@ -22,7 +22,7 @@ import mlx.core as mx
 from mlx.utils import tree_flatten, tree_unflatten
 from safetensors import safe_open
 
-from .config import DiTConfig
+from .config import MIN_VALIDATED_ADALN_CURVE_RANK, DiTConfig
 from .dit import MiniMaxH3DiT
 
 # Substring matches, mirroring the reference's `_keep_in_fp32_modules`.
@@ -114,6 +114,11 @@ def load_dit(
                     "Single-file DiT checkpoints must contain the pruned 'adaln_t_table' tensor."
                 )
             grid, rank = handle.get_slice("adaln_t_table").get_shape()
+        if rank < MIN_VALIDATED_ADALN_CURVE_RANK:
+            raise ValueError(
+                f"Pruned AdaLN curve rank {rank} is below the validated minimum "
+                f"{MIN_VALIDATED_ADALN_CURVE_RANK}. Reconvert the checkpoint with rank 64."
+            )
         config = DiTConfig(time_embed_dim=rank, adaln_curve_grid=grid)
     else:
         config = DiTConfig.from_json(model_dir / "config.json")

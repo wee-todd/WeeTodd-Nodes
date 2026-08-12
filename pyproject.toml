@@ -21,6 +21,7 @@ dependencies = [
 
 [project.optional-dependencies]
 docs = ["PyYAML>=6.0"]
+preview-ane = ["coremltools==9.0"]
 ltx = [
   "ltx-core-mlx @ git+https://github.com/dgrauet/ltx-2-mlx.git@e1838a855bfd1640135c424c96cb27a0c0ad150e#subdirectory=packages/ltx-core-mlx",
   "ltx-pipelines-mlx @ git+https://github.com/dgrauet/ltx-2-mlx.git@e1838a855bfd1640135c424c96cb27a0c0ad150e#subdirectory=packages/ltx-pipelines-mlx",

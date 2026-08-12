@@ -17,7 +17,7 @@
   "2": {
     "class_type": "WeeToddH3Preflight",
     "inputs": {
-      "components": ["1", 0],
+      "components": ["10", 0],
       "config": ["3", 0],
       "prompt_tokens": 512,
       "available_memory_gb": 0.0
@@ -108,5 +108,19 @@
       "max_skip_fraction": 0.25
     },
     "_meta": {"title": "H3 EasyCache"}
+  },
+  "10": {
+    "class_type": "WeeToddH3PreviewOverride",
+    "inputs": {
+      "components": ["1", 0],
+      "tae_model": "taeh3.safetensors",
+      "preview_backend": "auto",
+      "coreml_model": "taeh3_coreml_256.mlpackage",
+      "preview_every": 1,
+      "preview_frames": 6,
+      "max_preview_edge": 256,
+      "safety_guard": "conservative collapse guard"
+    },
+    "_meta": {"title": "H3 Model Preview Override"}
   }
 }

@@ -7,7 +7,10 @@ import math
 import struct
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .preview import H3PreviewConfig
 
 SUPPORTED_TASKS = frozenset({"t2va", "fl2va", "ref2va"})
 COMPONENT_NAMES = (
@@ -59,6 +62,7 @@ class H3ComponentSetSpec:
     video_vae: str | None = None
     audio_vae: str | None = None
     allow_fl2va_weights_for_ref2va: bool = False
+    preview_override: H3PreviewConfig | None = None
 
     def resolved_paths(self) -> dict[str, Path]:
         root = Path(self.checkpoint).expanduser()
@@ -135,6 +139,7 @@ class SafetensorsHeader:
     dtypes: tuple[str, ...]
     metadata: dict[str, str]
     tensor_names: tuple[str, ...]
+    tensor_shapes: dict[str, tuple[int, ...]]
     adaln_bytes: int = 0
 
 
@@ -258,6 +263,10 @@ def read_safetensors_header(path: str | Path) -> SafetensorsHeader:
         dtypes=tuple(sorted(dtypes)),
         metadata={str(key): str(value) for key, value in metadata.items()},
         tensor_names=tuple(sorted(header)),
+        tensor_shapes={
+            name: tuple(int(dimension) for dimension in entry["shape"])
+            for name, entry in header.items()
+        },
         adaln_bytes=adaln_bytes,
     )
 
@@ -471,6 +480,18 @@ def _component_report(
                 "Single-file transformer is not an MLX-ready pruned H3 export: "
                 "adaln_t_table is missing."
             )
+        if name == "transformer":
+            from minimax_h3_mlx.config import MIN_VALIDATED_ADALN_CURVE_RANK
+
+            table_shape = headers[0].tensor_shapes.get("adaln_t_table")
+            if table_shape is not None and (
+                len(table_shape) != 2 or table_shape[1] < MIN_VALIDATED_ADALN_CURVE_RANK
+            ):
+                rank = table_shape[1] if len(table_shape) == 2 else table_shape
+                raise ValueError(
+                    f"Pruned AdaLN curve rank {rank} is below the validated minimum "
+                    f"{MIN_VALIDATED_ADALN_CURVE_RANK}. Reconvert with rank 64."
+                )
         required_metadata = {
             "video_vae": "minimax_h3_video_vae",
             "audio_vae": "minimax_h3_audio_vae",

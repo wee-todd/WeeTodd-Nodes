@@ -28,15 +28,14 @@ from .decoding import (
 )
 from .direct_publishing import publish_latent_chain_direct, publish_latents_direct
 from .preflight import H3ComponentSetSpec, H3PreflightRequest, preflight_components
+from .preview import PREVIEW_BACKENDS, PREVIEW_GUARD_MODES, H3PreviewConfig
 from .publishing import publish_synchronized_media
 from .residency import prepare_low_memory_stage
 from .runtime import RUNTIME, H3GenerationConfig, H3ModelSpec
 from .sampling import TRANSFORMER_RUNTIME, H3TransformerSpec
 from .timeline import H3ChainedTimeline, H3LatentChain
 
-_PORTABLE_H3_LORA_NAMES = (
-    "minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors",
-)
+_PORTABLE_H3_LORA_NAMES = ("minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors",)
 
 
 def _lora_choices():
@@ -113,10 +112,33 @@ def _parse_media_timing_info(raw: str, *, image_frames: int, sample_rate: int):
     if timing.get("sample_rate") != sample_rate:
         raise ValueError("Media timing sample rate does not match the AUDIO sample rate.")
     if timing.get("output_frames") != image_frames:
-        raise ValueError(
-            "Media timing frame count does not match the decoded IMAGE frame count."
-        )
+        raise ValueError("Media timing frame count does not match the decoded IMAGE frame count.")
     return timing
+
+
+def _h3_preview_contact_sheet(frames, completed: int, total: int):
+    """Build one compact sampler preview without retaining decoded video frames."""
+    import numpy as np
+    from PIL import Image, ImageDraw
+
+    values = np.asarray(frames)
+    if values.ndim != 4 or values.shape[-1] != 3 or values.shape[0] < 1:
+        raise ValueError("H3 TAE preview must contain RGB video frames.")
+    uint8 = np.clip(values * 255.0, 0, 255).astype(np.uint8)
+    images = [Image.fromarray(frame, mode="RGB") for frame in uint8]
+    columns = min(3, len(images))
+    rows = math.ceil(len(images) / columns)
+    label_height = 24
+    width, height = images[0].size
+    sheet = Image.new("RGB", (columns * width, rows * height + label_height), "black")
+    for index, image in enumerate(images):
+        sheet.paste(image, ((index % columns) * width, (index // columns) * height + label_height))
+    ImageDraw.Draw(sheet).text(
+        (8, 6),
+        f"H3 predicted clean latent — evaluation {completed}/{total}",
+        fill="white",
+    )
+    return sheet
 
 
 _COMPONENT_MODEL_CATEGORIES = {
@@ -127,6 +149,7 @@ _COMPONENT_MODEL_CATEGORIES = {
     "tokenizer": ("text_encoders", "checkpoints"),
     "video_vae": ("vae", "checkpoints"),
     "audio_vae": ("vae", "checkpoints"),
+    "preview_tae": ("vae_approx", "vae"),
 }
 
 
@@ -536,6 +559,123 @@ class WeeToddH3ComponentLoader:
                 allow_fl2va_weights_for_ref2va=bool(allow_fl2va_weights_for_ref2va),
             ),
         )
+
+
+class WeeToddH3PreviewOverride:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "components": ("WEETODD_H3_COMPONENTS",),
+                "tae_model": (
+                    "STRING",
+                    {
+                        "default": "taeh3.safetensors",
+                        "tooltip": (
+                            "A 24-channel MiniMax H3 tiny preview decoder. Relative names are "
+                            "searched across ComfyUI's shared vae_approx and VAE model roots."
+                        ),
+                    },
+                ),
+                "preview_backend": (
+                    list(PREVIEW_BACKENDS),
+                    {
+                        "default": "auto",
+                        "tooltip": (
+                            "Auto prefers a compiled Core ML model on the Apple Neural Engine "
+                            "and falls back to MLX. Neural engine requires the Core ML model."
+                        ),
+                    },
+                ),
+                "coreml_model": (
+                    "STRING",
+                    {
+                        "default": "taeh3_coreml_256.mlpackage",
+                        "tooltip": (
+                            "Optional compiled H3 preview model searched across ComfyUI's "
+                            "vae_approx and VAE roots."
+                        ),
+                    },
+                ),
+                "preview_every": (
+                    "INT",
+                    {
+                        "default": 1,
+                        "min": 1,
+                        "max": 20,
+                        "tooltip": "Decode a live contact-sheet preview every N evaluations.",
+                    },
+                ),
+                "preview_frames": (
+                    "INT",
+                    {
+                        "default": 6,
+                        "min": 1,
+                        "max": 12,
+                        "tooltip": "Frames shown across the sampler preview contact sheet.",
+                    },
+                ),
+                "max_preview_edge": (
+                    "INT",
+                    {
+                        "default": 256,
+                        "min": 64,
+                        "max": 1024,
+                        "step": 32,
+                        "tooltip": (
+                            "Maximum decoded preview edge. This does not change generation size."
+                        ),
+                    },
+                ),
+                "safety_guard": (
+                    list(PREVIEW_GUARD_MODES),
+                    {
+                        "default": "conservative collapse guard",
+                        "tooltip": (
+                            "The conservative guard requires repeated featureless previews after "
+                            "the schedule midpoint. Non-finite video latents always stop sampling."
+                        ),
+                    },
+                ),
+            }
+        }
+
+    RETURN_TYPES = ("WEETODD_H3_COMPONENTS",)
+    RETURN_NAMES = ("components",)
+    FUNCTION = "apply"
+    CATEGORY = "WeeTodd/H3/sampling"
+    DESCRIPTION = (
+        "Attach a true-color TAE preview and optional collapse guard to H3 sampling. Core ML "
+        "can keep preview decoding on the Apple Neural Engine; MLX remains the fallback. Place "
+        "this node between the component loader and sampler."
+    )
+
+    def apply(
+        self,
+        components,
+        tae_model,
+        preview_backend,
+        coreml_model,
+        preview_every,
+        preview_frames,
+        max_preview_edge,
+        safety_guard,
+    ):
+        config = H3PreviewConfig(
+            tae_path=_resolve_component_root(tae_model, "preview_tae"),
+            backend=preview_backend,
+            coreml_model_path=(
+                _resolve_component_root(coreml_model, "preview_tae")
+                if coreml_model.strip()
+                else None
+            ),
+            every_n_evaluations=int(preview_every),
+            preview_frames=int(preview_frames),
+            max_edge=int(max_preview_edge),
+            guard_mode=safety_guard,
+        )
+        config.validate()
+        return (replace(components, preview_override=config),)
 
 
 class WeeToddH3QuantizedTransformerLoader:
@@ -1447,9 +1587,7 @@ class WeeToddH3ChainAppend:
             **timeline.metadata(),
             "windows_present": len(chain.windows),
             "windows_complete": len(chain.windows) == timeline.window_count,
-            "transformer_evaluations": [
-                window.transformer_evaluations for window in chain.windows
-            ],
+            "transformer_evaluations": [window.transformer_evaluations for window in chain.windows],
         }
         return chain, json.dumps(info, indent=2, sort_keys=True)
 
@@ -1524,6 +1662,19 @@ class WeeToddH3Sample:
             if progress is not None:
                 progress.update_absolute(completed, total)
 
+        preview_config = getattr(components, "preview_override", None)
+
+        def on_preview(update, completed, total):
+            if check_interrupted is not None:
+                check_interrupted()
+            if progress is not None and update.frames is not None:
+                image = _h3_preview_contact_sheet(update.frames, completed, total)
+                progress.update_absolute(
+                    completed,
+                    total,
+                    ("JPEG", image, preview_config.max_edge),
+                )
+
         latents = TRANSFORMER_RUNTIME.sample(
             H3TransformerSpec.from_components(components),
             conditioning,
@@ -1535,6 +1686,8 @@ class WeeToddH3Sample:
             trajectory_forecast=trajectory_forecast,
             continuation=continuation,
             loras=loras,
+            preview_config=preview_config,
+            preview_callback=on_preview if preview_config is not None else None,
             prepare_stage=prepare_stage,
         )
         info = {
@@ -1625,7 +1778,18 @@ class WeeToddH3Sample:
                 "transformer": getattr(latents, "paging_report", None),
                 "text_encoder": getattr(latents, "text_encoder_paging_report", None),
             },
-            "preview_policy": "none",
+            "preview_policy": (
+                {
+                    "model": Path(preview_config.tae_path).name,
+                    "every_n_evaluations": preview_config.every_n_evaluations,
+                    "preview_frames": preview_config.preview_frames,
+                    "max_edge": preview_config.max_edge,
+                    "guard_mode": preview_config.guard_mode,
+                    "checkpoints": list(latents.preview_report),
+                }
+                if preview_config is not None
+                else None
+            ),
             "staged_releases": list(staged_releases),
         }
         return latents, json.dumps(info, indent=2, sort_keys=True)
@@ -1745,6 +1909,19 @@ class WeeToddH3LatentHiresFix:
             if progress is not None:
                 progress.update_absolute(completed, total)
 
+        preview_config = getattr(components, "preview_override", None)
+
+        def on_preview(update, completed, total):
+            if check_interrupted is not None:
+                check_interrupted()
+            if progress is not None and update.frames is not None:
+                image = _h3_preview_contact_sheet(update.frames, completed, total)
+                progress.update_absolute(
+                    completed,
+                    total,
+                    ("JPEG", image, preview_config.max_edge),
+                )
+
         refined = TRANSFORMER_RUNTIME.sample(
             H3TransformerSpec.from_components(components),
             conditioning,
@@ -1756,6 +1933,8 @@ class WeeToddH3LatentHiresFix:
             refinement_resize_method=str(latent_resize_method),
             loras=loras,
             trajectory_forecast=trajectory_forecast,
+            preview_config=preview_config,
+            preview_callback=on_preview if preview_config is not None else None,
         )
         info = {
             "mode": "h3_native_latent_hires_fix",
@@ -1782,6 +1961,15 @@ class WeeToddH3LatentHiresFix:
                 asdict(trajectory_forecast) if trajectory_forecast is not None else None
             ),
             "audio_preserved": refined.refinement_audio_preserved,
+            "preview_policy": (
+                {
+                    "model": Path(preview_config.tae_path).name,
+                    "guard_mode": preview_config.guard_mode,
+                    "checkpoints": list(refined.preview_report),
+                }
+                if preview_config is not None
+                else None
+            ),
             "audio_identity": "original H3 audio latent; second-pass audio discarded",
             "transformer_resident": TRANSFORMER_RUNTIME.loaded,
             "loras": loras.metadata() if loras is not None else [],
@@ -1980,9 +2168,7 @@ class WeeToddH3ValidatedSamplingPreset:
             "lora_file": lora_file,
             "lora_strength": 1.0 if lora_file is not None else None,
             "lora_start_after_evaluations": (
-                int(selected.get("start_after_evaluations", 0))
-                if lora_file is not None
-                else None
+                int(selected.get("start_after_evaluations", 0)) if lora_file is not None else None
             ),
             "trajectory_offline_replay": bool(
                 trajectory_forecast is not None and trajectory_forecast.offline_smoothing_replay
@@ -3260,6 +3446,7 @@ class WeeToddH3Unload:
 
 NODE_CLASS_MAPPINGS = {
     "WeeToddH3ComponentLoader": WeeToddH3ComponentLoader,
+    "WeeToddH3PreviewOverride": WeeToddH3PreviewOverride,
     "WeeToddH3QuantizedTransformerLoader": WeeToddH3QuantizedTransformerLoader,
     "WeeToddH3Preflight": WeeToddH3Preflight,
     "WeeToddH3FirstFrame": WeeToddH3FirstFrame,
@@ -3302,6 +3489,7 @@ NODE_CLASS_MAPPINGS = {
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     "WeeToddH3ComponentLoader": "WeeTodd H3 Component Loader",
+    "WeeToddH3PreviewOverride": "WeeTodd H3 Model Preview Override",
     "WeeToddH3QuantizedTransformerLoader": "WeeTodd H3 Quantized Transformer Loader",
     "WeeToddH3Preflight": "WeeTodd H3 Component Preflight",
     "WeeToddH3FirstFrame": "WeeTodd H3 First Frame",
