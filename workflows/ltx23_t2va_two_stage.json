@@ -1,5 +1,5 @@
 {
-  "last_node_id": 4,
+  "last_node_id": 5,
   "last_link_id": 4,
   "nodes": [
     {
@@ -73,6 +73,30 @@
         "WeeTodd/LTX23_two_stage",
         true
       ]
+    },
+    {
+      "id": 5,
+      "type": "MarkdownNote",
+      "pos": [
+        40.0,
+        -480.0
+      ],
+      "size": [
+        760,
+        500
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "title": "Setup and model downloads",
+      "properties": {},
+      "widgets_values": [
+        "## ltx23 t2va two stage\n\n1. Install WeeTodd Nodes and restart ComfyUI.\n2. Download the licensed LTX 2.3 files and the Gemma encoder.\n3. Assemble the README model bundle under `ComfyUI/models/LTX-2.3/q8`.\n4. Queue the workflow after **LTX 2.3 Preflight** succeeds.\n\n### Downloads\n\n- [LTX 2.3 model files](https://huggingface.co/Lightricks/LTX-2.3)\n- [Gemma 3 MLX encoder](https://huggingface.co/mlx-community/gemma-3-12b-it-4bit)"
+      ],
+      "color": "#243447",
+      "bgcolor": "#15202b"
     }
   ],
   "links": [

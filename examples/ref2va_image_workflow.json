@@ -1,5 +1,5 @@
 {
-  "last_node_id": 7,
+  "last_node_id": 8,
   "last_link_id": 10,
   "nodes": [
     {
@@ -37,6 +37,30 @@
       "inputs": [{"name": "components", "type": "WEETODD_H3_COMPONENTS", "link": 9}, {"name": "latents", "type": "WEETODD_H3_LATENTS", "link": 7}, {"name": "sampling_info", "type": "STRING", "link": 10}],
       "outputs": [{"name": "video_path", "type": "STRING", "links": null, "slot_index": 0}, {"name": "generation_info", "type": "STRING", "links": null, "slot_index": 1}], "properties": {"Node name for S&R": "WeeToddH3DirectPublishLatents"},
       "widgets_values": ["WeeTodd/H3_Ref2VA_Image", 18, 0.025, "{\"workflow\": \"ref2va_image\"}", ""]
+    },
+    {
+      "id": 8,
+      "type": "MarkdownNote",
+      "pos": [
+        40.0,
+        -520.0
+      ],
+      "size": [
+        760,
+        500
+      ],
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "title": "Setup and model downloads",
+      "properties": {},
+      "widgets_values": [
+        "## ref2va image workflow\n\n1. Install WeeTodd Nodes and restart ComfyUI.\n2. Download the H3 components listed below.\n3. Keep the relative Component Loader paths unchanged.\n4. Replace these input placeholders: `reference.png`.\n5. Queue the workflow after all required inputs are selected.\n\n### H3 downloads\n\n- [Official MiniMax H3 partition, processor, tokenizer, and audio VAE](https://huggingface.co/MiniMaxAI/MiniMax-H3)\n  Save the repository under `ComfyUI/models/MiniMax-H3`.\n\nUse a genuine Ref2VA partition for strict Ref2VA workflows.\nDo not substitute FL2VA weights unless the workflow enables compatibility mode."
+      ],
+      "color": "#243447",
+      "bgcolor": "#15202b"
     }
   ],
   "links": [[1,3,0,4,0,"IMAGE"],[2,4,0,5,2,"WEETODD_H3_REFERENCES"],[3,1,0,5,0,"WEETODD_H3_COMPONENTS"],[4,2,0,5,1,"WEETODD_H3_CONFIG"],[5,5,0,6,1,"WEETODD_H3_CONDITIONING"],[6,1,0,6,0,"WEETODD_H3_COMPONENTS"],[7,6,0,7,1,"WEETODD_H3_LATENTS"],[8,2,0,6,2,"WEETODD_H3_CONFIG"],[9,1,0,7,0,"WEETODD_H3_COMPONENTS"],[10,6,1,7,2,"STRING"]],

@@ -111,6 +111,13 @@ def test_reference_video_validates_frames_fps_and_soundtrack():
             fps=24.0,
             soundtrack=_audio(channels=3),
         ).validate()
+    with pytest.raises(ValueError, match="temporal density"):
+        H3ReferenceInput(
+            "video",
+            _tensor(22, 384, 640, 3),
+            fps=24.0,
+            temporal_density="random",
+        ).validate()
 
 
 def test_reference_image_pixel_budget_scales_area_and_preserves_aspect():

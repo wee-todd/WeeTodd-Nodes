@@ -1077,6 +1077,22 @@ class WeeToddH3ReferenceVideo:
                 ),
             },
             "optional": {
+                "temporal_density": (
+                    [
+                        "all frames (recommended)",
+                        "uniform 50% (experimental)",
+                        "uniform 25% (experimental)",
+                    ],
+                    {
+                        "default": "all frames (recommended)",
+                        "tooltip": (
+                            "Experimental uniform sampling reduces persistent reference-video "
+                            "tokens while retaining Qwen inspection of the full clip and rotary "
+                            "timestamps across the original duration. Reduced density can change "
+                            "motion or identity fidelity."
+                        ),
+                    },
+                ),
                 "soundtrack": ("AUDIO",),
                 "previous_references": ("WEETODD_H3_REFERENCES",),
             },
@@ -1097,6 +1113,7 @@ class WeeToddH3ReferenceVideo:
         video_frames,
         fps,
         video_size="match output (recommended)",
+        temporal_density="all frames (recommended)",
         soundtrack=None,
         previous_references=None,
     ):
@@ -1108,6 +1125,7 @@ class WeeToddH3ReferenceVideo:
                 fps=fps,
                 soundtrack=soundtrack,
                 video_size_mode=video_size,
+                temporal_density=temporal_density,
             ),
         )
 

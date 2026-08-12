@@ -812,6 +812,7 @@ def build_alien_ref2va_chain() -> Workflow:
                 "video_frames": Ref(component_ids[index], 0),
                 "fps": Ref(component_ids[index], 2),
                 "video_size": "native H3 reference canvas (high detail / slow)",
+                "temporal_density": "all frames (recommended)",
                 "soundtrack": Ref(component_ids[index], 1),
                 "previous_references": Ref(9),
             },
@@ -1004,7 +1005,8 @@ def build_ref2va_384p_four_real() -> Workflow:
         {
             "video_frames": Ref(11, 0),
             "fps": Ref(11, 2),
-            "video_size": "native H3 reference canvas (high detail / slow)",
+            "video_size": "match output (recommended)",
+            "temporal_density": "all frames (recommended)",
             "previous_references": Ref(8),
         },
         pos=(1410, 1320),
@@ -1055,15 +1057,18 @@ def build_ref2va_384p_four_real() -> Workflow:
         {
             "components": Ref(4),
             "latents": Ref(16),
-            "filename_prefix": "WeeTodd/H3_384p_Ref2VA_2Character_Video_Audio_4Real",
+            "filename_prefix": "WeeTodd/H3_384p_Ref2VA_2Character_OutputMatchedRefs",
             "crf": 18,
             "max_av_drift_seconds": 0.025,
             "generation_metadata": json.dumps(
                 {
-                    "workflow": "h3_384p_ref2va_2char_video_audio_4real",
+                    "workflow": "h3_384p_ref2va_2char_output_matched_refs",
                     "seed": 20_260_812,
                     "schedule": "5 points / 4 real Turbo evaluations",
                     "cache": "disabled",
+                    "reference_sizing": (
+                        "output-matched pixel area with preserved aspect ratio"
+                    ),
                     "references": [
                         "Picture 1: tall white",
                         "Picture 2: grey alien",

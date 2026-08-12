@@ -1,5 +1,5 @@
 {
-  "last_node_id": 18,
+  "last_node_id": 19,
   "last_link_id": 25,
   "nodes": [
     {
@@ -602,7 +602,8 @@
         "Node name for S&R": "WeeToddH3ReferenceVideo"
       },
       "widgets_values": [
-        "native H3 reference canvas (high detail / slow)"
+        "match output (recommended)",
+        "all frames (recommended)"
       ]
     },
     {
@@ -861,12 +862,36 @@
         "Node name for S&R": "WeeToddH3DirectPublishLatents"
       },
       "widgets_values": [
-        "WeeTodd/H3_384p_Ref2VA_2Character_Video_Audio_4Real",
+        "WeeTodd/H3_384p_Ref2VA_2Character_OutputMatchedRefs",
         18,
         0.025,
-        "{\"workflow\": \"h3_384p_ref2va_2char_video_audio_4real\", \"seed\": 20260812, \"schedule\": \"5 points / 4 real Turbo evaluations\", \"cache\": \"disabled\", \"references\": [\"Picture 1: tall white\", \"Picture 2: grey alien\", \"Video 1: first 124 source frames\", \"Audio 1: source soundtrack as standalone reference\"]}",
+        "{\"workflow\": \"h3_384p_ref2va_2char_output_matched_refs\", \"seed\": 20260812, \"schedule\": \"5 points / 4 real Turbo evaluations\", \"cache\": \"disabled\", \"reference_sizing\": \"output-matched pixel area with preserved aspect ratio\", \"references\": [\"Picture 1: tall white\", \"Picture 2: grey alien\", \"Video 1: first 124 source frames\", \"Audio 1: source soundtrack as standalone reference\"]}",
         ""
       ]
+    },
+    {
+      "id": 19,
+      "type": "MarkdownNote",
+      "pos": [
+        40.0,
+        -500.0
+      ],
+      "size": [
+        760,
+        500
+      ],
+      "flags": {},
+      "order": 18,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "title": "Setup and model downloads",
+      "properties": {},
+      "widgets_values": [
+        "## h3 384p ref2va 2char video audio 4real\n\n1. Install WeeTodd Nodes and restart ComfyUI.\n2. Download the H3 components listed below.\n3. Keep the relative Component Loader paths unchanged.\n4. Replace these input placeholders: `tall_white_reference_sheet.png`, `grey_alien_reference_sheet.png`, `H3_768p_15s_One_Clip_Staged_Turbo_Benchmark_20260811.mp4`.\n5. Queue the workflow after **H3 Preflight** succeeds.\n\n### H3 downloads\n\n- [Official MiniMax H3 partition, processor, tokenizer, and audio VAE](https://huggingface.co/MiniMaxAI/MiniMax-H3)\n  Save the repository under `ComfyUI/models/MiniMax-H3`.\n\n### Required LoRA\n\n- [drbaph v4 step-600 EMA adapter](https://huggingface.co/drbaph/MiniMax-H3-Turbo-Lora-ComfyUI/blob/main/minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors)\n- Save it as `ComfyUI/models/loras/minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors`.\n\nUse a genuine Ref2VA partition for strict Ref2VA workflows.\nDo not substitute FL2VA weights unless the workflow enables compatibility mode."
+      ],
+      "color": "#243447",
+      "bgcolor": "#15202b"
     }
   ],
   "links": [

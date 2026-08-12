@@ -138,8 +138,9 @@ and an ordered prior-video reference. Its matching API prompt is
 - 41 composable nodes under `WeeTodd/H3`
 - Optional standalone LTX 2.3 T2VA and I2VA pipelines under `WeeTodd/LTX 2.3`
 - Five foundational distilled-model nodes under `WeeTodd/LTX 2.5`; component selection, metadata
-  preflight, the official 8+4 schedule, cancellation, progress, and unloading contracts are in
-  place, but generation requires a versioned MLX backend that exposes `LTX25DistilledPipeline`
+  preflight, the official 8+3-evaluation schedule, Euler ancestral sampling, and a direct packed
+  Gemma 4 audiovisual conditioner are in place. Generation remains disabled until the independent
+  transformer and VAE stages pass parity; the installed LTX 2.3 backend is not reused.
 - Learned LTX latent upscaling for decoded H3 `IMAGE` plus `AUDIO`
 
 The FL2VA path stages Qwen3-VL vision and video-VAE encoding before transformer sampling. The
@@ -155,6 +156,16 @@ architecture and sampling shifts but contain different learned weights.
 Reference images use an output-relative pixel budget. The 100-percent default matches the output
 canvas area while preserving the source aspect ratio. Values from 50 to 400 percent trade
 reference-token cost against source detail; they do not change the output resolution.
+
+Reference videos provide an additional **temporal density** control. Keep **all frames
+(recommended)** when fidelity has priority. The experimental 50-percent and 25-percent options
+uniformly reduce only the frames sent to the video VAE. Qwen3-VL still inspects the complete
+reference clip, and the packed reference retains the original timeline. A matched 640 by 384
+Ref2VA test reduced mean transformer time from 75.54 seconds per evaluation to 53.29 seconds at
+50-percent density and 42.86 seconds at 25-percent density. The preferred drbaph Step-600 v4
+adapter averaged 53.15 seconds at 50-percent density. The tested moderate-motion scene retained
+both subjects and coherent action, but harder motion, lip sync, cuts, and long references still
+require validation. Full density therefore remains the default.
 
 Place **Reference Strength** after the FL2VA or Ref2VA encoder to adjust how strongly the sampler
 trusts its prepared condition rows. Visual strength defaults to `0.999`; audio strength defaults to
@@ -360,7 +371,7 @@ Load [`ltx23_t2va_two_stage.json`](workflows/ltx23_t2va_two_stage.json) for the 
 LTX 2.3 graph. The matching API prompt is
 [`ltx23_t2va_two_stage_api.json`](examples/ltx23_t2va_two_stage_api.json).
 
-The graph contains four nodes:
+The graph contains four executable nodes plus one setup note:
 
 | Order | Node | Purpose |
 | ---: | --- | --- |
@@ -618,7 +629,7 @@ Load
 ComfyUI. The matching API prompt is
 [`examples/t2va_low_memory_paged_api.json`](examples/t2va_low_memory_paged_api.json).
 
-The graph contains six nodes:
+The graph contains six executable nodes plus one setup note:
 
 | Order | Node | Purpose |
 | ---: | --- | --- |
@@ -792,7 +803,9 @@ the Euler schedule and loads a required Turbo adapter only when sampling starts.
 
 The [`workflows/`](workflows/) directory contains ready-to-load ComfyUI workflows for the measured
 single-window and chained presets. Install a workflow's named LoRA in a ComfyUI LoRA model folder
-before loading a Turbo workflow. WeeTodd does not bundle or download adapters.
+before loading a Turbo workflow. WeeTodd does not bundle or download adapters. Every shipped UI
+workflow includes a **Setup and model downloads** note. Read that note first. It lists the required
+model pages, relative paths, LoRA file, and input placeholders for that specific graph.
 
 The single-window preset workflows are:
 

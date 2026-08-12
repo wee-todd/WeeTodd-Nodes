@@ -1,5 +1,5 @@
 {
-  "last_node_id": 15,
+  "last_node_id": 16,
   "last_link_id": 21,
   "nodes": [
     {
@@ -307,6 +307,30 @@
         "{\"workflow\": \"h3_512p_ref2va_four_reference_forward_attention\", \"checkpoint_policy\": \"experimental_fl2va_weights_for_ref2va\", \"reference_order\": [\"Little Red\", \"wolf\", \"Granny\", \"woodsman\"]}",
         ""
       ]
+    },
+    {
+      "id": 16,
+      "type": "MarkdownNote",
+      "pos": [
+        40.0,
+        -500.0
+      ],
+      "size": [
+        760,
+        500
+      ],
+      "flags": {},
+      "order": 15,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "title": "Setup and model downloads",
+      "properties": {},
+      "widgets_values": [
+        "## h3 512p ref2va four reference forward attention\n\n1. Install WeeTodd Nodes and restart ComfyUI.\n2. Download the H3 components listed below.\n3. Keep the relative Component Loader paths unchanged.\n4. Replace these input placeholders: `select_little_red_reference.png`, `select_wolf_reference.png`, `select_granny_reference.png`, `select_woodsman_reference.png`.\n5. Queue the workflow after **H3 Preflight** succeeds.\n\n### H3 downloads\n\n- [Official MiniMax H3 partition, processor, tokenizer, and audio VAE](https://huggingface.co/MiniMaxAI/MiniMax-H3)\n  Save the repository under `ComfyUI/models/MiniMax-H3`.\n- [Q8-extended paged transformer](https://huggingface.co/Vayden/MiniMax-H3-MLX-q8-extended-paged)\n  Save it under `ComfyUI/models/MiniMax-H3/transformers/q8_extended_paged`.\n- [Qwen3-VL Q8 paged conditioner](https://huggingface.co/Vayden/Qwen3-VL-32B-H3-MLX-q8-paged)\n  Save it under `ComfyUI/models/MiniMax-H3/text_encoders/q8-paged`.\n- [MiniMax H3 video VAE MLX Q8](https://huggingface.co/Vayden/MiniMax-H3-Video-VAE-MLX-Q8)\n  Save it under `ComfyUI/models/MiniMax-H3/vae/q8`.\n\nUse a genuine Ref2VA partition for strict Ref2VA workflows.\nDo not substitute FL2VA weights unless the workflow enables compatibility mode."
+      ],
+      "color": "#243447",
+      "bgcolor": "#15202b"
     }
   ],
   "links": [

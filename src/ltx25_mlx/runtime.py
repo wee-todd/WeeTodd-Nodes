@@ -14,7 +14,11 @@ from typing import Any
 
 from safetensors import safe_open
 
+from .gemma_pack import inspect_gemma4_pack
+
 LTX25_CONFIG_MODES = ("distilled",)
+LTX25_DISTILLED_SIGMAS = (1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875, 0.0)
+LTX25_STAGE2_SIGMAS = (0.909375, 0.725, 0.421875, 0.0)
 
 
 def _metadata(path: Path) -> dict[str, object]:
@@ -72,6 +76,23 @@ def _decoder_kind(video_vae_metadata: dict[str, object]) -> str:
     return "diffusion" if "diffusion" in class_name.lower() else "convolutional"
 
 
+def _transformer_architecture(metadata: dict[str, object]) -> dict[str, object]:
+    config = metadata.get("config")
+    transformer = config.get("transformer", {}) if isinstance(config, dict) else {}
+    if not isinstance(transformer, dict):
+        transformer = {}
+    return {
+        "num_layers": int(transformer.get("num_layers", 48)),
+        "use_prompt_adaln_single": bool(transformer.get("use_prompt_adaln_single", True)),
+        "ff_bias": bool(transformer.get("ff_bias", True)),
+        "audio_ff_bias": bool(transformer.get("audio_ff_bias", True)),
+        "caption_proj_before_connector": bool(
+            transformer.get("caption_proj_before_connector", False)
+        ),
+        "cross_attention_adaln": bool(transformer.get("cross_attention_adaln", False)),
+    }
+
+
 @dataclass(frozen=True)
 class LTX25ComponentSpec:
     """Explicit LTX 2.5 split components; no implicit downloads are permitted."""
@@ -111,6 +132,7 @@ class LTX25ComponentSpec:
 
         transformer_meta = _metadata(paths["transformer_path"])
         text_meta = _metadata(paths["text_encoder_path"])
+        gemma_pack = inspect_gemma4_pack(paths["text_encoder_path"])
         video_vae_meta = _metadata(paths["video_vae_path"])
         model_version = transformer_meta.get("model_version")
         if _version_tuple(model_version) < (2, 5):
@@ -121,9 +143,31 @@ class LTX25ComponentSpec:
 
         transformer_gemma = transformer_meta.get("gemma_source_checkpoint")
         text_gemma = text_meta.get("gemma_source_checkpoint")
+        expected_gemma_version = (
+            transformer_gemma.get("gemma_version") if isinstance(transformer_gemma, dict) else None
+        )
+        packed_gemma_version = gemma_pack.get("gemma_version")
+        if expected_gemma_version and packed_gemma_version != expected_gemma_version:
+            raise ValueError(
+                "The LTX 2.5 transformer and Gemma 4 pack declare different Gemma versions: "
+                f"{expected_gemma_version!r} != {packed_gemma_version!r}."
+            )
         if transformer_gemma and text_gemma and transformer_gemma != text_gemma:
             raise ValueError(
                 "The LTX 2.5 transformer and Gemma 4 component declare different sources."
+            )
+        architecture = _transformer_architecture(transformer_meta)
+        incompatible = []
+        if architecture["use_prompt_adaln_single"] is not False:
+            incompatible.append("use_prompt_adaln_single=false")
+        if architecture["ff_bias"] is not False:
+            incompatible.append("ff_bias=false")
+        if architecture["caption_proj_before_connector"] is not True:
+            incompatible.append("caption_proj_before_connector=true")
+        if incompatible:
+            raise ValueError(
+                "The selected LTX 2.5 distilled transformer metadata does not declare the "
+                "required architecture: " + ", ".join(incompatible)
             )
 
         scale_factors = _scale_factors(video_vae_meta)
@@ -136,8 +180,10 @@ class LTX25ComponentSpec:
         return {
             "model_version": str(model_version),
             "gemma_source_checkpoint": transformer_gemma or text_gemma,
+            "gemma_pack": gemma_pack,
             "video_scale_factors": list(scale_factors),
             "video_decoder": _decoder_kind(video_vae_meta),
+            "transformer_architecture": architecture,
             "components": inventory,
             "checkpoint_bytes": total,
         }
@@ -154,7 +200,12 @@ class LTX25GenerationConfig:
     frame_rate: float = 24.0
     seed: int = 0
     stage1_steps: int = 8
-    stage2_steps: int = 4
+    stage2_steps: int = 3
+    stage1_sampler: str = "euler_ancestral"
+    stage2_sampler: str = "euler"
+    stage1_eta: float = 1.0
+    stage1_s_noise: float = 1.0
+    ancestral_seed_offset: int = 10000
     low_memory: bool = True
     low_ram_streaming: bool = False
 
@@ -185,10 +236,20 @@ class LTX25GenerationConfig:
             raise ValueError("LTX 2.5 duration must be between 0.25 and 30 seconds.")
         if not 1.0 <= self.frame_rate <= 60.0:
             raise ValueError("LTX 2.5 frame rate must be between 1 and 60 fps.")
-        if self.stage1_steps != 8 or self.stage2_steps != 4:
+        if self.stage1_steps != 8 or self.stage2_steps != 3:
             raise ValueError(
-                "The initial LTX 2.5 distilled path requires the official 8+4 schedule."
+                "The LTX 2.5 distilled path requires eight stage-one and three stage-two "
+                "transformer evaluations."
             )
+        if self.stage1_sampler != "euler_ancestral" or self.stage2_sampler != "euler":
+            raise ValueError(
+                "LTX 2.5 distilled requires Euler ancestral sampling in stage one and "
+                "deterministic Euler sampling in stage two."
+            )
+        if self.stage1_eta != 1.0 or self.stage1_s_noise != 1.0:
+            raise ValueError("LTX 2.5 distilled stage one requires eta=1.0 and s_noise=1.0.")
+        if self.ancestral_seed_offset != 10000:
+            raise ValueError("LTX 2.5 distilled requires the stage-one noise seed offset 10000.")
         if (self.num_frames - 1) % temporal:
             raise ValueError(
                 f"LTX 2.5 frame count must align to temporal compression factor {temporal}."
@@ -217,7 +278,20 @@ def backend_capability() -> dict[str, object]:
     try:
         pipeline = _pipeline_class()
     except ImportError as exc:
-        return {"ready": False, "reason": str(exc)}
+        try:
+            from importlib.metadata import version
+
+            installed = version("ltx-pipelines-mlx")
+        except Exception:
+            installed = None
+        return {
+            "ready": False,
+            "installed_ltx_pipelines_mlx": installed,
+            "project_ancestral_sampler": True,
+            "project_gemma4_conditioner": True,
+            "remaining_engine_gates": ["transformer", "video_vae", "audio_vae", "vocoder"],
+            "reason": str(exc),
+        }
     return {"ready": True, "pipeline_class": pipeline.__name__}
 
 
@@ -332,13 +406,23 @@ class LTX25RuntimeCache:
             "image": image_path,
             "stage1_steps": config.stage1_steps,
             "stage2_steps": config.stage2_steps,
+            "stage1_sigmas": LTX25_DISTILLED_SIGMAS,
+            "stage2_sigmas": LTX25_STAGE2_SIGMAS,
+            "stage1_sampler": config.stage1_sampler,
+            "stage2_sampler": config.stage2_sampler,
+            "stage1_eta": config.stage1_eta,
+            "stage1_s_noise": config.stage1_s_noise,
+            "ancestral_noise_seed": config.seed + config.ancestral_seed_offset,
         }
         signature = inspect.signature(pipeline.generate_and_save)
         accepted = {key: value for key, value in kwargs.items() if key in signature.parameters}
         succeeded = False
         try:
-            with self._lock, _comfy_sampler_progress(
-                check_interrupted, step_callback, config.stage1_steps + config.stage2_steps
+            with (
+                self._lock,
+                _comfy_sampler_progress(
+                    check_interrupted, step_callback, config.stage1_steps + config.stage2_steps
+                ),
             ):
                 result_path = pipeline.generate_and_save(**accepted)
             if check_interrupted is not None:

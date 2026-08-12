@@ -1,5 +1,5 @@
 {
-  "last_node_id": 8,
+  "last_node_id": 9,
   "last_link_id": 13,
   "nodes": [
     {
@@ -412,6 +412,30 @@
       "widgets_values": [
         "Staged Turbo — drbaph v4 step-600 — 2 base + 4 Turbo evaluations"
       ]
+    },
+    {
+      "id": 9,
+      "type": "MarkdownNote",
+      "pos": [
+        40.0,
+        -520.0
+      ],
+      "size": [
+        760,
+        500
+      ],
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "title": "Setup and model downloads",
+      "properties": {},
+      "widgets_values": [
+        "## h3 768p fl2va staged turbo drbaph v4\n\n1. Install WeeTodd Nodes and restart ComfyUI.\n2. Download the H3 components listed below.\n3. Keep the relative Component Loader paths unchanged.\n4. Replace these input placeholders: `first_frame.png`.\n5. Queue the workflow after all required inputs are selected.\n\n### H3 downloads\n\n- [Official MiniMax H3 partition, processor, tokenizer, and audio VAE](https://huggingface.co/MiniMaxAI/MiniMax-H3)\n  Save the repository under `ComfyUI/models/MiniMax-H3`.\n- [Q8-extended paged transformer](https://huggingface.co/Vayden/MiniMax-H3-MLX-q8-extended-paged)\n  Save it under `ComfyUI/models/MiniMax-H3/transformers/q8_extended_paged`.\n- [Qwen3-VL Q8 paged conditioner](https://huggingface.co/Vayden/Qwen3-VL-32B-H3-MLX-q8-paged)\n  Save it under `ComfyUI/models/MiniMax-H3/text_encoders/q8-paged`.\n- [MiniMax H3 video VAE MLX Q8](https://huggingface.co/Vayden/MiniMax-H3-Video-VAE-MLX-Q8)\n  Save it under `ComfyUI/models/MiniMax-H3/vae/q8`.\n\n### Required LoRA\n\n- [drbaph v4 step-600 EMA adapter](https://huggingface.co/drbaph/MiniMax-H3-Turbo-Lora-ComfyUI/blob/main/minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors)\n- Save it as `ComfyUI/models/loras/minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors`."
+      ],
+      "color": "#243447",
+      "bgcolor": "#15202b"
     }
   ],
   "links": [

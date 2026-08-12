@@ -149,6 +149,7 @@
         2
       ],
       "video_size": "match output (recommended)",
+      "temporal_density": "all frames (recommended)",
       "previous_references": [
         "8",
         0

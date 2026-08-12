@@ -444,7 +444,12 @@ class MiniMaxH3TextEncoder:
             elif reference.kind == "video":
                 counts["video"] += 1
                 emit_text(f"<Video {counts['video']}>: ")
-                sampled, timestamps = sample_reference_video_frames(reference.frames)
+                qwen_frames = (
+                    reference.qwen_frames
+                    if reference.qwen_frames is not None
+                    else reference.frames
+                )
+                sampled, timestamps = sample_reference_video_frames(qwen_frames)
                 reference.block_timestamps = timestamps
                 if len(sampled) % 2:
                     sampled.append(sampled[-1])

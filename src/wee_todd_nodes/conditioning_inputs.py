@@ -315,6 +315,7 @@ class H3ReferenceInput:
     soundtrack: Any | None = None
     image_pixel_budget_percent: int = 100
     video_size_mode: str = "match output (recommended)"
+    temporal_density: str = "all frames (recommended)"
 
     def validate(self) -> None:
         if self.kind == "image":
@@ -342,6 +343,14 @@ class H3ReferenceInput:
                 "native H3 reference canvas (high detail / slow)",
             }:
                 raise ValueError(f"Unknown H3 reference-video size mode: {self.video_size_mode!r}.")
+            if self.temporal_density not in {
+                "all frames (recommended)",
+                "uniform 50% (experimental)",
+                "uniform 25% (experimental)",
+            }:
+                raise ValueError(
+                    f"Unknown H3 reference-video temporal density: {self.temporal_density!r}."
+                )
             return
         if self.kind == "audio":
             _validate_audio(self.media, "H3 reference audio")
@@ -366,6 +375,7 @@ class H3ReferenceInput:
             payload["shape"] = list(_shape(self.media, "H3 reference video"))
             payload["fps"] = self.fps
             payload["video_size_mode"] = self.video_size_mode
+            payload["temporal_density"] = self.temporal_density
         if self.has_audio:
             audio = self.media if self.kind == "audio" else self.soundtrack
             _, channels, samples, sample_rate = _validate_audio(audio, "H3 reference audio")
@@ -443,6 +453,7 @@ class H3ReferenceStack:
 
         from minimax_h3_mlx.ref2va import (
             PreparedReference,
+            reduce_reference_video_frames,
             resample_reference_frames,
             sample_reference_video_frames,
             trim_reference_num_frames,
@@ -495,7 +506,15 @@ class H3ReferenceStack:
                             for frame in frames
                         ]
                     )
-                item.frames = frames
+                item.qwen_frames = frames
+                density = {
+                    "all frames (recommended)": 1.0,
+                    "uniform 50% (experimental)": 0.5,
+                    "uniform 25% (experimental)": 0.25,
+                }[reference.temporal_density]
+                item.frames, item.source_num_latent_frames = (
+                    reduce_reference_video_frames(frames, density)
+                )
                 _, item.block_timestamps = sample_reference_video_frames(frames)
             audio = reference.media if reference.kind == "audio" else reference.soundtrack
             if audio is not None:

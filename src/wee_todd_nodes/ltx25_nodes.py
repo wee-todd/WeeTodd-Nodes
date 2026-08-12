@@ -203,7 +203,7 @@ class WeeToddLTX25GenerationConfig:
     RETURN_NAMES = ("config", "resolved_settings")
     FUNCTION = "configure"
     CATEGORY = "WeeTodd/LTX 2.5"
-    DESCRIPTION = "Configure the official distilled 8+4 LTX 2.5 two-stage schedule."
+    DESCRIPTION = "Configure the official distilled 8+3-evaluation LTX 2.5 two-stage schedule."
 
     def configure(
         self,

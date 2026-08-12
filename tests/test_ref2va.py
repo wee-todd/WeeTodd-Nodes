@@ -10,6 +10,7 @@ from minimax_h3_mlx.ref2va import (
     PreparedReference,
     build_ref2va_packed_sequence,
     encode_reference_video_rows,
+    reduce_reference_video_frames,
     trim_reference_num_frames,
     validate_reference_set,
 )
@@ -23,6 +24,22 @@ PATCH = (1, 2, 2)
 )
 def test_reference_video_frame_count_snaps_down(frames, expected):
     assert trim_reference_num_frames(frames) == expected
+
+
+@pytest.mark.parametrize(
+    ("density", "expected_frames", "expected_source_latents"),
+    [(1.0, 124, 37), (0.5, 56, 37), (0.25, 22, 37)],
+)
+def test_reference_video_temporal_density_keeps_aligned_endpoints(
+    density, expected_frames, expected_source_latents
+):
+    frames = np.arange(124, dtype=np.uint8).reshape(124, 1, 1, 1)
+    frames = np.repeat(frames, 3, axis=-1)
+    reduced, source_latents = reduce_reference_video_frames(frames, density)
+    assert reduced.shape[0] == expected_frames
+    assert source_latents == expected_source_latents
+    assert int(reduced[0, 0, 0, 0]) == 0
+    assert int(reduced[-1, 0, 0, 0]) == 123
 
 
 def test_ref2va_image_encoding_uses_posterior_mean_not_sample():
@@ -142,6 +159,33 @@ def test_ref2va_row_timesteps_keep_all_reference_rows_conditioned():
         np.asarray(rows)[audio_indices[layout.num_condition_audio_rows :]],
         0.25,
     )
+
+
+def test_reduced_reference_video_spans_original_rotary_duration():
+    reference = PreparedReference(
+        "video",
+        num_latent_frames=2,
+        latent_height=4,
+        latent_width=4,
+        source_num_latent_frames=8,
+    )
+    layout = build_ref2va_packed_sequence(
+        [TAG_TEXT],
+        [reference],
+        num_latent_frames=2,
+        latent_height=4,
+        latent_width=4,
+        num_audio_latents=2,
+        patch_size=PATCH,
+    )
+    positions = np.asarray(layout.position_ids)
+    rows_per_frame = 4
+    first = positions[1, 0]
+    second = positions[1 + rows_per_frame, 0]
+    target_audio_start = 1 + reference.video_rows(PATCH)
+    assert first == pytest.approx(1.0)
+    assert second == pytest.approx(1.0 + 22.0 * 5.0 / 3.0)
+    assert positions[target_audio_start, 0] == pytest.approx(1.0 + 26.0 * 5.0 / 3.0)
 
 
 def test_ref2va_continuation_overlaps_target_after_ordered_references():

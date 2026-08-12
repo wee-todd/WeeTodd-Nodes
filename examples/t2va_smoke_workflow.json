@@ -1,5 +1,5 @@
 {
-  "last_node_id": 10,
+  "last_node_id": 11,
   "last_link_id": 17,
   "nodes": [
     {
@@ -504,6 +504,30 @@
         256,
         "conservative collapse guard"
       ]
+    },
+    {
+      "id": 11,
+      "type": "MarkdownNote",
+      "pos": [
+        40.0,
+        -520.0
+      ],
+      "size": [
+        760,
+        500
+      ],
+      "flags": {},
+      "order": 9,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "title": "Setup and model downloads",
+      "properties": {},
+      "widgets_values": [
+        "## t2va smoke workflow\n\n1. Install WeeTodd Nodes and restart ComfyUI.\n2. Download the H3 components listed below.\n3. Keep the relative Component Loader paths unchanged.\n4. Queue the workflow after **H3 Preflight** succeeds.\n\n### H3 downloads\n\n- [Official MiniMax H3 partition, processor, tokenizer, and audio VAE](https://huggingface.co/MiniMaxAI/MiniMax-H3)\n  Save the repository under `ComfyUI/models/MiniMax-H3`.\n- [Q8-extended paged transformer](https://huggingface.co/Vayden/MiniMax-H3-MLX-q8-extended-paged)\n  Save it under `ComfyUI/models/MiniMax-H3/transformers/q8_extended_paged`.\n- [Qwen3-VL Q8 paged conditioner](https://huggingface.co/Vayden/Qwen3-VL-32B-H3-MLX-q8-paged)\n  Save it under `ComfyUI/models/MiniMax-H3/text_encoders/q8-paged`.\n- [MiniMax H3 video VAE MLX Q8](https://huggingface.co/Vayden/MiniMax-H3-Video-VAE-MLX-Q8)\n  Save it under `ComfyUI/models/MiniMax-H3/vae/q8`."
+      ],
+      "color": "#243447",
+      "bgcolor": "#15202b"
     }
   ],
   "links": [
