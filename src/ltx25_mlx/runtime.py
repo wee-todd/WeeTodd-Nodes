@@ -22,6 +22,7 @@ LTX25_FEED_FORWARD_BACKENDS = ("reference_fp32", "bf16_mpp_experimental")
 LTX25_GENERATION_PRESETS = (
     "Custom",
     "Official parity — 768×512, 5 s, reference FP32, 8+3 ancestral",
+    "High quality — 1920×1088, 5 s, reference FP32, 8+3 ancestral",
 )
 LTX25_DISTILLED_SIGMAS = (1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875, 0.0)
 LTX25_STAGE2_SIGMAS = (0.85, 0.725, 0.421875, 0.0)
@@ -292,10 +293,11 @@ def apply_ltx25_generation_preset(name: str, values: dict[str, object]) -> dict[
     if name not in LTX25_GENERATION_PRESETS:
         raise ValueError(f"Unsupported LTX 2.5 generation preset: {name!r}.")
     resolved = dict(values)
-    if name == LTX25_GENERATION_PRESETS[1]:
+    if name in LTX25_GENERATION_PRESETS[1:]:
+        high_resolution = name == LTX25_GENERATION_PRESETS[2]
         resolved.update(
-            width=768,
-            height=512,
+            width=1920 if high_resolution else 768,
+            height=1088 if high_resolution else 512,
             duration_seconds=5.0,
             frame_rate=24.0,
             low_memory=True,
