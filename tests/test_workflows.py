@@ -74,9 +74,7 @@ NOTE_NODE_TYPES = {"MarkdownNote", "Note"}
 
 def _execution_node_map(workflow):
     return {
-        node["id"]: node
-        for node in workflow["nodes"]
-        if node.get("type") not in NOTE_NODE_TYPES
+        node["id"]: node for node in workflow["nodes"] if node.get("type") not in NOTE_NODE_TYPES
     }
 
 
@@ -86,8 +84,7 @@ def test_shipped_ui_workflows_include_setup_note(path):
     notes = [
         node
         for node in workflow["nodes"]
-        if node.get("type") == "MarkdownNote"
-        and node.get("title") == "Setup and model downloads"
+        if node.get("type") == "MarkdownNote" and node.get("title") == "Setup and model downloads"
     ]
 
     assert len(notes) == 1
@@ -270,6 +267,23 @@ def test_ltx25_high_quality_workflow_uses_verified_preset_and_prompt():
     assert "clean synchronized speech" in prompt
 
 
+def test_ltx25_any_video_upscale_workflow_uses_native_movie_components():
+    workflow = json.loads(
+        (ROOT / "workflows" / "ltx25_any_video_pixel_spatial_2x.json").read_text()
+    )
+    nodes = _execution_node_map(workflow)
+
+    assert nodes[1]["type"] == "LoadVideo"
+    assert nodes[2]["type"] == "GetVideoComponents"
+    assert nodes[4]["type"] == "WeeToddLTX25VideoUpscale"
+    assert nodes[4]["inputs"][1] == {"name": "images", "type": "IMAGE", "link": 2}
+    assert nodes[4]["inputs"][2] == {"name": "fps", "type": "FLOAT", "link": 4}
+    assert nodes[4]["inputs"][5] == {"name": "audio", "type": "AUDIO", "link": 3}
+    assert nodes[4]["widgets_values"][0] == "pixel spatial IC-LoRA 2x (recommended)"
+    assert nodes[4]["widgets_values"][3] == "center crop to 32px grid (recommended)"
+    assert nodes[4]["widgets_values"][4] == 0.35
+
+
 def test_h3_to_ltx23_upscale_api_preserves_comfy_image_and_audio_contracts():
     prompt = json.loads((ROOT / "examples" / "h3_to_ltx23_2x_upscale_api.json").read_text())
 
@@ -350,8 +364,7 @@ def test_h3_384p_staged_turbo_workflow_matches_measured_low_memory_recipe():
     assert prompt["2"]["inputs"]["custom_height"] == 384
     assert prompt["2"]["inputs"]["memory_mode"] == "low_memory_bf16"
     assert prompt["3"]["inputs"]["preset"] == (
-        "Staged Turbo — drbaph v4 step-600 — 384p low-memory — "
-        "2 base + 4 Turbo evaluations"
+        "Staged Turbo — drbaph v4 step-600 — 384p low-memory — 2 base + 4 Turbo evaluations"
     )
     assert prompt["6"]["inputs"]["loras"] == ["3", 1]
     assert "easycache" not in prompt["6"]["inputs"]

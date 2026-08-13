@@ -16,6 +16,13 @@ from ltx25_mlx.runtime import (
     apply_ltx25_generation_preset,
     backend_capability,
 )
+from ltx25_mlx.upscale import (
+    LTX25_INPUT_SIZE_POLICIES,
+    LTX25_PIXEL_SPATIAL_MODE,
+    LTX25_SOURCE_FRAME_ANCHORS,
+    LTX25_UPSCALE_MODES,
+    upscale_video_to_file,
+)
 
 from .ltx_nodes import (
     _check_interrupted,
@@ -386,6 +393,238 @@ class WeeToddLTX25Generate:
                 image_path.unlink(missing_ok=True)
 
 
+class WeeToddLTX25VideoUpscale:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "model": ("WEETODD_LTX25_MODEL",),
+                "images": ("IMAGE",),
+                "mode": (
+                    list(LTX25_UPSCALE_MODES),
+                    {
+                        "default": LTX25_UPSCALE_MODES[0],
+                        "tooltip": (
+                            "All modes encode movie frames into LTX 2.5 latent space and use the "
+                            "official learned 2× upscaler. Pixel-spatial mode also conditions "
+                            "every output frame on the complete source clip through the native "
+                            "LTX 2.5 IC-LoRA. Original movie audio is always preserved."
+                        ),
+                    },
+                ),
+                "prompt": (
+                    "STRING",
+                    {
+                        "multiline": True,
+                        "dynamicPrompts": True,
+                        "default": (
+                            "Describe the existing movie accurately for visual refinement."
+                        ),
+                    },
+                ),
+                "seed": ("INT", {"default": 0, "min": 0, "max": 0x7FFFFFFF}),
+                "fps": ("FLOAT", {"default": 24.0, "min": 1.0, "max": 60.0, "step": 1.0}),
+                "input_size_policy": (
+                    list(LTX25_INPUT_SIZE_POLICIES),
+                    {
+                        "default": LTX25_INPUT_SIZE_POLICIES[0],
+                        "tooltip": (
+                            "LTX requires a 32-pixel grid. The recommended policy removes at "
+                            "most 31 pixels from each axis with a centered crop and records the "
+                            "exact crop in generation metadata."
+                        ),
+                    },
+                ),
+                "refinement_strength": (
+                    "FLOAT",
+                    {
+                        "default": 0.35,
+                        "min": 0.05,
+                        "max": 0.85,
+                        "step": 0.05,
+                        "tooltip": (
+                            "0.35 is the conservative cross-model default. 0.85 is the official "
+                            "native LTX stage-two strength but may redraw source content."
+                        ),
+                    },
+                ),
+                "source_frame_anchors": (
+                    list(LTX25_SOURCE_FRAME_ANCHORS),
+                    {
+                        "default": "first frame",
+                        "tooltip": (
+                            "Use the movie's own endpoint frames as native LTX anchors. "
+                            "First frame is the balanced default; first + last provides stronger "
+                            "protection but adds keyframe attention cost. External reference "
+                            "sockets override the matching source endpoint."
+                        ),
+                    },
+                ),
+                "reference_strength": (
+                    "FLOAT",
+                    {
+                        "default": 0.7,
+                        "min": 0.0,
+                        "max": 1.0,
+                        "step": 0.05,
+                        "tooltip": (
+                            "Strength for optional native LTX first/last image conditioning. "
+                            "Scene-like stills work better than multi-view character sheets."
+                        ),
+                    },
+                ),
+                "filename_prefix": ("STRING", {"default": "WeeTodd/LTX25_video_2x"}),
+                "max_av_drift_seconds": (
+                    "FLOAT",
+                    {"default": 0.05, "min": 0.0, "max": 0.5, "step": 0.005},
+                ),
+                "low_ram_streaming": ("BOOLEAN", {"default": False}),
+                "prompt_context": (
+                    ["official_1024", "auto", "128", "256", "512", "1024"],
+                    {"default": "official_1024"},
+                ),
+                "generation_metadata": (
+                    "STRING",
+                    {"default": "{}", "multiline": True},
+                ),
+                "pixel_spatial_lora": (
+                    "STRING",
+                    {
+                        "default": (
+                            "LTX-2.5/ltx-2.5-22b-ic-lora-pixel-spatial-upscaler-x2-1.0.safetensors"
+                        ),
+                        "tooltip": (
+                            "Required only by the recommended pixel-spatial mode. The file is "
+                            "resolved through every configured ComfyUI LoRA folder."
+                        ),
+                    },
+                ),
+                "pixel_spatial_lora_strength": (
+                    "FLOAT",
+                    {
+                        "default": 1.0,
+                        "min": 0.05,
+                        "max": 2.0,
+                        "step": 0.05,
+                        "tooltip": "The official LTX 2.5 checkpoint recommends 1.0.",
+                    },
+                ),
+            },
+            "optional": {
+                "first_reference": ("IMAGE",),
+                "last_reference": ("IMAGE",),
+                "audio": ("AUDIO",),
+            },
+        }
+
+    RETURN_TYPES = ("STRING", "STRING")
+    RETURN_NAMES = ("video_path", "generation_info")
+    OUTPUT_NODE = True
+    FUNCTION = "upscale"
+    CATEGORY = "WeeTodd/LTX 2.5"
+    DESCRIPTION = (
+        "Upscale decoded ComfyUI IMAGE+AUDIO from any movie through LTX 2.5 latent space, "
+        "optionally adding video-only refinement while preserving the source audio."
+    )
+
+    def upscale(
+        self,
+        model,
+        images,
+        mode,
+        prompt,
+        seed,
+        fps,
+        input_size_policy,
+        refinement_strength,
+        source_frame_anchors,
+        reference_strength,
+        filename_prefix,
+        max_av_drift_seconds,
+        low_ram_streaming,
+        prompt_context,
+        generation_metadata,
+        pixel_spatial_lora,
+        pixel_spatial_lora_strength,
+        first_reference=None,
+        last_reference=None,
+        audio=None,
+    ):
+        import numpy as np
+        from PIL import Image
+
+        metadata = json.loads(generation_metadata or "{}")
+        if not isinstance(metadata, dict):
+            raise ValueError("generation_metadata must be a JSON object.")
+        model.validate()
+        released = _release_h3_stages()
+        final = _safe_target(filename_prefix, seed)
+        reference_paths = []
+
+        def save_reference(value, label):
+            if value is None:
+                return None
+            frame = value[0]
+            detach = getattr(frame, "detach", None)
+            if detach is not None:
+                frame = detach()
+            cpu = getattr(frame, "cpu", None)
+            if cpu is not None:
+                frame = cpu()
+            frame = np.asarray(frame, dtype=np.float32)
+            if frame.ndim != 3 or frame.shape[-1] != 3:
+                raise ValueError("LTX 2.5 references must be RGB ComfyUI IMAGE inputs.")
+            path = final.with_name(f".{final.stem}.{label}.partial.png")
+            Image.fromarray((np.clip(frame, 0.0, 1.0) * 255).astype(np.uint8)).save(path)
+            reference_paths.append(path)
+            return str(path)
+
+        try:
+            first_path = save_reference(first_reference, "first-reference")
+            last_path = save_reference(last_reference, "last-reference")
+            pixel_lora_path = None
+            if mode == LTX25_PIXEL_SPATIAL_MODE:
+                pixel_lora_path = str(_resolve_component(pixel_spatial_lora, ("loras", "ltx25")))
+            result = upscale_video_to_file(
+                model,
+                images,
+                audio,
+                final,
+                mode=mode,
+                prompt=prompt,
+                seed=seed,
+                fps=fps,
+                input_size_policy=input_size_policy,
+                refinement_strength=refinement_strength,
+                source_frame_anchors=source_frame_anchors,
+                first_reference_path=first_path,
+                last_reference_path=last_path,
+                reference_strength=reference_strength,
+                max_av_drift_seconds=max_av_drift_seconds,
+                low_ram_streaming=low_ram_streaming,
+                prompt_context=prompt_context,
+                pixel_spatial_lora_path=pixel_lora_path,
+                pixel_spatial_lora_strength=pixel_spatial_lora_strength,
+                generation_metadata={
+                    **metadata,
+                    "h3_components_released": released,
+                    "software": _software_versions(),
+                },
+                check_interrupted=_check_interrupted(),
+                step_callback=(_comfy_progress(3) if mode != LTX25_UPSCALE_MODES[0] else None),
+            )
+        finally:
+            for path in reference_paths:
+                path.unlink(missing_ok=True)
+        return {
+            "ui": {"gifs": [_preview(result.video_path)]},
+            "result": (
+                str(result.video_path),
+                json.dumps(result.metadata, indent=2, sort_keys=True),
+            ),
+        }
+
+
 class WeeToddLTX25Unload:
     @classmethod
     def INPUT_TYPES(cls):
@@ -407,6 +646,7 @@ NODE_CLASS_MAPPINGS = {
     "WeeToddLTX25GenerationConfig": WeeToddLTX25GenerationConfig,
     "WeeToddLTX25Preflight": WeeToddLTX25Preflight,
     "WeeToddLTX25Generate": WeeToddLTX25Generate,
+    "WeeToddLTX25VideoUpscale": WeeToddLTX25VideoUpscale,
     "WeeToddLTX25Unload": WeeToddLTX25Unload,
 }
 
@@ -415,5 +655,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "WeeToddLTX25GenerationConfig": "WeeTodd LTX 2.5 Generation Config",
     "WeeToddLTX25Preflight": "WeeTodd LTX 2.5 Preflight",
     "WeeToddLTX25Generate": "WeeTodd LTX 2.5 Generate Video + Audio",
+    "WeeToddLTX25VideoUpscale": "WeeTodd LTX 2.5 Video Upscale / Refine",
     "WeeToddLTX25Unload": "WeeTodd LTX 2.5 Unload MLX Runtime",
 }

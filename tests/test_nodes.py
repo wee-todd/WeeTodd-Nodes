@@ -84,9 +84,9 @@ def test_trim_timing_metadata_explicitly_authorizes_changed_frame_count():
         "sample_rate": 32000,
     }
 
-    assert _parse_media_timing_info(
-        json.dumps(timing), image_frames=102, sample_rate=32000
-    ) == timing
+    assert (
+        _parse_media_timing_info(json.dumps(timing), image_frames=102, sample_rate=32000) == timing
+    )
     with pytest.raises(ValueError, match="frame count"):
         _parse_media_timing_info(json.dumps(timing), image_frames=101, sample_rate=32000)
     with pytest.raises(ValueError, match="sample rate"):
@@ -225,7 +225,7 @@ def test_hires_fix_resolves_target_and_preserves_audio_contract(monkeypatch):
 
 
 def test_expected_nodes_are_registered():
-    assert len(NODE_CLASS_MAPPINGS) == 54
+    assert len(NODE_CLASS_MAPPINGS) == 55
     assert "WeeToddH3ComponentLoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3QuantizedTransformerLoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3Preflight" in NODE_CLASS_MAPPINGS
@@ -274,6 +274,7 @@ def test_expected_nodes_are_registered():
     assert "WeeToddLTX25GenerationConfig" in NODE_CLASS_MAPPINGS
     assert "WeeToddLTX25Preflight" in NODE_CLASS_MAPPINGS
     assert "WeeToddLTX25Generate" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX25VideoUpscale" in NODE_CLASS_MAPPINGS
     assert "WeeToddLTX25Unload" in NODE_CLASS_MAPPINGS
 
 
@@ -388,8 +389,7 @@ def test_validated_chained_context_presets_match_measured_policies(tmp_path, mon
     from wee_todd_nodes.runtime import H3GenerationConfig
 
     lora_name = (
-        "minimax_h3_fl2v_lightx2v_turbo_4step_v0.1_comfy_"
-        "resized_avg_rank_21_bf16.safetensors"
+        "minimax_h3_fl2v_lightx2v_turbo_4step_v0.1_comfy_resized_avg_rank_21_bf16.safetensors"
     )
     path = tmp_path / lora_name
     mx.save_safetensors(
@@ -415,10 +415,7 @@ def test_validated_chained_context_presets_match_measured_policies(tmp_path, mon
 
     replay, loras, forecast, replay_raw = node.apply(
         source,
-        (
-            "Chained context — Trajectory target-only replay — "
-            "20 points / up to 11 evaluations"
-        ),
+        ("Chained context — Trajectory target-only replay — 20 points / up to 11 evaluations"),
     )
     replay_info = json.loads(replay_raw)
     assert replay.steps == 20
@@ -444,10 +441,7 @@ def test_validated_chained_context_presets_match_measured_policies(tmp_path, mon
             "minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors",
         ),
         (
-            (
-                "Turbo — drbaph v4 step-600 — 384p low-memory — "
-                "5 points / 4 evaluations"
-            ),
+            ("Turbo — drbaph v4 step-600 — 384p low-memory — 5 points / 4 evaluations"),
             "minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors",
         ),
         (
@@ -455,10 +449,7 @@ def test_validated_chained_context_presets_match_measured_policies(tmp_path, mon
             "minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors",
         ),
         (
-            (
-                "Staged Turbo — drbaph v4 step-600 — 384p low-memory — "
-                "2 base + 4 Turbo evaluations"
-            ),
+            ("Staged Turbo — drbaph v4 step-600 — 384p low-memory — 2 base + 4 Turbo evaluations"),
             "minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors",
         ),
         (
@@ -522,9 +513,7 @@ def test_validated_sampling_preset_builds_each_lazy_turbo_stack(
         assert info["transformer_evaluations_without_forecast"] == 4
 
 
-def test_validated_15_second_comparison_presets_record_measured_boundaries(
-    tmp_path, monkeypatch
-):
+def test_validated_15_second_comparison_presets_record_measured_boundaries(tmp_path, monkeypatch):
     from wee_todd_nodes.runtime import H3GenerationConfig
 
     filename = "minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors"

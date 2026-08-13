@@ -13,7 +13,20 @@ from ltx25_mlx.runtime import (
     apply_ltx25_generation_preset,
     backend_capability,
 )
-from wee_todd_nodes.ltx25_nodes import WeeToddLTX25GenerationConfig
+from ltx25_mlx.transformer import inspect_ltx25_ic_lora, remap_comfy_transformer_key
+from ltx25_mlx.upscale import (
+    LTX25_INPUT_SIZE_POLICIES,
+    LTX25_PIXEL_SPATIAL_MODE,
+    LTX25_SOURCE_FRAME_ANCHORS,
+    LTX25_UPSCALE_MODES,
+    _host_audio,
+    _host_audio_or_silence,
+    _host_video,
+)
+from wee_todd_nodes.ltx25_nodes import (
+    WeeToddLTX25GenerationConfig,
+    WeeToddLTX25VideoUpscale,
+)
 
 
 def _component(path, **metadata):
@@ -217,6 +230,103 @@ def test_ltx25_config_pins_official_distilled_schedule_and_grid():
             low_ram_streaming=True,
             feed_forward_backend="bf16_mpp_experimental",
         ).validate()
+
+
+def test_ltx25_video_upscaler_exposes_generic_movie_contract():
+    inputs = WeeToddLTX25VideoUpscale.INPUT_TYPES()["required"]
+    assert inputs["mode"][0] == list(LTX25_UPSCALE_MODES)
+    assert inputs["max_av_drift_seconds"][1]["default"] == 0.05
+    assert inputs["refinement_strength"][1]["default"] == 0.35
+    assert inputs["input_size_policy"][0] == list(LTX25_INPUT_SIZE_POLICIES)
+    assert inputs["source_frame_anchors"][0] == list(LTX25_SOURCE_FRAME_ANCHORS)
+    assert inputs["source_frame_anchors"][1]["default"] == "first frame"
+    assert inputs["reference_strength"][1]["default"] == 0.7
+    assert LTX25_PIXEL_SPATIAL_MODE in inputs["mode"][0]
+    assert inputs["pixel_spatial_lora_strength"][1]["default"] == 1.0
+    assert "pixel-spatial-upscaler-x2" in inputs["pixel_spatial_lora"][1]["default"]
+    assert set(WeeToddLTX25VideoUpscale.INPUT_TYPES()["optional"]) == {
+        "first_reference",
+        "last_reference",
+        "audio",
+    }
+    assert WeeToddLTX25VideoUpscale.OUTPUT_NODE is True
+
+
+def test_ltx25_pixel_spatial_lora_header_and_key_mapping(tmp_path):
+    path = tmp_path / "pixel-spatial.safetensors"
+    save_file(
+        {
+            "diffusion_model.transformer_blocks.0.attn1.to_out.0.lora_A.weight": np.zeros(
+                (2, 4), dtype=np.float16
+            ),
+            "diffusion_model.transformer_blocks.0.attn1.to_out.0.lora_B.weight": np.zeros(
+                (4, 2), dtype=np.float16
+            ),
+        },
+        path,
+        metadata={"model_version": "2.5", "reference_downscale_factor": "2"},
+    )
+    report = inspect_ltx25_ic_lora(path)
+    assert report["model_version"] == "2.5"
+    assert report["reference_downscale_factor"] == 2
+    assert report["adapter_pairs"] == 1
+    assert (
+        remap_comfy_transformer_key(
+            "diffusion_model.transformer_blocks.0.attn1.to_out.0.lora_A.weight"
+        )
+        == "transformer_blocks.0.attn1.to_out.lora_A.weight"
+    )
+
+
+def test_ltx25_pixel_spatial_lora_rejects_wrong_model_version(tmp_path):
+    path = tmp_path / "wrong.safetensors"
+    save_file(
+        {
+            "diffusion_model.transformer_blocks.0.attn1.to_q.lora_A.weight": np.zeros(
+                (2, 4), dtype=np.float16
+            ),
+            "diffusion_model.transformer_blocks.0.attn1.to_q.lora_B.weight": np.zeros(
+                (4, 2), dtype=np.float16
+            ),
+        },
+        path,
+        metadata={"model_version": "2.3", "reference_downscale_factor": "2"},
+    )
+    with pytest.raises(ValueError, match="not identified as LTX 2.5"):
+        inspect_ltx25_ic_lora(path)
+
+
+def test_ltx25_video_upscaler_validates_and_crops_generic_comfy_media():
+    frames = _host_video(np.zeros((9, 65, 99, 3), dtype=np.float32))
+    from ltx25_mlx.upscale import _prepare_video_size
+
+    frames, report = _prepare_video_size(frames, LTX25_INPUT_SIZE_POLICIES[0])
+    waveform, sample_rate = _host_audio(
+        {
+            "waveform": np.zeros((1, 1, 32000), dtype=np.float32),
+            "sample_rate": 32000,
+        }
+    )
+    assert frames.shape == (9, 64, 96, 3)
+    assert report["crop"] == {"left": 1, "top": 0, "right": 2, "bottom": 1}
+    assert waveform.shape == (2, 32000)
+    assert sample_rate == 32000
+    with pytest.raises(ValueError, match="divisible by 32"):
+        _prepare_video_size(
+            _host_video(np.zeros((9, 65, 96, 3), dtype=np.float32)),
+            LTX25_INPUT_SIZE_POLICIES[1],
+        )
+    with pytest.raises(ValueError, match="waveform and sample_rate"):
+        _host_audio({})
+
+
+def test_ltx25_video_upscaler_supplies_matched_silence_for_silent_movies():
+    waveform, sample_rate, supplied = _host_audio_or_silence(None, 1.25)
+
+    assert waveform.shape == (2, 60000)
+    assert sample_rate == 48000
+    assert supplied is False
+    assert np.count_nonzero(waveform) == 0
 
 
 def test_ltx25_generation_config_node_resolves_random_seed(monkeypatch):

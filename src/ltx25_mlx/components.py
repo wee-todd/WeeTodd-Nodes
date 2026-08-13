@@ -229,6 +229,51 @@ class LTX25AudioDecoder:
         return vocoder(decoder.decode(audio_latent))
 
 
+class LTX25AudioConditioner:
+    """Own the audio-VAE encoder used for frozen refinement context."""
+
+    def __init__(self, path: str | Path) -> None:
+        self.path = Path(path).expanduser()
+        self._encoder = None
+        self._processor = None
+
+    def load(self):
+        if self._encoder is not None and self._processor is not None:
+            return self._encoder, self._processor
+        from ltx_core_mlx.model.audio_vae import AudioProcessor, AudioVAEEncoder
+        from ltx_core_mlx.utils.weights import (
+            load_split_safetensors,
+            remap_audio_vae_keys,
+        )
+
+        encoder = AudioVAEEncoder()
+        weights = load_split_safetensors(self.path, prefix="audio_vae.encoder.")
+        statistics = load_split_safetensors(self.path, prefix="audio_vae.")
+        weights.update(
+            (
+                key.replace("mean-of-means", "mean_of_means").replace(
+                    "std-of-means", "std_of_means"
+                ),
+                value,
+            )
+            for key, value in statistics.items()
+            if key.startswith("per_channel_statistics.")
+        )
+        weights = remap_audio_vae_keys(weights)
+        weights = remap_convolution_layout(encoder, weights)
+        encoder.load_weights(list(weights.items()), strict=True)
+        mx.eval(encoder.parameters())
+        self._encoder = encoder
+        self._processor = AudioProcessor(sample_rate=16000)
+        _cleanup()
+        return self._encoder, self._processor
+
+    def free(self) -> None:
+        self._encoder = None
+        self._processor = None
+        _cleanup()
+
+
 def load_ltx25_spatial_upsampler(path: str | Path):
     """Load the official 2x latent upscaler from embedded configuration."""
     from ltx_core_mlx.model.upsampler.model import LatentUpsampler
@@ -246,6 +291,7 @@ def load_ltx25_spatial_upsampler(path: str | Path):
 
 
 __all__ = [
+    "LTX25AudioConditioner",
     "LTX25AudioDecoder",
     "LTX25ImageConditioner",
     "LTX25LatentNormalizer",

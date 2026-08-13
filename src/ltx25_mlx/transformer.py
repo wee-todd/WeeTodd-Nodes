@@ -271,6 +271,35 @@ def transformer_metadata(path: str | Path) -> dict[str, Any]:
     return decoded
 
 
+def inspect_ltx25_ic_lora(path: str | Path) -> dict[str, Any]:
+    """Validate an LTX 2.5 IC-LoRA header without materializing its tensors."""
+    source = Path(path).expanduser()
+    if not source.is_file() or source.suffix != ".safetensors":
+        raise FileNotFoundError(f"LTX 2.5 IC-LoRA is not a safetensors file: {source}")
+    with safe_open(source, framework="numpy") as handle:
+        metadata = handle.metadata() or {}
+        keys = list(handle.keys())
+    model_version = str(metadata.get("model_version", ""))
+    if not model_version.startswith("2.5"):
+        raise ValueError(
+            f"The selected IC-LoRA is not identified as LTX 2.5; model_version={model_version!r}."
+        )
+    try:
+        downscale = int(metadata.get("reference_downscale_factor", "1"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("LTX 2.5 IC-LoRA has an invalid reference downscale factor.") from exc
+    pairs = sum(key.endswith(".lora_A.weight") for key in keys)
+    if pairs == 0 or pairs != sum(key.endswith(".lora_B.weight") for key in keys):
+        raise ValueError("LTX 2.5 IC-LoRA does not contain balanced A/B adapter pairs.")
+    return {
+        "path": source,
+        "model_version": model_version,
+        "reference_downscale_factor": downscale,
+        "adapter_pairs": pairs,
+        "bytes": source.stat().st_size,
+    }
+
+
 def remap_comfy_transformer_key(key: str) -> str | None:
     """Map an official ComfyUI LTX transformer key to the MLX module tree.
 
@@ -308,6 +337,68 @@ def remap_comfy_transformer_weights(weights: dict[str, mx.array]) -> dict[str, m
     return mapped
 
 
+def _remap_comfy_lora_weights(weights: dict[str, mx.array]) -> dict[str, mx.array]:
+    mapped: dict[str, mx.array] = {}
+    for key, value in weights.items():
+        mapped_key = remap_comfy_transformer_key(key)
+        if mapped_key is not None:
+            mapped[mapped_key] = value
+    return mapped
+
+
+def _load_resident_transformer_with_loras(
+    model,
+    weights: dict[str, mx.array],
+    loras: tuple[tuple[Path, float], ...],
+) -> None:
+    """Fuse adapters one block at a time to bound temporary unified memory."""
+    from ltx_core_mlx.loader.fuse_loras import apply_loras
+    from ltx_core_mlx.loader.primitives import LoraStateDictWithStrength, StateDict
+
+    loaded_loras = []
+    for path, strength in loras:
+        remapped = _remap_comfy_lora_weights(dict(mx.load(str(path))))
+        loaded_loras.append((remapped, float(strength)))
+
+    non_block = [
+        (key, value) for key, value in weights.items() if not key.startswith("transformer_blocks.")
+    ]
+    model.load_weights(non_block, strict=False)
+
+    for index, block in enumerate(model.transformer_blocks):
+        prefix = f"transformer_blocks.{index}."
+        block_weights = {
+            key.removeprefix(prefix): value
+            for key, value in weights.items()
+            if key.startswith(prefix)
+        }
+        if not block_weights:
+            raise ValueError(f"LTX 2.5 transformer block {index} has no checkpoint weights.")
+        block_loras = []
+        for remapped, strength in loaded_loras:
+            values = {
+                key.removeprefix(prefix): value
+                for key, value in remapped.items()
+                if key.startswith(prefix)
+            }
+            if values:
+                block_loras.append(
+                    LoraStateDictWithStrength(
+                        StateDict(sd=values, size=0, dtype=set()),
+                        strength,
+                    )
+                )
+        fused = apply_loras(
+            StateDict(sd=block_weights, size=0, dtype=set()),
+            block_loras,
+        )
+        block.load_weights(list(fused.sd.items()), strict=True)
+        mx.eval(block.parameters())
+
+    loaded_loras.clear()
+    mx.eval(model.parameters())
+
+
 class _OfficialComfyBlockStreamer:
     """Adapt official Comfy block names to the existing MLX streaming API."""
 
@@ -335,19 +426,27 @@ def load_ltx25_transformer(
     *,
     low_ram_streaming: bool = False,
     feed_forward_backend: str = "reference_fp32",
+    loras: tuple[tuple[str | Path, float], ...] = (),
 ):
     """Strictly load an LTX 2.5 transformer, including MLX q8/q4 tensors."""
     from ltx_core_mlx.utils.memory import aggressive_cleanup
     from ltx_core_mlx.utils.weights import apply_quantization, load_split_safetensors
 
     source = Path(path).expanduser()
+    resolved_loras = tuple((Path(item).expanduser(), float(strength)) for item, strength in loras)
+    for lora_path, _strength in resolved_loras:
+        inspect_ltx25_ic_lora(lora_path)
     config = LTX25TransformerConfig.from_metadata(transformer_metadata(source))
     model = LTX25Model.build(config)
     weights = remap_comfy_transformer_weights(load_split_safetensors(source))
     if not weights:
         raise ValueError(f"LTX 2.5 transformer {source} has no recognized weights.")
     if low_ram_streaming:
-        from ltx_core_mlx.loader.block_streaming import StreamingLTXModel
+        from ltx_core_mlx.loader.block_streaming import BlockLoraSource, StreamingLTXModel
+        from ltx_core_mlx.loader.sd_ops import (
+            LTXV_LORA_BLOCK_PREFIX,
+            LTXV_LORA_COMFY_RENAMING_MAP,
+        )
 
         model.transformer_blocks = [model.transformer_blocks[0]]
         apply_quantization(model, weights)
@@ -357,13 +456,29 @@ def load_ltx25_transformer(
             if not key.startswith("transformer_blocks.")
         ]
         model.load_weights(non_block, strict=False)
-        model = StreamingLTXModel(model, _OfficialComfyBlockStreamer(source))
+        lora_sources = [
+            BlockLoraSource(
+                lora_path,
+                block_prefix=LTXV_LORA_BLOCK_PREFIX,
+                strength=strength,
+                sd_ops=LTXV_LORA_COMFY_RENAMING_MAP,
+            )
+            for lora_path, strength in resolved_loras
+        ]
+        model = StreamingLTXModel(
+            model,
+            _OfficialComfyBlockStreamer(source),
+            lora_sources=lora_sources,
+        )
         mx.eval(model.parameters())
         aggressive_cleanup()
         return model
     apply_quantization(model, weights)
-    model.load_weights(list(weights.items()), strict=True)
-    mx.eval(model.parameters())
+    if resolved_loras:
+        _load_resident_transformer_with_loras(model, weights, resolved_loras)
+    else:
+        model.load_weights(list(weights.items()), strict=True)
+        mx.eval(model.parameters())
     from .feed_forward import configure_feed_forward_backend
 
     report = configure_feed_forward_backend(model, feed_forward_backend).to_dict()
@@ -375,6 +490,7 @@ def load_ltx25_transformer(
 __all__ = [
     "LTX25Model",
     "LTX25TransformerConfig",
+    "inspect_ltx25_ic_lora",
     "load_ltx25_transformer",
     "remap_comfy_transformer_key",
     "remap_comfy_transformer_weights",

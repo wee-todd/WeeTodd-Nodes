@@ -67,6 +67,7 @@ EXPERIMENTAL = {
     "WeeToddLTX25GenerationConfig",
     "WeeToddLTX25Preflight",
     "WeeToddLTX25Generate",
+    "WeeToddLTX25VideoUpscale",
 }
 CONVENIENCE = {
     "WeeToddH3ModelLoader",

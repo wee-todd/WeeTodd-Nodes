@@ -16,6 +16,30 @@ while increasing workflow time by approximately 5 to 16 percent. See
 
 ## LTX 2.5 distilled MLX workflow
 
+### Upscale any movie with LTX 2.5
+
+[`ltx25_any_video_pixel_spatial_2x.json`](workflows/ltx25_any_video_pixel_spatial_2x.json)
+is the recommended source-video refinement workflow. Select a movie with ComfyUI's native
+**Load Video** node; **Get Video Components** passes its frames, audio, and detected FPS directly
+to **LTX 2.5 Video Upscale / Refine**. The visual stream is encoded, enlarged with the official
+learned 2× latent upscaler, and refined with the LTX 2.5 pixel-spatial IC-LoRA. The original audio
+is recombined after visual refinement, so the second pass cannot alter its content. A source with
+no audio receives a silent track of matching duration.
+
+Download the
+[LTX 2.5 pixel-spatial upscaler IC-LoRA](https://huggingface.co/Lightricks/LTX-2.5-22b-IC-LoRA-Pixel-Spatial-Upscaler)
+to:
+
+```text
+ComfyUI/models/loras/LTX-2.5/ltx-2.5-22b-ic-lora-pixel-spatial-upscaler-x2-1.0.safetensors
+```
+
+The workflow accepts movies from any generator or camera, not only H3. LTX's video VAE requires a
+32-pixel grid, so the recommended policy applies a centered crop of at most 31 pixels per axis and
+records the exact crop in metadata. Strict validation is selectable. Output width and height are
+twice the processed input size. Model cost grows with both frame count and pixel area; begin with a
+short source around 640 by 384 before attempting larger or longer clips.
+
 [`ltx25_768x512_distilled_two_stage.json`](workflows/ltx25_768x512_distilled_two_stage.json)
 is the starting LTX 2.5 workflow. It follows the official two-stage distilled recipe: eight Euler
 ancestral evaluations at half resolution, the learned 2× latent upscaler, then three Euler
@@ -199,11 +223,12 @@ and an ordered prior-video reference. Its matching API prompt is
 - Synchronized H.264 video and 32 kHz stereo AAC audio
 - 42 composable nodes under `WeeTodd/H3`
 - Optional standalone LTX 2.3 T2VA and I2VA pipelines under `WeeTodd/LTX 2.3`
-- Five distilled-model nodes under `WeeTodd/LTX 2.5`; direct official split-checkpoint loading,
+- Six distilled-model nodes under `WeeTodd/LTX 2.5`; direct official split-checkpoint loading,
   packed Gemma 4 conditioning, the official 8+3-evaluation two-stage schedule, convolutional video
   VAE, 48 kHz audio decode, learned latent upscaling, staged unloading, and optional block streaming
   are implemented. First-render parity and performance remain experimental.
-- Learned LTX latent upscaling for decoded H3 `IMAGE` plus `AUDIO`
+- Learned LTX 2.5 latent upscaling and video-only refinement for decoded ComfyUI `IMAGE` plus
+  optional `AUDIO` from any movie
 
 ## Node catalog
 
@@ -267,6 +292,7 @@ README and workflow commit gate rejects a stale catalog.
 | LTX 2.5 Generation Config | Configure the official distilled 8+3-evaluation LTX 2.5 two-stage schedule. | LTX 2.5 — Core | Experimental |
 | LTX 2.5 Preflight | Validate LTX 2.5 component metadata and architecture requirements before allocation. | LTX 2.5 — Loaders | Experimental |
 | LTX 2.5 Generate Video + Audio | Generate synchronized LTX 2.5 video and audio through the MLX adapter. | LTX 2.5 — Core | Experimental |
+| LTX 2.5 Video Upscale / Refine | Upscale decoded ComfyUI IMAGE+AUDIO from any movie through LTX 2.5 latent space, optionally adding video-only refinement while preserving the source audio. | LTX 2.5 — Core | Experimental |
 | LTX 2.5 Unload MLX Runtime | Release process-local LTX 2.5 state. | LTX 2.5 — Core | Supported |
 <!-- END GENERATED NODE CATALOG -->
 
