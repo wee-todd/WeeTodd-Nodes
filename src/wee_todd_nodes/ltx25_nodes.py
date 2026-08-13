@@ -9,9 +9,11 @@ from dataclasses import asdict
 from pathlib import Path
 
 from ltx25_mlx.runtime import (
+    LTX25_GENERATION_PRESETS,
     RUNTIME,
     LTX25ComponentSpec,
     LTX25GenerationConfig,
+    apply_ltx25_generation_preset,
     backend_capability,
 )
 
@@ -89,28 +91,16 @@ class WeeToddLTX25ComponentLoader:
             "required": {
                 "transformer": (
                     "STRING",
-                    {
-                        "default": (
-                            "LTX-2.5/diffusion_models/"
-                            "ltx-2.5-22b-distilled-transformer-bf16.safetensors"
-                        )
-                    },
+                    {"default": "ltx-2.5-22b-distilled-transformer-bf16.safetensors"},
                 ),
                 "text_encoder": (
                     "STRING",
-                    {
-                        "default": (
-                            "LTX-2.5/text_encoders/"
-                            "gemma4-12b-with-proj-ltx-2.5-bf16.safetensors"
-                        )
-                    },
+                    {"default": "gemma4-12b-with-proj-ltx-2.5-bf16.safetensors"},
                 ),
                 "video_vae": (
                     "STRING",
                     {
-                        "default": (
-                            "LTX-2.5/vae/ltx-2.5-video-vae-conv-bf16.safetensors"
-                        ),
+                        "default": "ltx-2.5-video-vae-conv-bf16.safetensors",
                         "tooltip": (
                             "The convolutional VAE is the first MLX target. The diffusion VAE "
                             "needs an efficient MLX neighborhood-attention implementation."
@@ -119,16 +109,11 @@ class WeeToddLTX25ComponentLoader:
                 ),
                 "audio_vae": (
                     "STRING",
-                    {"default": "LTX-2.5/vae/ltx-2.5-audio-vae-bf16.safetensors"},
+                    {"default": "ltx-2.5-audio-vae-bf16.safetensors"},
                 ),
                 "spatial_upscaler": (
                     "STRING",
-                    {
-                        "default": (
-                            "LTX-2.5/latent_upscale_models/"
-                            "ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors"
-                        )
-                    },
+                    {"default": ("ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors")},
                 ),
                 "duration_head": (
                     "STRING",
@@ -165,9 +150,7 @@ class WeeToddLTX25ComponentLoader:
                 transformer_path=str(
                     _resolve_component(transformer, ("diffusion_models", "ltx25", "checkpoints"))
                 ),
-                text_encoder_path=str(
-                    _resolve_component(text_encoder, ("text_encoders", "ltx25"))
-                ),
+                text_encoder_path=str(_resolve_component(text_encoder, ("text_encoders", "ltx25"))),
                 video_vae_path=str(_resolve_component(video_vae, ("vae", "ltx25"))),
                 audio_vae_path=str(_resolve_component(audio_vae, ("vae", "ltx25"))),
                 spatial_upscaler_path=str(
@@ -183,6 +166,16 @@ class WeeToddLTX25GenerationConfig:
     def INPUT_TYPES(cls):
         return {
             "required": {
+                "preset": (
+                    list(LTX25_GENERATION_PRESETS),
+                    {
+                        "default": LTX25_GENERATION_PRESETS[0],
+                        "tooltip": (
+                            "Select the official-parity recipe or Custom to use the controls. "
+                            "The selected seed is always preserved."
+                        ),
+                    },
+                ),
                 "width": ("INT", {"default": 768, "min": 64, "max": 1920, "step": 32}),
                 "height": ("INT", {"default": 512, "min": 64, "max": 1920, "step": 32}),
                 "duration_seconds": (
@@ -196,6 +189,26 @@ class WeeToddLTX25GenerationConfig:
                 "seed": ("INT", {"default": -1, "min": -1, "max": 0x7FFFFFFF}),
                 "low_memory": ("BOOLEAN", {"default": True}),
                 "low_ram_streaming": ("BOOLEAN", {"default": False}),
+                "prompt_context": (
+                    ["official_1024", "auto", "128", "256", "512", "1024"],
+                    {
+                        "default": "official_1024",
+                        "tooltip": (
+                            "Cap real prompt tokens before Gemma. The trained connector always "
+                            "appends registers to at least 1024 tokens."
+                        ),
+                    },
+                ),
+                "feed_forward_backend": (
+                    ["reference_fp32", "bf16_mpp_experimental"],
+                    {
+                        "default": "reference_fp32",
+                        "tooltip": (
+                            "bf16_mpp_experimental casts video feed-forward inputs to BF16 and "
+                            "uses Metal Performance Primitives. It is faster but approximate."
+                        ),
+                    },
+                ),
             }
         }
 
@@ -207,6 +220,7 @@ class WeeToddLTX25GenerationConfig:
 
     def configure(
         self,
+        preset,
         width,
         height,
         duration_seconds,
@@ -214,18 +228,36 @@ class WeeToddLTX25GenerationConfig:
         seed,
         low_memory,
         low_ram_streaming,
+        prompt_context,
+        feed_forward_backend,
     ):
+        values = apply_ltx25_generation_preset(
+            preset,
+            {
+                "width": width,
+                "height": height,
+                "duration_seconds": duration_seconds,
+                "frame_rate": frame_rate,
+                "low_memory": low_memory,
+                "low_ram_streaming": low_ram_streaming,
+                "prompt_context": prompt_context,
+                "feed_forward_backend": feed_forward_backend,
+            },
+        )
         config = LTX25GenerationConfig(
-            width=width,
-            height=height,
-            duration_seconds=duration_seconds,
-            frame_rate=frame_rate,
+            width=int(values["width"]),
+            height=int(values["height"]),
+            duration_seconds=float(values["duration_seconds"]),
+            frame_rate=float(values["frame_rate"]),
             seed=secrets.randbelow(0x80000000) if seed < 0 else seed,
-            low_memory=low_memory,
-            low_ram_streaming=low_ram_streaming,
+            low_memory=bool(values["low_memory"]),
+            low_ram_streaming=bool(values["low_ram_streaming"]),
+            prompt_context=str(values["prompt_context"]),
+            feed_forward_backend=str(values["feed_forward_backend"]),
         )
         config.validate()
         info = {
+            "preset": preset,
             **asdict(config),
             "num_frames": config.num_frames,
             "delivered_duration_seconds": config.delivered_duration_seconds,
@@ -298,9 +330,7 @@ class WeeToddLTX25Generate:
         from PIL import Image
 
         report = model.validate(config.pipeline_mode)
-        config.validate(
-            scale_factors=tuple(int(value) for value in report["video_scale_factors"])
-        )
+        config.validate(scale_factors=tuple(int(value) for value in report["video_scale_factors"]))
         released = _release_h3_stages()
         final = _safe_target(filename_prefix, config.seed)
         final.parent.mkdir(parents=True, exist_ok=True)

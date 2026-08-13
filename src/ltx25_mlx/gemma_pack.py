@@ -87,8 +87,6 @@ def inspect_gemma4_pack(path: str | Path) -> dict[str, object]:
     required_projection_prefixes = (
         "text_embedding_projection.video_aggregate_embed.",
         "text_embedding_projection.audio_aggregate_embed.",
-        "model.diffusion_model.video_embeddings_connector.",
-        "model.diffusion_model.audio_embeddings_connector.",
     )
     missing_projections = [
         prefix
@@ -112,6 +110,13 @@ def inspect_gemma4_pack(path: str | Path) -> dict[str, object]:
         "num_hidden_layers": text_config.get("num_hidden_layers"),
         "embedded_assets": sorted(sidecar_tensors),
         "tensor_count": len(keys),
+        "connectors_embedded": all(
+            any(key.startswith(prefix) for key in keys)
+            for prefix in (
+                "model.diffusion_model.video_embeddings_connector.",
+                "model.diffusion_model.audio_embeddings_connector.",
+            )
+        ),
     }
 
 

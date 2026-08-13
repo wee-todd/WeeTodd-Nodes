@@ -63,19 +63,18 @@ EXPERIMENTAL = {
     "WeeToddLTX23Generate",
     "WeeToddLTX23UpscalerLoader",
     "WeeToddLTX23UpscalePublish",
+    "WeeToddLTX25ComponentLoader",
+    "WeeToddLTX25GenerationConfig",
+    "WeeToddLTX25Preflight",
+    "WeeToddLTX25Generate",
 }
 CONVENIENCE = {
     "WeeToddH3ModelLoader",
     "WeeToddH3Generate",
     "WeeToddH3Unload",
 }
-FOUNDATION = {
-    "WeeToddLTX25ComponentLoader",
-    "WeeToddLTX25GenerationConfig",
-    "WeeToddLTX25Preflight",
-    "WeeToddLTX25Unload",
-}
-NOT_READY = {"WeeToddLTX25Generate"}
+FOUNDATION = set()
+NOT_READY = set()
 
 NOTE_OVERRIDES = {
     "WeeToddH3Unload": "Release state held by the monolithic H3 runtime.",

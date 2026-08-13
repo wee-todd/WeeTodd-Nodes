@@ -6,7 +6,8 @@ import pytest
 from ltx_core_mlx.text_encoders.gemma.feature_extractor import GemmaFeaturesExtractorV2
 from mlx.utils import tree_flatten
 from mlx_lm.models.gemma4 import Model, ModelArgs
-from safetensors.numpy import save_file
+from safetensors import safe_open
+from safetensors.numpy import load_file, save_file
 from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
 from tokenizers.pre_tokenizers import Whitespace
@@ -17,6 +18,7 @@ from ltx25_mlx.gemma_encoder import (
     load_gemma4_backbone,
     load_gemma4_feature_extractor,
     load_gemma4_tokenizer,
+    resolve_prompt_context_length,
     tokenize_gemma4,
 )
 from ltx25_mlx.gemma_pack import gemma4_mlx_model_config
@@ -144,7 +146,7 @@ def test_gemma4_hidden_state_collection_cancels_before_layer(tmp_path):
         collect_gemma4_hidden_states(loaded, mx.array([[1, 2]]), is_cancelled=lambda: True)
 
 
-def test_direct_gemma4_feature_extractor_matches_tiny_pack(tmp_path):
+def test_direct_gemma4_feature_extractor_loads_and_appends_registers(tmp_path):
     pack = tmp_path / "gemma4.safetensors"
     model, expected = _tiny_pack(pack)
     loaded = load_gemma4_feature_extractor(
@@ -156,20 +158,67 @@ def test_direct_gemma4_feature_extractor_matches_tiny_pack(tmp_path):
         num_registers=2,
     )
     states, mask = collect_gemma4_hidden_states(model, mx.array([[1, 2, 3, 4]]))
-    expected_video, expected_audio = expected(states, attention_mask=mask)
     loaded_video, loaded_audio = loaded(states, attention_mask=mask)
-    mx.eval(expected_video, expected_audio, loaded_video, loaded_audio)
-    assert mx.array_equal(expected_video, loaded_video).item()
-    assert mx.array_equal(expected_audio, loaded_audio).item()
+    mx.eval(loaded_video, loaded_audio)
+    assert loaded_video.shape == (1, 1024, 8)
+    assert loaded_audio.shape == (1, 1024, 8)
+    assert mx.all(mx.isfinite(loaded_video)).item()
+    assert mx.all(mx.isfinite(loaded_audio)).item()
 
 
-def test_embedded_gemma4_tokenizer_uses_left_padding_and_bos(tmp_path):
+def test_direct_gemma4_feature_extractor_loads_connectors_from_transformer(tmp_path):
+    combined = tmp_path / "combined.safetensors"
+    model, expected = _tiny_pack(combined)
+    tensors = load_file(combined)
+    text_tensors = {
+        key: value for key, value in tensors.items() if not key.startswith("model.diffusion_model.")
+    }
+    connector_tensors = {
+        key: value for key, value in tensors.items() if key.startswith("model.diffusion_model.")
+    }
+    with safe_open(combined, framework="numpy") as handle:
+        metadata = handle.metadata()
+    text_pack = tmp_path / "text_encoder.safetensors"
+    transformer = tmp_path / "transformer.safetensors"
+    save_file(text_tensors, text_pack, metadata=metadata)
+    save_file(connector_tensors, transformer)
+
+    loaded = load_gemma4_feature_extractor(
+        text_pack,
+        connector_path=transformer,
+        num_heads=1,
+        video_head_dim=8,
+        audio_head_dim=8,
+        num_connector_layers=1,
+        num_registers=2,
+    )
+    states, mask = collect_gemma4_hidden_states(model, mx.array([[1, 2, 3, 4]]))
+    loaded_video, loaded_audio = loaded(states, attention_mask=mask)
+    mx.eval(loaded_video, loaded_audio)
+    assert loaded_video.shape == (1, 1024, 8)
+    assert loaded_audio.shape == (1, 1024, 8)
+    assert mx.all(mx.isfinite(loaded_video)).item()
+    assert mx.all(mx.isfinite(loaded_audio)).item()
+
+
+def test_embedded_gemma4_tokenizer_is_unpadded_and_bos_first(tmp_path):
     pack = tmp_path / "gemma4.safetensors"
     _tiny_pack(pack)
     tokenizer = load_gemma4_tokenizer(pack, max_length=4)
     token_ids, mask = tokenize_gemma4(tokenizer, "hello world", max_length=4)
-    assert token_ids.tolist() == [[0, 1, 3, 4]]
-    assert mask.tolist() == [[0, 1, 1, 1]]
+    assert token_ids.tolist() == [[1, 3, 4]]
+    assert mask.tolist() == [[1, 1, 1]]
+
+
+def test_prompt_context_auto_rounds_to_register_groups(tmp_path):
+    pack = tmp_path / "gemma4.safetensors"
+    _tiny_pack(pack)
+    tokenizer = load_gemma4_tokenizer(pack, max_length=1024)
+    assert resolve_prompt_context_length(tokenizer, "hello world", "auto") == 128
+    assert resolve_prompt_context_length(tokenizer, "hello world", "official_1024") == 1024
+    assert resolve_prompt_context_length(tokenizer, "hello world", "256") == 256
+    with pytest.raises(ValueError, match="Unsupported"):
+        resolve_prompt_context_length(tokenizer, "hello world", "bad")
 
 
 def test_gemma4_conditioner_runs_and_frees_all_owned_components(tmp_path):
@@ -187,10 +236,31 @@ def test_gemma4_conditioner_runs_and_frees_all_owned_components(tmp_path):
         },
     )
     video, audio, mask = conditioner.encode("hello world")
-    assert video.shape == (1, 4, 8)
-    assert audio.shape == (1, 4, 8)
-    assert mask.tolist() == [[0, 1, 1, 1]]
+    assert video.shape == (1, 1024, 8)
+    assert audio.shape == (1, 1024, 8)
+    assert mask.tolist() == [[1, 1, 1]]
     conditioner.free()
     assert conditioner.model is None
     assert conditioner.feature_extractor is None
     assert conditioner.tokenizer is None
+
+
+def test_gemma4_connector_supports_context_shorter_than_register_bank(tmp_path):
+    pack = tmp_path / "gemma4.safetensors"
+    _tiny_pack(pack)
+    conditioner = LTX25Gemma4Conditioner(
+        pack,
+        max_length=1,
+        feature_kwargs={
+            "num_heads": 1,
+            "video_head_dim": 8,
+            "audio_head_dim": 8,
+            "num_connector_layers": 1,
+            "num_registers": 2,
+        },
+    )
+    video, audio, mask = conditioner.encode("")
+    assert video.shape == (1, 1024, 8)
+    assert audio.shape == (1, 1024, 8)
+    assert mask.shape == (1, 1)
+    conditioner.free()

@@ -17,8 +17,14 @@ from safetensors import safe_open
 from .gemma_pack import inspect_gemma4_pack
 
 LTX25_CONFIG_MODES = ("distilled",)
+LTX25_PROMPT_CONTEXTS = ("official_1024", "auto", "128", "256", "512", "1024")
+LTX25_FEED_FORWARD_BACKENDS = ("reference_fp32", "bf16_mpp_experimental")
+LTX25_GENERATION_PRESETS = (
+    "Custom",
+    "Official parity — 768×512, 5 s, reference FP32, 8+3 ancestral",
+)
 LTX25_DISTILLED_SIGMAS = (1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875, 0.0)
-LTX25_STAGE2_SIGMAS = (0.909375, 0.725, 0.421875, 0.0)
+LTX25_STAGE2_SIGMAS = (0.85, 0.725, 0.421875, 0.0)
 
 
 def _metadata(path: Path) -> dict[str, object]:
@@ -90,6 +96,10 @@ def _transformer_architecture(metadata: dict[str, object]) -> dict[str, object]:
             transformer.get("caption_proj_before_connector", False)
         ),
         "cross_attention_adaln": bool(transformer.get("cross_attention_adaln", False)),
+        "use_keyframes_abs_pos_embedding": bool(
+            transformer.get("use_keyframes_abs_pos_embedding", False)
+        ),
+        "frequencies_precision": str(transformer.get("frequencies_precision", "float32")),
     }
 
 
@@ -158,12 +168,18 @@ class LTX25ComponentSpec:
             )
         architecture = _transformer_architecture(transformer_meta)
         incompatible = []
-        if architecture["use_prompt_adaln_single"] is not False:
-            incompatible.append("use_prompt_adaln_single=false")
+        if architecture["use_prompt_adaln_single"] is not True:
+            incompatible.append("use_prompt_adaln_single=true")
         if architecture["ff_bias"] is not False:
             incompatible.append("ff_bias=false")
+        if architecture["audio_ff_bias"] is not True:
+            incompatible.append("audio_ff_bias=true")
+        if architecture["cross_attention_adaln"] is not True:
+            incompatible.append("cross_attention_adaln=true")
         if architecture["caption_proj_before_connector"] is not True:
             incompatible.append("caption_proj_before_connector=true")
+        if architecture["use_keyframes_abs_pos_embedding"] is not True:
+            incompatible.append("use_keyframes_abs_pos_embedding=true")
         if incompatible:
             raise ValueError(
                 "The selected LTX 2.5 distilled transformer metadata does not declare the "
@@ -202,12 +218,14 @@ class LTX25GenerationConfig:
     stage1_steps: int = 8
     stage2_steps: int = 3
     stage1_sampler: str = "euler_ancestral"
-    stage2_sampler: str = "euler"
+    stage2_sampler: str = "euler_ancestral"
     stage1_eta: float = 1.0
     stage1_s_noise: float = 1.0
     ancestral_seed_offset: int = 10000
     low_memory: bool = True
     low_ram_streaming: bool = False
+    prompt_context: str = "official_1024"
+    feed_forward_backend: str = "reference_fp32"
 
     @property
     def num_frames(self) -> int:
@@ -221,6 +239,17 @@ class LTX25GenerationConfig:
     def validate(self, *, scale_factors: tuple[int, int, int] = (8, 32, 32)) -> None:
         if self.pipeline_mode not in LTX25_CONFIG_MODES:
             raise ValueError(f"Unsupported LTX 2.5 pipeline mode: {self.pipeline_mode!r}.")
+        if self.prompt_context not in LTX25_PROMPT_CONTEXTS:
+            raise ValueError(f"Unsupported LTX 2.5 prompt context mode: {self.prompt_context!r}.")
+        if self.feed_forward_backend not in LTX25_FEED_FORWARD_BACKENDS:
+            raise ValueError(
+                f"Unsupported LTX 2.5 feed-forward backend: {self.feed_forward_backend!r}."
+            )
+        if self.low_ram_streaming and self.feed_forward_backend != "reference_fp32":
+            raise ValueError(
+                "LTX 2.5 BF16 MPP feed-forward mode is not compatible with low-RAM block "
+                "streaming. Select reference_fp32 or disable low_ram_streaming."
+            )
         temporal, spatial_h, spatial_w = scale_factors
         modulus_h = spatial_h * 2
         modulus_w = spatial_w * 2
@@ -241,10 +270,12 @@ class LTX25GenerationConfig:
                 "The LTX 2.5 distilled path requires eight stage-one and three stage-two "
                 "transformer evaluations."
             )
-        if self.stage1_sampler != "euler_ancestral" or self.stage2_sampler != "euler":
+        if (
+            self.stage1_sampler != "euler_ancestral"
+            or self.stage2_sampler != "euler_ancestral"
+        ):
             raise ValueError(
-                "LTX 2.5 distilled requires Euler ancestral sampling in stage one and "
-                "deterministic Euler sampling in stage two."
+                "LTX 2.5 distilled requires Euler ancestral sampling in both stages."
             )
         if self.stage1_eta != 1.0 or self.stage1_s_noise != 1.0:
             raise ValueError("LTX 2.5 distilled stage one requires eta=1.0 and s_noise=1.0.")
@@ -256,21 +287,29 @@ class LTX25GenerationConfig:
             )
 
 
-def _pipeline_class():
-    try:
-        import ltx_pipelines_mlx
-    except ImportError as exc:
-        raise ImportError(
-            "LTX 2.5 MLX support is optional and requires a backend with split-component "
-            "LTX 2.5 support. The pinned LTX 2.3 backend is intentionally not reused."
-        ) from exc
-    pipeline = getattr(ltx_pipelines_mlx, "LTX25DistilledPipeline", None)
-    if pipeline is None:
-        raise ImportError(
-            "The installed MLX backend does not yet expose LTX25DistilledPipeline. "
-            "Do not point the LTX 2.3 loader at LTX 2.5 weights."
+def apply_ltx25_generation_preset(name: str, values: dict[str, object]) -> dict[str, object]:
+    """Apply a named LTX 2.5 recipe without changing the selected seed."""
+    if name not in LTX25_GENERATION_PRESETS:
+        raise ValueError(f"Unsupported LTX 2.5 generation preset: {name!r}.")
+    resolved = dict(values)
+    if name == LTX25_GENERATION_PRESETS[1]:
+        resolved.update(
+            width=768,
+            height=512,
+            duration_seconds=5.0,
+            frame_rate=24.0,
+            low_memory=True,
+            low_ram_streaming=False,
+            prompt_context="official_1024",
+            feed_forward_backend="reference_fp32",
         )
-    return pipeline
+    return resolved
+
+
+def _pipeline_class():
+    from .pipeline import LTX25DistilledPipeline
+
+    return LTX25DistilledPipeline
 
 
 def backend_capability() -> dict[str, object]:
@@ -340,7 +379,12 @@ class LTX25RuntimeCache:
         report = spec.validate(config.pipeline_mode)
         scales = tuple(int(value) for value in report["video_scale_factors"])
         config.validate(scale_factors=scales)
-        key = (spec, config.low_memory, config.low_ram_streaming)
+        key = (
+            spec,
+            config.low_memory,
+            config.low_ram_streaming,
+            config.feed_forward_backend,
+        )
         with self._lock:
             if self._pipeline is None or self._key != key:
                 self._release_locked()
@@ -353,6 +397,7 @@ class LTX25RuntimeCache:
                     **{name: str(path) for name, path in spec.paths().items()},
                     "low_memory": config.low_memory,
                     "low_ram_streaming": config.low_ram_streaming,
+                    "feed_forward_backend": config.feed_forward_backend,
                 }
                 signature = inspect.signature(pipeline_class)
                 accepted = {
@@ -413,9 +458,20 @@ class LTX25RuntimeCache:
             "stage1_eta": config.stage1_eta,
             "stage1_s_noise": config.stage1_s_noise,
             "ancestral_noise_seed": config.seed + config.ancestral_seed_offset,
+            "check_interrupted": check_interrupted,
+            "step_callback": step_callback,
+            "prompt_context": config.prompt_context,
         }
         signature = inspect.signature(pipeline.generate_and_save)
-        accepted = {key: value for key, value in kwargs.items() if key in signature.parameters}
+        accepts_kwargs = any(
+            parameter.kind is inspect.Parameter.VAR_KEYWORD
+            for parameter in signature.parameters.values()
+        )
+        accepted = {
+            key: value
+            for key, value in kwargs.items()
+            if accepts_kwargs or key in signature.parameters
+        }
         succeeded = False
         try:
             with (
@@ -428,6 +484,12 @@ class LTX25RuntimeCache:
             if check_interrupted is not None:
                 check_interrupted()
             succeeded = True
+            try:
+                from .feed_forward import feed_forward_runtime_status
+
+                feed_forward_runtime = feed_forward_runtime_status()
+            except (ImportError, AttributeError):
+                feed_forward_runtime = None
             return {
                 "prompt": prompt,
                 "video_path": str(result_path),
@@ -440,6 +502,10 @@ class LTX25RuntimeCache:
                 "video_scale_factors": report["video_scale_factors"],
                 "mlx_peak_bytes": int(mx.get_peak_memory()) if mx is not None else None,
                 "total_seconds": time.perf_counter() - started,
+                "stage_timings": getattr(pipeline, "last_timings", {}),
+                "resolved_prompt_context": getattr(pipeline, "last_prompt_context", None),
+                "feed_forward_backend": getattr(pipeline, "feed_forward_report", None),
+                "feed_forward_runtime": feed_forward_runtime,
                 "runtime_cached": not unload_after,
             }
         finally:

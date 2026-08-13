@@ -1,6 +1,6 @@
 # WeeTodd Nodes
 
-Experimental MLX-native MiniMax H3, LTX 2.3, and foundational LTX 2.5 nodes for ComfyUI on
+Experimental MLX-native MiniMax H3, LTX 2.3, and LTX 2.5 nodes for ComfyUI on
 Apple Silicon.
 
 WeeTodd Nodes keeps the MiniMax H3 engine separate from the ComfyUI adapter. The current release
@@ -13,6 +13,57 @@ The matrix compares all six validated sampling policies with clean-speech and fa
 The measured low-memory profile reduced complete ComfyUI process peak by approximately 35 to 39 GB
 while increasing workflow time by approximately 5 to 16 percent. See
 [Validated sampling presets](#validated-sampling-presets) for the measurement boundary.
+
+## LTX 2.5 distilled MLX workflow
+
+[`ltx25_768x512_distilled_two_stage.json`](workflows/ltx25_768x512_distilled_two_stage.json)
+is the starting LTX 2.5 workflow. It follows the official two-stage distilled recipe: eight Euler
+ancestral evaluations at half resolution, the learned 2× latent upscaler, then three Euler
+ancestral evaluations at full resolution. The default 768 by 512, 121-frame, 24 fps graph produces
+synchronized 48 kHz audio and video. It accepts an optional first frame for I2V.
+
+Select **Official parity — 768×512, 5 s, reference FP32, 8+3 ancestral** for the validated starting
+recipe. The preset keeps the user-selected seed. Select **Custom** before changing its pinned
+resolution, duration, memory, prompt-context, or feed-forward fields.
+
+The project-native loader reads the official split ComfyUI checkpoints directly. It remaps only
+verified tensor layouts at load time, so it does not create a second converted copy. The MLX path
+uses fast scaled dot-product attention, BF16 computation, staged Gemma → transformer → decoder
+unloading, streamed video decode, and optional one-block transformer streaming. Keep
+`low_ram_streaming` off for the normal speed-first path; turn it on when transformer residency is
+more important than per-evaluation latency.
+
+After accepting the [LTX 2.5 license](https://huggingface.co/Lightricks/LTX-2.5), place these files
+in standard ComfyUI model folders. Shared roots configured by `extra_model_paths.yaml` are also
+searched.
+
+| ComfyUI folder | Required file |
+| --- | --- |
+| `ComfyUI/models/diffusion_models/` | `ltx-2.5-22b-distilled-transformer-bf16.safetensors` |
+| `ComfyUI/models/text_encoders/` | `gemma4-12b-with-proj-ltx-2.5-bf16.safetensors` |
+| `ComfyUI/models/vae/` | `ltx-2.5-video-vae-conv-bf16.safetensors` |
+| `ComfyUI/models/vae/` | `ltx-2.5-audio-vae-bf16.safetensors` |
+| `ComfyUI/models/latent_upscale_models/` | `ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors` |
+
+The first full BF16 Apple-Silicon smoke test completed at 768 by 512, 121 frames, and 24 fps in
+96.89 seconds inside the generation node. It used the official 8+3 schedule, staged unloading, and
+the normal non-streamed transformer path. MLX peak allocation was 38.13 GiB. The complete fresh
+ComfyUI process peaked at 41.25 GiB and returned to 0.57 GiB after unloading. The verified MP4 has
+H.264 video and stereo 48 kHz AAC audio. Treat this as an initial functional measurement, not a
+cross-project speed or quality claim.
+
+The Generation Config node also exposes `prompt_context`. This value caps real prompt tokens before
+Gemma. Gemma encodes those real tokens from position zero. The trained audiovisual connector then
+appends learned register tokens to a minimum sequence length of 1024. Earlier adaptive-context
+measurements used an incorrect left-padded connector layout and are not valid performance evidence.
+Generation metadata records the selected prompt cap and per-evaluation timings.
+
+The optional `bf16_mpp_experimental` video feed-forward backend casts the modulated video
+feed-forward inputs to BF16 and uses Metal Performance Primitives for both projections. A matched
+same-process run reduced node time from 77.49 to 69.42 seconds, or 10.42 percent. Sampling time fell
+11.79 percent. MLX peak allocation fell by approximately 156 MiB. The accelerated trajectory is
+not bit-identical and audiovisual coupling changes both video and audio. Keep `reference_fp32` for
+reference behavior. Review both picture and sound before selecting the experimental backend.
 
 ## Live H3 previews and early failure protection
 
@@ -129,18 +180,19 @@ and an ordered prior-video reference. Its matching API prompt is
 - Experimental first-frame, last-frame, and combined first/last-frame (`fl2va`) conditioning
 - Experimental ordered image, video, soundtrack, and audio reference (`ref2va`) conditioning
 - Experimental latent-native motion continuation for dense T2VA and FL2VA sampling
+- Visual first, last, and numbered middle-frame FL2VA conditioning at exact 24 fps positions
 - Sparse timed FL2VA keyframes with local-window or global chained-timeline timestamps
 - Direct staged publication of complete latent chains with synchronized overlap removal
 - Experimental 2.5-to-5-second short windows for chained-generation tests
 - Experimental H3-native 1.5x or 2x latent Hi Res Fix with original-audio preservation
 - Independent visual and audio reference-strength control
 - Synchronized H.264 video and 32 kHz stereo AAC audio
-- 41 composable nodes under `WeeTodd/H3`
+- 42 composable nodes under `WeeTodd/H3`
 - Optional standalone LTX 2.3 T2VA and I2VA pipelines under `WeeTodd/LTX 2.3`
-- Five foundational distilled-model nodes under `WeeTodd/LTX 2.5`; component selection, metadata
-  preflight, the official 8+3-evaluation schedule, Euler ancestral sampling, and a direct packed
-  Gemma 4 audiovisual conditioner are in place. Generation remains disabled until the independent
-  transformer and VAE stages pass parity; the installed LTX 2.3 backend is not reused.
+- Five distilled-model nodes under `WeeTodd/LTX 2.5`; direct official split-checkpoint loading,
+  packed Gemma 4 conditioning, the official 8+3-evaluation two-stage schedule, convolutional video
+  VAE, 48 kHz audio decode, learned latent upscaling, staged unloading, and optional block streaming
+  are implemented. First-render parity and performance remain experimental.
 - Learned LTX latent upscaling for decoded H3 `IMAGE` plus `AUDIO`
 
 ## Node catalog
@@ -160,6 +212,7 @@ README and workflow commit gate rejects a stale catalog.
 | H3 Last Frame | Use one image as the last-frame endpoint for an FL2VA generation. | H3 — Conditioning | Supported |
 | H3 First + Last Frame | Use two images as the first-frame and last-frame endpoints for FL2VA. | H3 — Conditioning | Supported |
 | H3 Chained Timeline | Map global timestamps onto equal-length H3 windows and define exact overlap trimming. | H3 — Continuation | Experimental |
+| H3 Frames | Select first, last, and up to six numbered middle images in one visual frame strip. Frame numbers are one-based; the last frame follows the connected generation duration. | H3 — Conditioning | Supported |
 | H3 Timed Keyframe | Append an FL2VA image at an exact 24 fps local timestamp, or map a global chained timeline timestamp into one window. | H3 — Conditioning | Experimental |
 | H3 Reference Image | Append an image identity, subject, style, or scene reference. Reference order controls the prompt labels and packed rotary positions. A 100% pixel budget matches the output canvas area; lower values reduce persistent reference tokens and higher values retain more source detail. | H3 — Conditioning | Supported |
 | H3 Reference Video | Append a video motion and camera reference, with an optional synchronized soundtrack. Supply the source frame rate explicitly. The recommended default matches the output pixel area; native reference resolution is available but can be dramatically slower. | H3 — Conditioning | Experimental |
@@ -200,11 +253,11 @@ README and workflow commit gate rejects a stale catalog.
 | LTX 2.3 Upscaler Loader | Select and preflight a learned LTX 2.3 spatial latent upscaler. | LTX 2.3 — Loaders | Experimental |
 | LTX 2.3 Upscale + Publish | Upscale decoded H3 or other ComfyUI video frames with the LTX latent upscaler and preserve the supplied audio. | LTX 2.3 — Upscaling | Experimental |
 | LTX 2.3 Unload MLX Runtime | Release the process-local LTX 2.3 pipeline. | LTX 2.3 — Core | Supported |
-| LTX 2.5 Component Loader (MLX) | Select LTX 2.5 split components without loading weights or downloading files. | LTX 2.5 — Loaders | Foundation |
-| LTX 2.5 Generation Config | Configure the official distilled 8+3-evaluation LTX 2.5 two-stage schedule. | LTX 2.5 — Core | Foundation |
-| LTX 2.5 Preflight | Validate LTX 2.5 component metadata and architecture requirements before allocation. | LTX 2.5 — Loaders | Foundation |
-| LTX 2.5 Generate Video + Audio | Generate synchronized LTX 2.5 video and audio through the MLX adapter. | LTX 2.5 — Core | Not production-ready |
-| LTX 2.5 Unload MLX Runtime | Release process-local LTX 2.5 state. | LTX 2.5 — Core | Foundation |
+| LTX 2.5 Component Loader (MLX) | Select LTX 2.5 split components without loading weights or downloading files. | LTX 2.5 — Loaders | Experimental |
+| LTX 2.5 Generation Config | Configure the official distilled 8+3-evaluation LTX 2.5 two-stage schedule. | LTX 2.5 — Core | Experimental |
+| LTX 2.5 Preflight | Validate LTX 2.5 component metadata and architecture requirements before allocation. | LTX 2.5 — Loaders | Experimental |
+| LTX 2.5 Generate Video + Audio | Generate synchronized LTX 2.5 video and audio through the MLX adapter. | LTX 2.5 — Core | Experimental |
+| LTX 2.5 Unload MLX Runtime | Release process-local LTX 2.5 state. | LTX 2.5 — Core | Supported |
 <!-- END GENERATED NODE CATALOG -->
 
 The FL2VA path stages Qwen3-VL vision and video-VAE encoding before transformer sampling. The
@@ -241,6 +294,13 @@ settings fixed when comparing strengths.
 Start with [`fl2va_first_frame_workflow.json`](examples/fl2va_first_frame_workflow.json) for image-
 to-video-plus-audio or [`ref2va_image_workflow.json`](examples/ref2va_image_workflow.json) for one
 ordered image reference. Replace the placeholder input image and edit the prompt before queuing.
+
+For several visual anchors in one clip, use **H3 Frames** with **Encode Timed Keyframes**. The
+Frames editor starts with First and Last slots. Select a row or bottom thumbnail to show that image
+in the large preview, and use **Add Frame** for up to six middle images. Enter middle positions as
+one-based frame numbers: `001` is First, while Last follows the aligned frame count from the
+connected Generation Config. This keeps the endpoint correct when duration changes. Duplicate
+positions, missing images, and middle positions outside the clip fail before model loading.
 
 ## Motion continuation
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Any
@@ -49,8 +50,7 @@ def euler_ancestral_step(
         variance = sigma_next**2 - sigma_down**2 * alpha_next**2 / alpha_down**2
         renoise = max(variance, 0.0) ** 0.5
         next_sample = (
-            alpha_next / alpha_down * next_sample
-            + noise.astype(mx.float32) * s_noise * renoise
+            alpha_next / alpha_down * next_sample + noise.astype(mx.float32) * s_noise * renoise
         )
     return next_sample.astype(source_dtype)
 
@@ -80,6 +80,7 @@ def euler_ancestral_denoise_loop(
     s_noise: float = 1.0,
     check_interrupted: Callable[[], None] | None = None,
     step_callback: Callable[[int, int], None] | None = None,
+    evaluation_timing_callback: Callable[[int, float], None] | None = None,
 ) -> LTX25DenoiseOutput:
     """Run the LTX 2.5 distilled ancestral stage over joint audio/video latents."""
     if video_state is None and audio_state is None:
@@ -94,6 +95,7 @@ def euler_ancestral_denoise_loop(
     total = len(sigmas) - 1
 
     for index, (sigma, sigma_next) in enumerate(zip(sigmas[:-1], sigmas[1:], strict=True)):
+        evaluation_started = time.perf_counter()
         if check_interrupted is not None:
             check_interrupted()
         current_video = states["video"]
@@ -128,9 +130,11 @@ def euler_ancestral_denoise_loop(
             if sigma_next == 0.0:
                 next_latent = clean_prediction.astype(state.latent.dtype)
             else:
-                split_keys = mx.random.split(random_key, 2)
-                random_key, draw_key = split_keys[0], split_keys[1]
-                noise = mx.random.normal(state.latent.shape, key=draw_key)
+                noise = None
+                if eta > 0.0:
+                    split_keys = mx.random.split(random_key, 2)
+                    random_key, draw_key = split_keys[0], split_keys[1]
+                    noise = mx.random.normal(state.latent.shape, key=draw_key)
                 next_latent = euler_ancestral_step(
                     state.latent,
                     clean_prediction,
@@ -146,6 +150,9 @@ def euler_ancestral_denoise_loop(
         mx.async_eval(
             *(state.latent for state in states.values() if state is not None),
         )
+        if evaluation_timing_callback is not None:
+            mx.eval(*(state.latent for state in states.values() if state is not None))
+            evaluation_timing_callback(index + 1, time.perf_counter() - evaluation_started)
         if step_callback is not None:
             step_callback(index + 1, total)
         if sigma_next == 0.0:

@@ -1,39 +1,46 @@
-"""Lazy contracts for the optional LTX 2.5 MLX runtime."""
+"""Lazy public exports for the optional LTX 2.5 MLX runtime."""
 
-from .gemma_encoder import (
-    LTX25Gemma4Conditioner,
-    collect_gemma4_hidden_states,
-    load_gemma4_backbone,
-    load_gemma4_feature_extractor,
-    load_gemma4_tokenizer,
-    tokenize_gemma4,
-)
-from .gemma_pack import gemma4_mlx_model_config, inspect_gemma4_pack, remap_gemma4_weight_key
-from .runtime import (
-    LTX25_CONFIG_MODES,
-    LTX25ComponentSpec,
-    LTX25GenerationConfig,
-    LTX25RuntimeCache,
-    backend_capability,
-)
-from .sampling import LTX25DenoiseOutput, euler_ancestral_denoise_loop, euler_ancestral_step
+from importlib import import_module
 
-__all__ = [
-    "LTX25_CONFIG_MODES",
-    "LTX25ComponentSpec",
-    "LTX25GenerationConfig",
-    "LTX25RuntimeCache",
-    "LTX25DenoiseOutput",
-    "backend_capability",
-    "euler_ancestral_denoise_loop",
-    "euler_ancestral_step",
-    "inspect_gemma4_pack",
-    "gemma4_mlx_model_config",
-    "remap_gemma4_weight_key",
-    "load_gemma4_backbone",
-    "collect_gemma4_hidden_states",
-    "load_gemma4_feature_extractor",
-    "load_gemma4_tokenizer",
-    "tokenize_gemma4",
-    "LTX25Gemma4Conditioner",
-]
+_EXPORT_MODULES = {
+    "LTX25_CONFIG_MODES": ".runtime",
+    "LTX25_GENERATION_PRESETS": ".runtime",
+    "LTX25ComponentSpec": ".runtime",
+    "LTX25GenerationConfig": ".runtime",
+    "LTX25RuntimeCache": ".runtime",
+    "apply_ltx25_generation_preset": ".runtime",
+    "backend_capability": ".runtime",
+    "LTX25Model": ".transformer",
+    "LTX25TransformerConfig": ".transformer",
+    "load_ltx25_transformer": ".transformer",
+    "transformer_metadata": ".transformer",
+    "LTX25DenoiseOutput": ".sampling",
+    "euler_ancestral_denoise_loop": ".sampling",
+    "euler_ancestral_step": ".sampling",
+    "inspect_gemma4_pack": ".gemma_pack",
+    "gemma4_mlx_model_config": ".gemma_pack",
+    "remap_gemma4_weight_key": ".gemma_pack",
+    "load_gemma4_backbone": ".gemma_encoder",
+    "collect_gemma4_hidden_states": ".gemma_encoder",
+    "load_gemma4_feature_extractor": ".gemma_encoder",
+    "load_gemma4_tokenizer": ".gemma_encoder",
+    "resolve_prompt_context_length": ".gemma_encoder",
+    "tokenize_gemma4": ".gemma_encoder",
+    "LTX25Gemma4Conditioner": ".gemma_encoder",
+}
+
+
+def __getattr__(name: str):
+    module_name = _EXPORT_MODULES.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(import_module(module_name, __name__), name)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted({*globals(), *_EXPORT_MODULES})
+
+
+__all__ = list(_EXPORT_MODULES)

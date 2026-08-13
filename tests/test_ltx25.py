@@ -1,6 +1,4 @@
 import json
-import sys
-from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -8,9 +6,11 @@ from safetensors.numpy import save_file
 
 from ltx25_mlx.gemma_pack import gemma4_mlx_model_config, remap_gemma4_weight_key
 from ltx25_mlx.runtime import (
+    LTX25_GENERATION_PRESETS,
     LTX25ComponentSpec,
     LTX25GenerationConfig,
     LTX25RuntimeCache,
+    apply_ltx25_generation_preset,
     backend_capability,
 )
 from wee_todd_nodes.ltx25_nodes import WeeToddLTX25GenerationConfig
@@ -67,8 +67,11 @@ def _bundle(root, *, version="2.5.0"):
         config={
             "transformer": {
                 "caption_proj_before_connector": True,
+                "cross_attention_adaln": True,
                 "ff_bias": False,
-                "use_prompt_adaln_single": False,
+                "audio_ff_bias": True,
+                "use_prompt_adaln_single": True,
+                "use_keyframes_abs_pos_embedding": True,
             }
         },
     )
@@ -110,7 +113,7 @@ def test_ltx25_split_preflight_reads_metadata_without_weights(tmp_path):
     assert report["video_scale_factors"] == [8, 32, 32]
     assert report["video_decoder"] == "convolutional"
     assert report["transformer_architecture"]["ff_bias"] is False
-    assert report["transformer_architecture"]["use_prompt_adaln_single"] is False
+    assert report["transformer_architecture"]["use_prompt_adaln_single"] is True
     assert report["transformer_architecture"]["caption_proj_before_connector"] is True
     assert len(report["components"]) == 5
 
@@ -198,19 +201,69 @@ def test_ltx25_config_pins_official_distilled_schedule_and_grid():
     assert config.delivered_duration_seconds == 5.0
     assert config.stage1_steps + config.stage2_steps == 11
     assert config.stage1_sampler == "euler_ancestral"
-    assert config.stage2_sampler == "euler"
+    assert config.stage2_sampler == "euler_ancestral"
+    from ltx25_mlx.runtime import LTX25_STAGE2_SIGMAS
+
+    assert LTX25_STAGE2_SIGMAS == (0.85, 0.725, 0.421875, 0.0)
     assert config.seed + config.ancestral_seed_offset == 10000
     with pytest.raises(ValueError, match="eight stage-one and three stage-two"):
         LTX25GenerationConfig(stage2_steps=4).validate()
     with pytest.raises(ValueError, match="divisible"):
         LTX25GenerationConfig(width=736).validate()
+    with pytest.raises(ValueError, match="feed-forward backend"):
+        LTX25GenerationConfig(feed_forward_backend="unknown").validate()
+    with pytest.raises(ValueError, match="not compatible with low-RAM"):
+        LTX25GenerationConfig(
+            low_ram_streaming=True,
+            feed_forward_backend="bf16_mpp_experimental",
+        ).validate()
 
 
 def test_ltx25_generation_config_node_resolves_random_seed(monkeypatch):
     monkeypatch.setattr("wee_todd_nodes.ltx25_nodes.secrets.randbelow", lambda _limit: 2468)
-    config, raw = WeeToddLTX25GenerationConfig().configure(768, 512, 5.0, 24.0, -1, True, False)
+    config, raw = WeeToddLTX25GenerationConfig().configure(
+        "Custom",
+        768,
+        512,
+        5.0,
+        24.0,
+        -1,
+        True,
+        False,
+        "official_1024",
+        "reference_fp32",
+    )
     assert config.seed == 2468
     assert json.loads(raw)["real_evaluations"] == 11
+    assert config.prompt_context == "official_1024"
+
+
+def test_ltx25_official_parity_preset_pins_recipe_and_preserves_extra_values():
+    values = apply_ltx25_generation_preset(
+        LTX25_GENERATION_PRESETS[1],
+        {
+            "width": 1024,
+            "height": 1024,
+            "duration_seconds": 9.0,
+            "frame_rate": 30.0,
+            "seed": 123,
+            "low_memory": False,
+            "low_ram_streaming": True,
+            "prompt_context": "128",
+            "feed_forward_backend": "bf16_mpp_experimental",
+        },
+    )
+    assert values == {
+        "width": 768,
+        "height": 512,
+        "duration_seconds": 5.0,
+        "frame_rate": 24.0,
+        "seed": 123,
+        "low_memory": True,
+        "low_ram_streaming": False,
+        "prompt_context": "official_1024",
+        "feed_forward_backend": "reference_fp32",
+    }
 
 
 def test_ltx25_runtime_requires_versioned_backend_and_filters_signature(tmp_path, monkeypatch):
@@ -227,11 +280,7 @@ def test_ltx25_runtime_requires_versioned_backend_and_filters_signature(tmp_path
             calls.append(("generate", prompt, height, width, num_frames))
             return output_path
 
-    monkeypatch.setitem(
-        sys.modules,
-        "ltx_pipelines_mlx",
-        SimpleNamespace(LTX25DistilledPipeline=FakePipeline),
-    )
+    monkeypatch.setattr("ltx25_mlx.runtime._pipeline_class", lambda: FakePipeline)
     monkeypatch.setattr(mx, "reset_peak_memory", lambda: None)
     monkeypatch.setattr(mx, "get_peak_memory", lambda: 123)
     monkeypatch.setattr(mx, "clear_cache", lambda: None)
@@ -248,8 +297,6 @@ def test_ltx25_runtime_requires_versioned_backend_and_filters_signature(tmp_path
     assert not runtime.loaded
 
 
-def test_ltx25_backend_capability_rejects_23_only_entrypoint(monkeypatch):
-    monkeypatch.setitem(sys.modules, "ltx_pipelines_mlx", SimpleNamespace())
+def test_ltx25_backend_capability_reports_project_native_pipeline():
     status = backend_capability()
-    assert status["ready"] is False
-    assert "LTX25DistilledPipeline" in status["reason"]
+    assert status == {"ready": True, "pipeline_class": "LTX25DistilledPipeline"}

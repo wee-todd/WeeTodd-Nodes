@@ -43,6 +43,7 @@ def test_euler_ancestral_loop_is_seeded_and_preserves_conditioned_rows():
     clean = mx.array([[[0.0], [0.75]]], dtype=mx.float32)
     state = _State(mx.zeros((1, 2, 1)), clean, mask)
     callbacks = []
+    timings = []
 
     def model(**kwargs):
         video = mx.full_like(kwargs["video_latent"], 0.25)
@@ -59,6 +60,7 @@ def test_euler_ancestral_loop_is_seeded_and_preserves_conditioned_rows():
             sigmas=(1.0, 0.725, 0.421875),
             noise_seed=seed,
             step_callback=lambda done, total: callbacks.append((done, total)),
+            evaluation_timing_callback=lambda done, elapsed: timings.append((done, elapsed)),
         )
 
     first = run(10000)
@@ -70,6 +72,8 @@ def test_euler_ancestral_loop_is_seeded_and_preserves_conditioned_rows():
     assert mx.array_equal(first.video_latent[:, 1:], clean[:, 1:])
     assert mx.array_equal(first.audio_latent[:, 1:], clean[:, 1:])
     assert callbacks[:2] == [(1, 2), (2, 2)]
+    assert [index for index, _elapsed in timings[:2]] == [1, 2]
+    assert all(elapsed >= 0.0 for _index, elapsed in timings)
 
 
 def test_euler_ancestral_step_requires_noise_before_terminal():

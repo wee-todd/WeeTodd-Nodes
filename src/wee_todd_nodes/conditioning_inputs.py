@@ -262,7 +262,7 @@ class H3TimedKeyframeStack:
         keyframe.validate()
         return H3TimedKeyframeStack((*self.keyframes, keyframe))
 
-    def resolve(self, num_frames: int, fps: int = 24) -> tuple[tuple[int, ...], list[Any]]:
+    def _resolved(self, num_frames: int, fps: int) -> list[tuple[int, H3TimedKeyframe]]:
         if not self.keyframes:
             raise ValueError("Timed FL2VA conditioning requires at least one keyframe.")
         if len(self.keyframes) > 8:
@@ -281,6 +281,11 @@ class H3TimedKeyframeStack:
         frames = [item[0] for item in resolved]
         if len(set(frames)) != len(frames):
             raise ValueError("Two timed keyframes resolve to the same 24 fps frame.")
+        return resolved
+
+    def resolve(self, num_frames: int, fps: int = 24) -> tuple[tuple[int, ...], list[Any]]:
+        resolved = self._resolved(num_frames, fps)
+        frames = [item[0] for item in resolved]
         images = [
             comfy_image_to_pil(item[1].image, "H3 timed keyframe") for item in resolved
         ]
@@ -299,7 +304,7 @@ class H3TimedKeyframeStack:
             ],
         }
         if num_frames is not None:
-            anchors, _ = self.resolve(num_frames, fps)
+            anchors = tuple(item[0] for item in self._resolved(num_frames, fps))
             payload["resolved_frames"] = list(anchors)
             payload["rope_times"] = [frame * (5.0 / 3.0) for frame in anchors]
         return payload

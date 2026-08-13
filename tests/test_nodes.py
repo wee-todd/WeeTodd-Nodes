@@ -12,6 +12,7 @@ from wee_todd_nodes.nodes import (
     WeeToddH3EasyCache,
     WeeToddH3FirstFrame,
     WeeToddH3FirstLastFrame,
+    WeeToddH3Frames,
     WeeToddH3GenerationConfig,
     WeeToddH3KeyframeEncode,
     WeeToddH3LastFrame,
@@ -25,6 +26,7 @@ from wee_todd_nodes.nodes import (
     WeeToddH3ReferenceVideo,
     WeeToddH3TrajectoryForecast,
     WeeToddH3ValidatedSamplingPreset,
+    _frames_from_manifest,
     _output_directory,
     _parse_media_timing_info,
     _publication_environment,
@@ -223,7 +225,7 @@ def test_hires_fix_resolves_target_and_preserves_audio_contract(monkeypatch):
 
 
 def test_expected_nodes_are_registered():
-    assert len(NODE_CLASS_MAPPINGS) == 53
+    assert len(NODE_CLASS_MAPPINGS) == 54
     assert "WeeToddH3ComponentLoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3QuantizedTransformerLoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3Preflight" in NODE_CLASS_MAPPINGS
@@ -231,6 +233,7 @@ def test_expected_nodes_are_registered():
     assert "WeeToddH3LastFrame" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3FirstLastFrame" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3ChainedTimeline" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3Frames" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3TimedKeyframe" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3ReferenceImage" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3ReferenceVideo" in NODE_CLASS_MAPPINGS
@@ -591,6 +594,81 @@ def test_keyframe_nodes_emit_explicit_anchor_contracts():
     assert first.anchors == ("first",)
     assert last.anchors == ("last",)
     assert both.anchors == ("first", "last")
+
+
+def test_frames_node_resolves_one_based_endpoints_and_middle_frames():
+    images = {
+        "first.png": SimpleNamespace(shape=(1, 384, 640, 3)),
+        "middle.png": SimpleNamespace(shape=(1, 384, 640, 3)),
+        "last.png": SimpleNamespace(shape=(1, 384, 640, 3)),
+    }
+    manifest = json.dumps(
+        [
+            {"role": "last", "image": "last.png"},
+            {"role": "middle", "frame": 60, "image": "middle.png"},
+            {"role": "first", "image": "first.png"},
+        ]
+    )
+
+    stack = _frames_from_manifest(manifest, 155, images.__getitem__)
+
+    assert [item.timestamp_seconds for item in stack.keyframes] == [0.0, 59 / 24, 154 / 24]
+    assert [item.image for item in stack.keyframes] == [
+        images["first.png"],
+        images["middle.png"],
+        images["last.png"],
+    ]
+    assert stack.metadata(155)["resolved_frames"] == [0, 59, 154]
+
+
+@pytest.mark.parametrize(
+    ("manifest", "message"),
+    [
+        ("[]", "at least one"),
+        (
+            json.dumps(
+                [
+                    {"role": "first", "image": "a.png"},
+                    {"role": "middle", "frame": 1, "image": "b.png"},
+                ]
+            ),
+            "between frame 2",
+        ),
+        (
+            json.dumps(
+                [
+                    {"role": "middle", "frame": 12, "image": "a.png"},
+                    {"role": "middle", "frame": 12, "image": "b.png"},
+                ]
+            ),
+            "same frame",
+        ),
+    ],
+)
+def test_frames_node_rejects_invalid_editor_manifests(manifest, message):
+    with pytest.raises(ValueError, match=message):
+        _frames_from_manifest(
+            manifest,
+            121,
+            lambda _name: SimpleNamespace(shape=(1, 384, 640, 3)),
+        )
+
+
+def test_frames_node_uses_connected_config_duration(monkeypatch):
+    image = np.zeros((1, 384, 640, 3), dtype=np.float32)
+    monkeypatch.setattr("wee_todd_nodes.nodes._load_h3_frame_image", lambda _name: image)
+    config = SimpleNamespace(duration_seconds=5.0, validate=lambda: None)
+    manifest = json.dumps(
+        [
+            {"role": "first", "image": "first.png"},
+            {"role": "last", "image": "last.png"},
+        ]
+    )
+
+    stack, raw_info = WeeToddH3Frames().configure(config, manifest)
+
+    assert [item.timestamp_seconds for item in stack.keyframes] == [0.0, 123 / 24]
+    assert json.loads(raw_info)["last_frame"] == 124
 
 
 def test_reference_nodes_build_one_ordered_stack():
