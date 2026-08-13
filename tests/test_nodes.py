@@ -9,8 +9,10 @@ import pytest
 from wee_todd_nodes.nodes import (
     NODE_CLASS_MAPPINGS,
     WeeToddH3ComponentLoader,
+    WeeToddH3EasyCache,
     WeeToddH3FirstFrame,
     WeeToddH3FirstLastFrame,
+    WeeToddH3Frames,
     WeeToddH3GenerationConfig,
     WeeToddH3KeyframeEncode,
     WeeToddH3LastFrame,
@@ -24,12 +26,54 @@ from wee_todd_nodes.nodes import (
     WeeToddH3ReferenceVideo,
     WeeToddH3TrajectoryForecast,
     WeeToddH3ValidatedSamplingPreset,
+    _frames_from_manifest,
     _output_directory,
     _parse_media_timing_info,
     _publication_environment,
     _resolve_h3_resolution,
     _safe_output_target,
+    _save_h3_preview_contact_sheet,
 )
+
+
+def test_live_preview_contact_sheet_is_published_atomically(tmp_path, monkeypatch):
+    from PIL import Image
+
+    monkeypatch.setitem(
+        sys.modules,
+        "folder_paths",
+        SimpleNamespace(get_output_directory=lambda: str(tmp_path)),
+    )
+    path = _save_h3_preview_contact_sheet(Image.new("RGB", (32, 16), "red"), 1, 4)
+
+    assert path == tmp_path / "WeeTodd" / "previews" / "h3_live_preview_eval_01_of_04.jpg"
+    assert path.is_file()
+    assert not path.with_suffix(".tmp.jpg").exists()
+
+
+def test_easycache_exposes_fresh_head_core_residual_strategy_without_changing_default():
+    inputs = WeeToddH3EasyCache.INPUT_TYPES()
+    assert inputs["optional"]["reuse_strategy"][0] == [
+        "output_residual",
+        "core_residual_fresh_heads",
+    ]
+    assert inputs["optional"]["allow_turbo_experimental"][1]["default"] is False
+
+    (legacy,) = WeeToddH3EasyCache().configure("manual", 0.2, 0.15, 0.95, 1.15, 0.25)
+    (fresh_heads,) = WeeToddH3EasyCache().configure(
+        "manual",
+        0.2,
+        0.15,
+        0.95,
+        1.15,
+        0.25,
+        "core_residual_fresh_heads",
+        True,
+    )
+
+    assert legacy.reuse_strategy == "output_residual"
+    assert fresh_heads.reuse_strategy == "core_residual_fresh_heads"
+    assert fresh_heads.allow_turbo_experimental is True
 
 
 def test_trim_timing_metadata_explicitly_authorizes_changed_frame_count():
@@ -97,6 +141,7 @@ def test_sampling_metadata_preserves_exact_prompt(monkeypatch):
         "transformer": {"format": "weetodd-h3-paged-v1"},
         "text_encoder": {"format": "weetodd-h3-qwen-paged-v1"},
     }
+    assert parsed["prepared_state"] is None
 
 
 def test_hires_fix_resolves_target_and_preserves_audio_contract(monkeypatch):
@@ -180,7 +225,7 @@ def test_hires_fix_resolves_target_and_preserves_audio_contract(monkeypatch):
 
 
 def test_expected_nodes_are_registered():
-    assert len(NODE_CLASS_MAPPINGS) == 48
+    assert len(NODE_CLASS_MAPPINGS) == 54
     assert "WeeToddH3ComponentLoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3QuantizedTransformerLoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3Preflight" in NODE_CLASS_MAPPINGS
@@ -188,6 +233,7 @@ def test_expected_nodes_are_registered():
     assert "WeeToddH3LastFrame" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3FirstLastFrame" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3ChainedTimeline" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3Frames" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3TimedKeyframe" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3ReferenceImage" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3ReferenceVideo" in NODE_CLASS_MAPPINGS
@@ -224,6 +270,11 @@ def test_expected_nodes_are_registered():
     assert "WeeToddLTX23UpscalerLoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddLTX23UpscalePublish" in NODE_CLASS_MAPPINGS
     assert "WeeToddLTX23Unload" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX25ComponentLoader" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX25GenerationConfig" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX25Preflight" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX25Generate" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX25Unload" in NODE_CLASS_MAPPINGS
 
 
 def test_continuation_context_defaults_to_quality_first_22_frames():
@@ -389,7 +440,25 @@ def test_validated_chained_context_presets_match_measured_policies(tmp_path, mon
             "minimax_h3_turbo_v4_step600_ema.safetensors",
         ),
         (
+            "Turbo — drbaph v4 step-600 — 5 points / 4 evaluations",
+            "minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors",
+        ),
+        (
+            (
+                "Turbo — drbaph v4 step-600 — 384p low-memory — "
+                "5 points / 4 evaluations"
+            ),
+            "minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors",
+        ),
+        (
             "Staged Turbo — drbaph v4 step-600 — 2 base + 4 Turbo evaluations",
+            "minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors",
+        ),
+        (
+            (
+                "Staged Turbo — drbaph v4 step-600 — 384p low-memory — "
+                "2 base + 4 Turbo evaluations"
+            ),
             "minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors",
         ),
         (
@@ -525,6 +594,81 @@ def test_keyframe_nodes_emit_explicit_anchor_contracts():
     assert first.anchors == ("first",)
     assert last.anchors == ("last",)
     assert both.anchors == ("first", "last")
+
+
+def test_frames_node_resolves_one_based_endpoints_and_middle_frames():
+    images = {
+        "first.png": SimpleNamespace(shape=(1, 384, 640, 3)),
+        "middle.png": SimpleNamespace(shape=(1, 384, 640, 3)),
+        "last.png": SimpleNamespace(shape=(1, 384, 640, 3)),
+    }
+    manifest = json.dumps(
+        [
+            {"role": "last", "image": "last.png"},
+            {"role": "middle", "frame": 60, "image": "middle.png"},
+            {"role": "first", "image": "first.png"},
+        ]
+    )
+
+    stack = _frames_from_manifest(manifest, 155, images.__getitem__)
+
+    assert [item.timestamp_seconds for item in stack.keyframes] == [0.0, 59 / 24, 154 / 24]
+    assert [item.image for item in stack.keyframes] == [
+        images["first.png"],
+        images["middle.png"],
+        images["last.png"],
+    ]
+    assert stack.metadata(155)["resolved_frames"] == [0, 59, 154]
+
+
+@pytest.mark.parametrize(
+    ("manifest", "message"),
+    [
+        ("[]", "at least one"),
+        (
+            json.dumps(
+                [
+                    {"role": "first", "image": "a.png"},
+                    {"role": "middle", "frame": 1, "image": "b.png"},
+                ]
+            ),
+            "between frame 2",
+        ),
+        (
+            json.dumps(
+                [
+                    {"role": "middle", "frame": 12, "image": "a.png"},
+                    {"role": "middle", "frame": 12, "image": "b.png"},
+                ]
+            ),
+            "same frame",
+        ),
+    ],
+)
+def test_frames_node_rejects_invalid_editor_manifests(manifest, message):
+    with pytest.raises(ValueError, match=message):
+        _frames_from_manifest(
+            manifest,
+            121,
+            lambda _name: SimpleNamespace(shape=(1, 384, 640, 3)),
+        )
+
+
+def test_frames_node_uses_connected_config_duration(monkeypatch):
+    image = np.zeros((1, 384, 640, 3), dtype=np.float32)
+    monkeypatch.setattr("wee_todd_nodes.nodes._load_h3_frame_image", lambda _name: image)
+    config = SimpleNamespace(duration_seconds=5.0, validate=lambda: None)
+    manifest = json.dumps(
+        [
+            {"role": "first", "image": "first.png"},
+            {"role": "last", "image": "last.png"},
+        ]
+    )
+
+    stack, raw_info = WeeToddH3Frames().configure(config, manifest)
+
+    assert [item.timestamp_seconds for item in stack.keyframes] == [0.0, 123 / 24]
+    assert json.loads(raw_info)["last_frame"] == 124
 
 
 def test_reference_nodes_build_one_ordered_stack():

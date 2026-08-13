@@ -1,0 +1,245 @@
+{
+  "1": {
+    "class_type": "WeeToddH3ComponentLoader",
+    "inputs": {
+      "checkpoint": "MiniMax-H3/Ref2VA",
+      "task": "ref2va",
+      "transformer": "MiniMax-H3/Ref2VA/transformer/minimax_h3_bf16_rank64.safetensors",
+      "text_encoder": "MiniMax-H3/Ref2VA/text_encoder",
+      "processor": "MiniMax-H3/Ref2VA/processor",
+      "tokenizer": "MiniMax-H3/Ref2VA/tokenizer",
+      "video_vae": "MiniMax-H3/Ref2VA/video_vae/video_vae_mlx_native.safetensors",
+      "audio_vae": "MiniMax-H3/Ref2VA/audio_vae/audio_vae.safetensors",
+      "allow_fl2va_weights_for_ref2va": true
+    }
+  },
+  "2": {
+    "class_type": "WeeToddH3GenerationConfig",
+    "inputs": {
+      "duration_seconds": 5.0,
+      "steps": 5,
+      "seed": 20260812,
+      "resolution_mode": "ratio + size",
+      "resolution_tier": "384 px short edge \u2014 fast smoke",
+      "aspect_ratio": "5:3 \u2014 wide landscape",
+      "short_edge": 384,
+      "custom_width": 640,
+      "custom_height": 384,
+      "drop_adaln": true,
+      "memory_mode": "normal",
+      "attention_chunk_size": "automatic",
+      "projection_backend": "mlx",
+      "sampling_method": "euler"
+    }
+  },
+  "3": {
+    "class_type": "WeeToddH3ValidatedSamplingPreset",
+    "inputs": {
+      "config": [
+        "2",
+        0
+      ],
+      "preset": "Turbo \u2014 drbaph v4 step-600 \u2014 5 points / 4 evaluations"
+    }
+  },
+  "4": {
+    "class_type": "WeeToddH3Preflight",
+    "inputs": {
+      "components": [
+        "18",
+        0
+      ],
+      "config": [
+        "3",
+        0
+      ],
+      "prompt_tokens": 1024,
+      "available_memory_gb": 0.0,
+      "ffmpeg_path": ""
+    }
+  },
+  "18": {
+    "class_type": "WeeToddH3PreviewOverride",
+    "inputs": {
+      "components": [
+        "1",
+        0
+      ],
+      "tae_model": "taeh3.safetensors",
+      "preview_backend": "auto",
+      "coreml_model": "taeh3_coreml_256.mlmodelc",
+      "preview_every": 1,
+      "preview_frames": 6,
+      "max_preview_edge": 256,
+      "safety_guard": "conservative collapse guard"
+    }
+  },
+  "5": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "tall_white_reference_sheet.png"
+    }
+  },
+  "6": {
+    "class_type": "WeeToddH3ReferenceImage",
+    "inputs": {
+      "image": [
+        "5",
+        0
+      ],
+      "pixel_budget_percent": 100
+    }
+  },
+  "7": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "grey_alien_reference_sheet.png"
+    }
+  },
+  "8": {
+    "class_type": "WeeToddH3ReferenceImage",
+    "inputs": {
+      "image": [
+        "7",
+        0
+      ],
+      "pixel_budget_percent": 100,
+      "previous_references": [
+        "6",
+        0
+      ]
+    }
+  },
+  "9": {
+    "class_type": "LoadVideo",
+    "inputs": {
+      "file": "H3_768p_15s_One_Clip_Staged_Turbo_Benchmark_20260811.mp4"
+    }
+  },
+  "10": {
+    "class_type": "Video Slice",
+    "inputs": {
+      "video": [
+        "9",
+        0
+      ],
+      "start_time": 0.0,
+      "duration": 5.166666666666667,
+      "strict_duration": false
+    }
+  },
+  "11": {
+    "class_type": "GetVideoComponents",
+    "inputs": {
+      "video": [
+        "10",
+        0
+      ]
+    }
+  },
+  "12": {
+    "class_type": "WeeToddH3ReferenceVideo",
+    "inputs": {
+      "video_frames": [
+        "11",
+        0
+      ],
+      "fps": [
+        "11",
+        2
+      ],
+      "video_size": "match output (recommended)",
+      "temporal_density": "all frames (recommended)",
+      "previous_references": [
+        "8",
+        0
+      ]
+    }
+  },
+  "13": {
+    "class_type": "WeeToddH3ReferenceAudio",
+    "inputs": {
+      "audio": [
+        "11",
+        1
+      ],
+      "previous_references": [
+        "12",
+        0
+      ]
+    }
+  },
+  "14": {
+    "class_type": "WeeToddH3ReferenceEncode",
+    "inputs": {
+      "components": [
+        "4",
+        0
+      ],
+      "config": [
+        "3",
+        0
+      ],
+      "references": [
+        "13",
+        0
+      ],
+      "prompt": "<Picture 1> defines one tall white extraterrestrial with an elongated pale face, large blue-gray eyes, fine swept-back white hair, very tall slender proportions, and fitted white clothing from every shown angle. <Picture 2> defines one short grey extraterrestrial with an oversized smooth head, enormous glossy black eyes, gray-green skin, a lean ribbed torso, long fingers, and compact proportions from every shown angle. Keep them as two distinct individuals without merging their faces, eyes, heights, skin colors, clothing, or anatomy. <Video 1> supplies the live-action blocking, shovel motion, camera path, timing, desert location, and physical interaction. Replace the two human performers in <Video 1> with the extraterrestrials while preserving its coherent motion. <Audio 1> supplies the original synchronized dialogue cadence, voices, shovel impacts, breathing, footsteps, wind, and continuous acoustic space; preserve its timing and clarity.\n\nintegrated_multimodal_description: [Shot 1] One continuous photorealistic handheld mockumentary shot at a barren desert excavation site in harsh afternoon sunlight. The short grey from <Picture 2> stands inside a grave-sized hole and angrily throws several heavy shovelfuls of dirt over the rim. The shovel strikes compact soil, loose dirt scatters, and the grey breathes heavily. The tall white from <Picture 1> walks into frame above the hole, studies it suspiciously, brushes fine white hair behind one ear, looks down smugly, and says <d>[English] Hello, little man. Digging your own grave? </d> The grey stops digging and begins a slow threatening turn toward the tall white as the clip ends. Match <Video 1>'s restrained documentary corrections and screen positions. Do not cut, fade, teleport, duplicate, feature-swap, or reset the action.\n\noverall_soundscape: Follow <Audio 1> in the same continuous dry desert space with synchronized shovel strikes, scattering soil, heavy breathing, gravel footsteps, clothing rustle, wind, and clean mouth-synchronized dialogue. No ambience reset.\n\nnon_diegetic_music: N/A"
+    }
+  },
+  "15": {
+    "class_type": "WeeToddH3ReferenceStrength",
+    "inputs": {
+      "conditioning": [
+        "14",
+        0
+      ],
+      "visual_strength": 0.999,
+      "audio_strength": 1.0
+    }
+  },
+  "16": {
+    "class_type": "WeeToddH3Sample",
+    "inputs": {
+      "components": [
+        "4",
+        0
+      ],
+      "conditioning": [
+        "15",
+        0
+      ],
+      "config": [
+        "3",
+        0
+      ],
+      "unload_after_sample": true,
+      "loras": [
+        "3",
+        1
+      ]
+    }
+  },
+  "17": {
+    "class_type": "WeeToddH3DirectPublishLatents",
+    "inputs": {
+      "components": [
+        "4",
+        0
+      ],
+      "latents": [
+        "16",
+        0
+      ],
+      "filename_prefix": "WeeTodd/H3_384p_Ref2VA_2Character_OutputMatchedRefs",
+      "crf": 18,
+      "max_av_drift_seconds": 0.025,
+      "generation_metadata": "{\"workflow\": \"h3_384p_ref2va_2char_output_matched_refs\", \"seed\": 20260812, \"schedule\": \"5 points / 4 real Turbo evaluations\", \"cache\": \"disabled\", \"reference_sizing\": \"output-matched pixel area with preserved aspect ratio\", \"references\": [\"Picture 1: tall white\", \"Picture 2: grey alien\", \"Video 1: first 124 source frames\", \"Audio 1: source soundtrack as standalone reference\"]}",
+      "sampling_info": [
+        "16",
+        1
+      ],
+      "ffmpeg_path": ""
+    }
+  }
+}

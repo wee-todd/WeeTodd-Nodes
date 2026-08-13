@@ -16,6 +16,7 @@ the 13B of `adaln_proj` is then dropped — see :mod:`minimax_h3_mlx.adaln`.
 
 from __future__ import annotations
 
+import hashlib
 import math
 import time
 from collections.abc import Callable
@@ -127,6 +128,8 @@ class LatentResult:
     transformer_evaluations: int = 0
     easycache_skipped_steps: int = 0
     easycache_resolved_threshold: float | None = None
+    easycache_reuse_strategy: str | None = None
+    easycache_cache_bytes: int = 0
     blockcache_hits: int = 0
     blockcache_resolved_threshold: float | None = None
     blockcache_cache_bytes: int = 0
@@ -150,6 +153,11 @@ class LatentResult:
     trajectory_excluded_audio_rows: int = 0
     refinement_strength: float | None = None
     refinement_audio_preserved: bool = False
+    prepared_state_cache_hits: int = 0
+    prepared_state_cache_builds: int = 0
+    prepared_state_cache_bytes: int = 0
+    prepared_state_build_seconds: float = 0.0
+    prepared_state_key: str | None = None
     seconds_per_evaluation: float = 0.0
     total_seconds: float = 0.0
 
@@ -172,6 +180,10 @@ class MiniMaxH3Pipeline:
         self.config = config or PipelineConfig()
         self._cache: ModulationCache | None = None
         self._cache_timesteps: tuple[float, ...] | None = None
+        self._cache_hits = 0
+        self._cache_builds = 0
+        self._cache_build_seconds = 0.0
+        self._cache_key_digest: str | None = None
 
     @classmethod
     def from_pretrained(
@@ -271,6 +283,7 @@ class MiniMaxH3Pipeline:
     def _ensure_cache(self, timesteps: mx.array, drop_adaln: bool, verbose: bool):
         key = tuple(round(float(v), 9) for v in timesteps.tolist())
         if self._cache is not None and self._cache_timesteps == key:
+            self._cache_hits += 1
             return
         started = time.perf_counter()
         from .lora import prepare_lora_timesteps
@@ -278,6 +291,11 @@ class MiniMaxH3Pipeline:
         prepare_lora_timesteps(self.dit, timesteps)
         self._cache = ModulationCache.build(self.dit, timesteps, dtype=mx.bfloat16)
         self._cache_timesteps = key
+        self._cache_key_digest = hashlib.sha256(
+            np.asarray(key, dtype=np.float64).tobytes()
+        ).hexdigest()[:16]
+        self._cache_builds += 1
+        self._cache_build_seconds += time.perf_counter() - started
         if verbose:
             print(
                 f"  adaln cache: {len(key)} timesteps, {self._cache.nbytes() / 1e6:.0f} MB "
@@ -665,10 +683,16 @@ class MiniMaxH3Pipeline:
                 "EasyCache, BlockCache, and Trajectory Forecast are mutually exclusive."
             )
         easycache = None
+        core_reuse_marker = None
         if easycache_config is not None:
-            from .easycache import H3EasyCacheState
+            from .easycache import CORE_RESIDUAL_REUSE, H3EasyCacheState
 
             easycache = H3EasyCacheState(easycache_config)
+            core_reuse_marker = CORE_RESIDUAL_REUSE
+            if terminal_target_only and easycache.uses_core_residual:
+                raise ValueError(
+                    "Core-residual EasyCache is incompatible with terminal target-only research."
+                )
         blockcache = None
         if blockcache_config is not None:
             from .blockcache import H3BlockCacheState, H3HierarchicalBlockCacheState
@@ -733,12 +757,13 @@ class MiniMaxH3Pipeline:
                     if easycache is not None
                     else None
                 )
+                core_reuse = core_reuse_marker is not None and reused is core_reuse_marker
                 blockcache_hit = False
                 hierarchical_blockcache = blockcache is not None and hasattr(
                     blockcache, "segment_hits"
                 )
                 replaying = bool(trajectory_forecast is not None and trajectory_forecast.replaying)
-                if reused is None:
+                if reused is None or core_reuse:
                     if diagnostics is not None and hasattr(diagnostics, "begin_evaluation"):
                         diagnostics.begin_evaluation(
                             index,
@@ -759,6 +784,11 @@ class MiniMaxH3Pipeline:
                             layout.text_indices,
                             modulation_cache=self._cache,
                             blockcache=blockcache,
+                            easycache_core=(
+                                easycache
+                                if easycache is not None and easycache.uses_core_residual
+                                else None
+                            ),
                             trajectory_forecast=trajectory_forecast,
                             forecast_coordinate=float(timestep),
                             trajectory_video_row_start=trajectory_video_row_start,
@@ -770,7 +800,7 @@ class MiniMaxH3Pipeline:
                             total_steps=total_steps,
                             diagnostics=diagnostics,
                         )
-                    actual_transformer = not replaying and (
+                    actual_transformer = not core_reuse and not replaying and (
                         hierarchical_blockcache
                         or (
                             (blockcache is None or not blockcache.last_was_hit)
@@ -782,7 +812,7 @@ class MiniMaxH3Pipeline:
                     )
                     transformer_evaluations += int(actual_transformer)
                     blockcache_hit = blockcache is not None and blockcache.last_was_hit
-                    if easycache is not None:
+                    if easycache is not None and not core_reuse:
                         easycache.update(video_input, audio_input, video_pred, audio_pred)
                 else:
                     video_pred, audio_pred = reused
@@ -972,6 +1002,10 @@ class MiniMaxH3Pipeline:
             easycache_resolved_threshold=(
                 easycache.resolved_threshold if easycache is not None else None
             ),
+            easycache_reuse_strategy=(
+                easycache.config.reuse_strategy if easycache is not None else None
+            ),
+            easycache_cache_bytes=easycache.cache_bytes if easycache is not None else 0,
             blockcache_hits=blockcache.hits if blockcache is not None else 0,
             blockcache_resolved_threshold=(
                 blockcache.resolved_threshold
@@ -1013,6 +1047,11 @@ class MiniMaxH3Pipeline:
             trajectory_excluded_audio_rows=trajectory_audio_row_start,
             refinement_strength=(refinement_strength if has_initial_latents else None),
             refinement_audio_preserved=bool(preserve_initial_audio),
+            prepared_state_cache_hits=self._cache_hits,
+            prepared_state_cache_builds=self._cache_builds,
+            prepared_state_cache_bytes=(self._cache.nbytes() if self._cache is not None else 0),
+            prepared_state_build_seconds=self._cache_build_seconds,
+            prepared_state_key=self._cache_key_digest,
             seconds_per_evaluation=(sum(transformer_times) / max(len(transformer_times), 1)),
             total_seconds=time.perf_counter() - run_started,
         )

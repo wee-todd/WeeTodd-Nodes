@@ -17,6 +17,7 @@ from .packing import (
     PackedSequence,
     _spatial_position_grid,
     _temporal_position_grid,
+    video_latent_num_frames,
 )
 
 MAX_REFERENCE_IMAGES = 9
@@ -38,6 +39,8 @@ class PreparedReference:
     frames: np.ndarray | None = None
     waveform: np.ndarray | None = None
     block_timestamps: list[float] = field(default_factory=list)
+    qwen_frames: np.ndarray | None = None
+    source_num_latent_frames: int = 0
 
     @property
     def has_audio(self) -> bool:
@@ -67,6 +70,11 @@ class PreparedReference:
             raise ValueError("A Ref2VA image reference must contain exactly one latent frame.")
         if self.kind == "image" and self.has_audio:
             raise ValueError("A Ref2VA image reference cannot contain soundtrack latents.")
+        if self.kind == "video" and self.source_num_latent_frames:
+            if self.source_num_latent_frames < self.num_latent_frames:
+                raise ValueError(
+                    "Ref2VA source latent-frame count cannot be smaller than encoded frames."
+                )
 
     def video_rows(self, patch_size: tuple[int, int, int]) -> int:
         if self.kind == "audio":
@@ -127,7 +135,28 @@ def trim_reference_num_frames(num_frames: int) -> int:
     """Snap a reference down to the ``17 * n + 5`` frame count encoded without padding."""
     if num_frames < 5:
         raise ValueError("A Ref2VA video must contain at least five frames after resampling.")
-    return max(1, (num_frames - 5) // 17) * 17 + 5
+    return (num_frames - 5) // 17 * 17 + 5
+
+
+def reduce_reference_video_frames(
+    frames: np.ndarray, density: float
+) -> tuple[np.ndarray, int]:
+    """Uniformly reduce aligned Ref2VA frames while retaining the source latent duration."""
+    if frames.ndim != 4 or frames.shape[-1] != 3:
+        raise ValueError("Prepared Ref2VA video frames have invalid geometry.")
+    if not 0.0 < density <= 1.0:
+        raise ValueError("Ref2VA temporal density must be greater than zero and at most one.")
+    count = trim_reference_num_frames(int(frames.shape[0]))
+    source_latents = video_latent_num_frames(count)
+    source_chunks = (count - 5) // 17
+    target_chunks = round((source_latents * density - 2) / 5)
+    target_chunks = min(source_chunks, max(0, target_chunks))
+    target_count = 5 + 17 * target_chunks
+    aligned = frames[:count]
+    if target_count >= count:
+        return aligned, source_latents
+    indices = np.rint(np.linspace(0, count - 1, target_count)).astype(np.int64)
+    return np.ascontiguousarray(aligned[indices]), source_latents
 
 
 def sample_reference_video_frames(frames: np.ndarray) -> tuple[list[np.ndarray], list[float]]:
@@ -359,7 +388,15 @@ def build_ref2va_packed_sequence(
             rotary_time,
             width_grid,
         )
+        source_latent_frames = max(
+            reference.num_latent_frames, reference.source_num_latent_frames
+        )
         frame_time = _temporal_position_grid(reference.num_latent_frames, rotary_time)
+        if source_latent_frames > reference.num_latent_frames:
+            source_time = _temporal_position_grid(source_latent_frames, rotary_time)
+            frame_time = np.linspace(
+                source_time[0], source_time[-1], reference.num_latent_frames
+            )
         position_ids[video_rows, 0] = np.repeat(frame_time, frame_grid.shape[0])
         position_ids[video_rows, 1:] = np.tile(frame_grid, (reference.num_latent_frames, 1))
         if reference.audio_rows:
@@ -368,7 +405,7 @@ def build_ref2va_packed_sequence(
         cursor = video_stop
         rotary_time += max(
             float(reference.num_audio_latents),
-            _reference_video_span(reference.num_latent_frames),
+            _reference_video_span(source_latent_frames),
         )
 
     continuation_audio_start = cursor

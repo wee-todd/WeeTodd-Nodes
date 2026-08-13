@@ -1,5 +1,5 @@
 {
-  "last_node_id": 12,
+  "last_node_id": 13,
   "last_link_id": 17,
   "nodes": [
     {
@@ -592,6 +592,30 @@
         "{\"workflow\": \"h3_768p_15s_ref2va_aliens_staged_turbo\", \"seed\": 20260811, \"lora\": \"minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors\", \"reference_order\": [\"tall white alien\", \"grey alien\"], \"reference_strength\": {\"visual\": 0.999, \"audio\": 1.0}}",
         ""
       ]
+    },
+    {
+      "id": 13,
+      "type": "MarkdownNote",
+      "pos": [
+        40.0,
+        -500.0
+      ],
+      "size": [
+        760,
+        500
+      ],
+      "flags": {},
+      "order": 12,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "title": "Setup and model downloads",
+      "properties": {},
+      "widgets_values": [
+        "## h3 768p 15s ref2va aliens staged turbo\n\n1. Install WeeTodd Nodes and restart ComfyUI.\n2. Download the H3 components listed below.\n3. Keep the relative Component Loader paths unchanged.\n4. Replace these input placeholders: `tall_white_reference_sheet.png`, `grey_alien_reference_sheet.png`.\n5. Queue the workflow after **H3 Preflight** succeeds.\n\n### H3 downloads\n\n- [Official MiniMax H3 partition, processor, tokenizer, and audio VAE](https://huggingface.co/MiniMaxAI/MiniMax-H3)\n  Save the repository under `ComfyUI/models/MiniMax-H3`.\n\n### Required LoRA\n\n- [drbaph v4 step-600 EMA adapter](https://huggingface.co/drbaph/MiniMax-H3-Turbo-Lora-ComfyUI/blob/main/minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors)\n- Save it as `ComfyUI/models/loras/minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors`.\n\nUse a genuine Ref2VA partition for strict Ref2VA workflows.\nDo not substitute FL2VA weights unless the workflow enables compatibility mode."
+      ],
+      "color": "#243447",
+      "bgcolor": "#15202b"
     }
   ],
   "links": [

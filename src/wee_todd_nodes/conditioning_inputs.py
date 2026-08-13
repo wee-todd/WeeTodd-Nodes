@@ -31,12 +31,46 @@ def resolve_reference_image_canvas(
     if not 0.25 <= aspect <= 4.0:
         raise ValueError("H3 reference image aspect ratio must be between 1:4 and 4:1.")
     pixel_budget = target_width * target_height * pixel_budget_percent / 100.0
-    width = math.sqrt(pixel_budget * aspect)
-    height = math.sqrt(pixel_budget / aspect)
+    # Current ComfyUI Ref2VA conditioning is explicitly down-only. Enlarging a
+    # small identity sheet creates pixels but also creates persistent reference
+    # tokens that ride through every transformer evaluation.
+    scale = min(1.0, math.sqrt(pixel_budget / (source_width * source_height)))
+    width = source_width * scale
+    height = source_height * scale
     multiple = REFERENCE_CANVAS_MULTIPLE
     resolved_width = max(multiple, round(width / multiple) * multiple)
     resolved_height = max(multiple, round(height / multiple) * multiple)
     return resolved_width, resolved_height
+
+
+def resolve_reference_video_canvas(
+    source_width: int,
+    source_height: int,
+    target_width: int,
+    target_height: int,
+    size_mode: str,
+) -> tuple[int, int]:
+    """Resolve a down-only output-matched or native H3 reference-video canvas."""
+    if size_mode == "match output (recommended)":
+        scale = min(
+            1.0,
+            math.sqrt((target_width * target_height) / (source_width * source_height)),
+        )
+        multiple = REFERENCE_CANVAS_MULTIPLE
+        return (
+            max(multiple, round(source_height * scale / multiple) * multiple),
+            max(multiple, round(source_width * scale / multiple) * multiple),
+        )
+    if size_mode != "native H3 reference canvas (high detail / slow)":
+        raise ValueError(f"Unknown H3 reference-video size mode: {size_mode!r}.")
+    from minimax_h3_mlx.packing import resolve_canvas_size
+
+    target_height, target_width = resolve_canvas_size(source_width, source_height)
+    if source_width * source_height < target_width * target_height:
+        multiple = REFERENCE_CANVAS_MULTIPLE
+        target_width = max(multiple, round(source_width / multiple) * multiple)
+        target_height = max(multiple, round(source_height / multiple) * multiple)
+    return target_height, target_width
 
 
 def _shape(value: Any, subject: str) -> tuple[int, ...]:
@@ -228,7 +262,7 @@ class H3TimedKeyframeStack:
         keyframe.validate()
         return H3TimedKeyframeStack((*self.keyframes, keyframe))
 
-    def resolve(self, num_frames: int, fps: int = 24) -> tuple[tuple[int, ...], list[Any]]:
+    def _resolved(self, num_frames: int, fps: int) -> list[tuple[int, H3TimedKeyframe]]:
         if not self.keyframes:
             raise ValueError("Timed FL2VA conditioning requires at least one keyframe.")
         if len(self.keyframes) > 8:
@@ -247,6 +281,11 @@ class H3TimedKeyframeStack:
         frames = [item[0] for item in resolved]
         if len(set(frames)) != len(frames):
             raise ValueError("Two timed keyframes resolve to the same 24 fps frame.")
+        return resolved
+
+    def resolve(self, num_frames: int, fps: int = 24) -> tuple[tuple[int, ...], list[Any]]:
+        resolved = self._resolved(num_frames, fps)
+        frames = [item[0] for item in resolved]
         images = [
             comfy_image_to_pil(item[1].image, "H3 timed keyframe") for item in resolved
         ]
@@ -265,7 +304,7 @@ class H3TimedKeyframeStack:
             ],
         }
         if num_frames is not None:
-            anchors, _ = self.resolve(num_frames, fps)
+            anchors = tuple(item[0] for item in self._resolved(num_frames, fps))
             payload["resolved_frames"] = list(anchors)
             payload["rope_times"] = [frame * (5.0 / 3.0) for frame in anchors]
         return payload
@@ -280,6 +319,8 @@ class H3ReferenceInput:
     fps: float | None = None
     soundtrack: Any | None = None
     image_pixel_budget_percent: int = 100
+    video_size_mode: str = "match output (recommended)"
+    temporal_density: str = "all frames (recommended)"
 
     def validate(self) -> None:
         if self.kind == "image":
@@ -302,6 +343,19 @@ class H3ReferenceInput:
                 raise ValueError("H3 reference video fps must be positive.")
             if self.soundtrack is not None:
                 _validate_audio(self.soundtrack, "H3 reference video soundtrack")
+            if self.video_size_mode not in {
+                "match output (recommended)",
+                "native H3 reference canvas (high detail / slow)",
+            }:
+                raise ValueError(f"Unknown H3 reference-video size mode: {self.video_size_mode!r}.")
+            if self.temporal_density not in {
+                "all frames (recommended)",
+                "uniform 50% (experimental)",
+                "uniform 25% (experimental)",
+            }:
+                raise ValueError(
+                    f"Unknown H3 reference-video temporal density: {self.temporal_density!r}."
+                )
             return
         if self.kind == "audio":
             _validate_audio(self.media, "H3 reference audio")
@@ -325,6 +379,8 @@ class H3ReferenceInput:
         elif self.kind == "video":
             payload["shape"] = list(_shape(self.media, "H3 reference video"))
             payload["fps"] = self.fps
+            payload["video_size_mode"] = self.video_size_mode
+            payload["temporal_density"] = self.temporal_density
         if self.has_audio:
             audio = self.media if self.kind == "audio" else self.soundtrack
             _, channels, samples, sample_rate = _validate_audio(audio, "H3 reference audio")
@@ -400,11 +456,12 @@ class H3ReferenceStack:
         import numpy as np
         from PIL import Image
 
-        from minimax_h3_mlx.packing import resolve_canvas_size
         from minimax_h3_mlx.ref2va import (
             PreparedReference,
+            reduce_reference_video_frames,
             resample_reference_frames,
             sample_reference_video_frames,
+            trim_reference_num_frames,
         )
 
         self.validate_request()
@@ -432,7 +489,17 @@ class H3ReferenceStack:
                         f"H3 reference video {index} has fewer than five frames at 24 fps."
                     )
                 frames = frames[:target_num_frames]
-                height, width = resolve_canvas_size(frames.shape[2], frames.shape[1])
+                # Use one aligned sequence for Qwen timestamps and the video
+                # VAE. Previously Qwen could inspect tail frames that the VAE
+                # silently discarded later.
+                frames = frames[: trim_reference_num_frames(int(frames.shape[0]))]
+                height, width = resolve_reference_video_canvas(
+                    frames.shape[2],
+                    frames.shape[1],
+                    target_width,
+                    target_height,
+                    reference.video_size_mode,
+                )
                 if frames.shape[1:3] != (height, width):
                     frames = np.stack(
                         [
@@ -444,13 +511,25 @@ class H3ReferenceStack:
                             for frame in frames
                         ]
                     )
-                item.frames = frames
+                item.qwen_frames = frames
+                density = {
+                    "all frames (recommended)": 1.0,
+                    "uniform 50% (experimental)": 0.5,
+                    "uniform 25% (experimental)": 0.25,
+                }[reference.temporal_density]
+                item.frames, item.source_num_latent_frames = (
+                    reduce_reference_video_frames(frames, density)
+                )
                 _, item.block_timestamps = sample_reference_video_frames(frames)
             audio = reference.media if reference.kind == "audio" else reference.soundtrack
             if audio is not None:
                 waveform, sample_rate = _comfy_audio_to_numpy(
                     audio, f"H3 reference audio {index}"
                 )
+                # Truncate at the source rate, then resample once. This avoids
+                # filtering an unused tail and matches the reference pipeline.
+                source_max_samples = round(target_num_frames / 24.0 * sample_rate)
+                waveform = waveform[:, :source_max_samples]
                 item.waveform = np.ascontiguousarray(
                     _resample_waveform(waveform, sample_rate, target_sample_rate)[
                         :, :max_samples

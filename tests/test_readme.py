@@ -1,4 +1,6 @@
 import re
+import subprocess
+import sys
 import tomllib
 from pathlib import Path
 
@@ -30,6 +32,22 @@ def test_readme_h3_node_count_matches_registration():
     assert match is not None
     registered = sum(name.startswith("WeeToddH3") for name in NODE_CLASS_MAPPINGS)
     assert int(match.group(1)) == registered
+
+
+def test_readme_node_catalog_matches_registration():
+    result = subprocess.run(
+        [sys.executable, "scripts/update_readme_node_catalog.py", "--project", ".", "--check"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    catalog = README.split("<!-- BEGIN GENERATED NODE CATALOG -->", 1)[1].split(
+        "<!-- END GENERATED NODE CATALOG -->", 1
+    )[0]
+    assert catalog.count("\n| ") == len(NODE_CLASS_MAPPINGS) + 2
 
 
 def test_readme_runtime_requirements_match_project_metadata():

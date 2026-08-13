@@ -1,0 +1,81 @@
+{
+  "block": 24,
+  "block_page": "block-024.safetensors",
+  "candidate_backend": "steel_32x16",
+  "cases": [
+    {
+      "bit_exact": true,
+      "candidate_median_seconds": 0.14595399994868785,
+      "candidate_samples_seconds": [
+        0.14561191701795906,
+        0.14571279205847532,
+        0.1462406669743359,
+        0.14553166704718024,
+        0.14609400008339435,
+        0.14579812495503575,
+        0.14595399994868785,
+        0.14616466697771102,
+        0.14618195791263133
+      ],
+      "native_median_seconds": 0.14550366695038974,
+      "native_samples_seconds": [
+        0.14570187497884035,
+        0.14574995799921453,
+        0.14527862495742738,
+        0.14621387503575534,
+        0.14523525000549853,
+        0.14548183395527303,
+        0.14542258298024535,
+        0.14552154194097966,
+        0.14550366695038974
+      ],
+      "rows": 9482,
+      "runtime_reduction_percent": -0.3094994151945585,
+      "speedup": 0.9969145552814145
+    },
+    {
+      "bit_exact": true,
+      "candidate_median_seconds": 0.9364929998992011,
+      "candidate_samples_seconds": [
+        0.9366567910183221,
+        0.9338171660201624,
+        0.9331012920010835,
+        0.9358733339468017,
+        0.9378376249223948,
+        0.9359560830052942,
+        0.9369157910114154,
+        0.9364929998992011,
+        0.938291042111814
+      ],
+      "native_median_seconds": 0.9237684160470963,
+      "native_samples_seconds": [
+        0.9245567920152098,
+        0.9251910420134664,
+        0.9200200000777841,
+        0.9207246250007302,
+        0.9222929999232292,
+        0.9244573749601841,
+        0.9266809999244288,
+        0.9231197079643607,
+        0.9237684160470963
+      ],
+      "rows": 25138,
+      "runtime_reduction_percent": -1.377464701223996,
+      "speedup": 0.9864125157865842
+    }
+  ],
+  "device": {
+    "architecture": "applegpu_g15d",
+    "device_name": "Apple M3 Ultra",
+    "max_buffer_length": 179357827072,
+    "max_recommended_working_set_size": 239143780352,
+    "memory_size": 274877906944,
+    "resource_limit": 499000
+  },
+  "heads": 56,
+  "mlx_version": "0.32.0",
+  "operator": "h3_attention_plus_output_projection",
+  "qkv_capture": "0001_eval_0_attention_qkv_block_24.safetensors",
+  "repetitions": 9,
+  "warmups": 3
+}

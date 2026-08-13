@@ -22,7 +22,12 @@ through MLX.
   selected. Do not load the next weighted stage before the prior stage is releasable.
 - Validate dimensions, duration, checkpoint paths, and task support before expensive work.
 - Add a focused test for every node contract or engine behavior changed.
+- Treat portable workflow paths and runtime-ready workflow paths as separate validation states.
+- Before an expensive saved-workflow render, run `scripts/preflight_h3_workflow.py` with the saved
+  API prompt and the active ComfyUI root. Execute that saved API prompt for the render.
 - Keep local research, attribution, and knowledge-store material outside the tracked repository.
+- In zsh commands, do not assign `path` or `PATH`; zsh ties `path` to the executable search path.
+  Use a task-specific variable name such as `ltx_source_rel`.
 - Do not copy incompatible or unlicensed third-party code into Apache-2.0 files.
 - Use `.agents/skills/wee-todd-h3-mlx/SKILL.md` for H3 implementation work.
 - Before any pip, Python, venv, MLX, or dependency change, use
@@ -35,6 +40,9 @@ through MLX.
 - Before every commit, use `.agents/skills/readme-workflow-commit-gate/SKILL.md`. Audit the complete
   `README.md` and every shipped UI/API workflow, then record the review for the exact staged
   snapshot. Do not commit when the gate or its local pre-commit hook fails.
+- Keep the generated README node catalog synchronized with every registered node and its current
+  behavior. Run `python scripts/update_readme_node_catalog.py --check` before every commit. Update
+  the node note and maturity status when a node contract changes.
 
 ## Validation
 
@@ -45,6 +53,8 @@ python -m compileall -q src __init__.py
 python -m pytest -q tests/test_nodes.py tests/test_runtime.py tests/test_readme.py \
   tests/test_workflows.py
 ruff check src/wee_todd_nodes tests
+python scripts/preflight_h3_workflow.py --project . --all-api
+python scripts/update_readme_node_catalog.py --project . --check
 ./.venv/bin/python .agents/skills/readme-workflow-commit-gate/scripts/audit.py \
   --project . --record-review \
   --confirm-readme-reviewed --confirm-workflows-reviewed

@@ -7,7 +7,14 @@ import pytest
 from wee_todd_nodes.nodes import NODE_CLASS_MAPPINGS
 
 ROOT = Path(__file__).parents[1]
-CORE_NODES = {"GetVideoComponents", "LoadImage", "LoadVideo", "Video Slice"}
+CORE_NODES = {
+    "GetVideoComponents",
+    "LoadImage",
+    "LoadVideo",
+    "MarkdownNote",
+    "Note",
+    "Video Slice",
+}
 VALIDATED_WORKFLOW_PRESETS = {
     "h3_512p_dense_baseline.json": "Dense baseline — 20 points / 19 evaluations",
     "h3_512p_trajectory_replay.json": (
@@ -62,6 +69,32 @@ UI_WORKFLOW_PATHS = sorted((ROOT / "workflows").glob("*.json")) + sorted(
 )
 API_WORKFLOW_PATHS = sorted((ROOT / "examples").glob("*_api.json"))
 PRIMITIVE_WIDGET_TYPES = {"BOOLEAN", "FLOAT", "INT", "STRING"}
+NOTE_NODE_TYPES = {"MarkdownNote", "Note"}
+
+
+def _execution_node_map(workflow):
+    return {
+        node["id"]: node
+        for node in workflow["nodes"]
+        if node.get("type") not in NOTE_NODE_TYPES
+    }
+
+
+@pytest.mark.parametrize("path", UI_WORKFLOW_PATHS, ids=lambda path: path.name)
+def test_shipped_ui_workflows_include_setup_note(path):
+    workflow = json.loads(path.read_text())
+    notes = [
+        node
+        for node in workflow["nodes"]
+        if node.get("type") == "MarkdownNote"
+        and node.get("title") == "Setup and model downloads"
+    ]
+
+    assert len(notes) == 1
+    text = notes[0]["widgets_values"][0]
+    assert "https://huggingface.co/" in text
+    assert "Queue the workflow" in text
+    assert "ComfyUI/models/" in text
 
 
 def _input_schema(node_type):
@@ -110,7 +143,7 @@ def _assert_widget_value_matches(value, input_type):
 @pytest.mark.parametrize("path", UI_WORKFLOW_PATHS, ids=lambda path: path.name)
 def test_shipped_ui_workflows_match_current_node_contracts(path):
     workflow = json.loads(path.read_text())
-    nodes = {node["id"]: node for node in workflow["nodes"]}
+    nodes = _execution_node_map(workflow)
 
     for node in nodes.values():
         if node["type"] in CORE_NODES:
@@ -186,7 +219,7 @@ def test_ltx23_standalone_api_is_registered_and_preflighted():
 
 def test_ltx23_standalone_ui_workflow_links_are_consistent():
     workflow = json.loads((ROOT / "workflows" / "ltx23_t2va_two_stage.json").read_text())
-    nodes = {node["id"]: node for node in workflow["nodes"]}
+    nodes = _execution_node_map(workflow)
 
     assert len(nodes) == 4
     assert {node["type"] for node in nodes.values()} <= set(NODE_CLASS_MAPPINGS)
@@ -244,7 +277,7 @@ def test_h3_768p_staged_turbo_workflow_uses_one_continuous_schedule():
     workflow = json.loads(
         (ROOT / "workflows" / "h3_768p_fl2va_staged_turbo_drbaph_v4.json").read_text()
     )
-    ui_nodes = {node["id"]: node for node in workflow["nodes"]}
+    ui_nodes = _execution_node_map(workflow)
 
     assert prompt["1"]["inputs"]["task"] == "fl2va"
     assert prompt["2"]["inputs"]["steps"] == 7
@@ -267,6 +300,61 @@ def test_h3_768p_staged_turbo_workflow_uses_one_continuous_schedule():
     assert ui_nodes[8]["widgets_values"] == [prompt["6"]["inputs"]["preset"]]
     assert ui_nodes[6]["inputs"][3]["name"] == "trajectory_forecast"
     assert ui_nodes[6]["inputs"][4]["name"] == "loras"
+
+
+def test_h3_384p_staged_turbo_workflow_matches_measured_low_memory_recipe():
+    prompt = json.loads(
+        (ROOT / "examples" / "h3_384p_staged_turbo_2base_4turbo_api.json").read_text()
+    )
+    workflow = json.loads(
+        (ROOT / "workflows" / "h3_384p_staged_turbo_2base_4turbo.json").read_text()
+    )
+    ui_nodes = _execution_node_map(workflow)
+
+    assert len(ui_nodes) == 7
+    assert {node["type"] for node in ui_nodes.values()} <= set(NODE_CLASS_MAPPINGS)
+    assert prompt["1"]["inputs"] == PORTABLE_T2VA_INPUTS
+    assert prompt["2"]["inputs"]["duration_seconds"] == 5.0
+    assert prompt["2"]["inputs"]["steps"] == 7
+    assert prompt["2"]["inputs"]["seed"] == 0
+    assert prompt["2"]["inputs"]["resolution_mode"] == "ratio + size"
+    assert prompt["2"]["inputs"]["aspect_ratio"] == "5:3 — wide landscape"
+    assert prompt["2"]["inputs"]["short_edge"] == 384
+    assert prompt["2"]["inputs"]["custom_width"] == 640
+    assert prompt["2"]["inputs"]["custom_height"] == 384
+    assert prompt["2"]["inputs"]["memory_mode"] == "low_memory_bf16"
+    assert prompt["3"]["inputs"]["preset"] == (
+        "Staged Turbo — drbaph v4 step-600 — 384p low-memory — "
+        "2 base + 4 Turbo evaluations"
+    )
+    assert prompt["6"]["inputs"]["loras"] == ["3", 1]
+    assert "easycache" not in prompt["6"]["inputs"]
+    assert "blockcache" not in prompt["6"]["inputs"]
+    assert ui_nodes[3]["widgets_values"] == [prompt["3"]["inputs"]["preset"]]
+    assert ui_nodes[2]["widgets_values"][0:3] == [5.0, 7, 0]
+    assert ui_nodes[2]["widgets_values"][10] == "low_memory_bf16"
+
+
+def test_h3_384p_four_evaluation_turbo_workflow_is_dense_and_cache_free():
+    prompt = json.loads((ROOT / "examples" / "h3_384p_turbo_4real_api.json").read_text())
+    workflow = json.loads((ROOT / "workflows" / "h3_384p_turbo_4real.json").read_text())
+    ui_nodes = _execution_node_map(workflow)
+
+    assert len(ui_nodes) == 7
+    assert {node["type"] for node in ui_nodes.values()} <= set(NODE_CLASS_MAPPINGS)
+    assert prompt["1"]["inputs"] == PORTABLE_T2VA_INPUTS
+    assert prompt["2"]["inputs"]["steps"] == 5
+    assert prompt["2"]["inputs"]["memory_mode"] == "low_memory_bf16"
+    assert prompt["2"]["inputs"]["short_edge"] == 384
+    assert prompt["3"]["inputs"]["preset"] == (
+        "Turbo — drbaph v4 step-600 — 384p low-memory — 5 points / 4 evaluations"
+    )
+    assert prompt["6"]["inputs"]["loras"] == ["3", 1]
+    assert "easycache" not in prompt["6"]["inputs"]
+    assert "blockcache" not in prompt["6"]["inputs"]
+    assert "trajectory_forecast" not in prompt["6"]["inputs"]
+    assert ui_nodes[2]["widgets_values"][0:3] == [5.0, 5, 0]
+    assert ui_nodes[3]["widgets_values"] == [prompt["3"]["inputs"]["preset"]]
 
 
 def test_h3_15_second_one_shot_workflow_is_the_portable_quality_control():
@@ -452,7 +540,7 @@ def test_t2va_api_prompt_uses_registered_nodes_and_staged_unloading():
 
 def test_t2va_ui_workflow_links_are_consistent():
     workflow = json.loads((ROOT / "examples" / "t2va_smoke_workflow.json").read_text())
-    nodes = {node["id"]: node for node in workflow["nodes"]}
+    nodes = _execution_node_map(workflow)
     links = {link[0]: link for link in workflow["links"]}
 
     assert len(nodes) == 10
@@ -528,7 +616,7 @@ def test_low_memory_paged_api_uses_dual_paging_and_direct_publication():
 
 def test_low_memory_paged_ui_workflow_links_are_consistent():
     workflow = json.loads((ROOT / "examples" / "t2va_low_memory_paged_workflow.json").read_text())
-    nodes = {node["id"]: node for node in workflow["nodes"]}
+    nodes = _execution_node_map(workflow)
     links = {link[0]: link for link in workflow["links"]}
 
     assert len(nodes) == 6
@@ -567,7 +655,7 @@ def test_low_memory_paged_ui_workflow_links_are_consistent():
 @pytest.mark.parametrize("filename,preset", VALIDATED_WORKFLOW_PRESETS.items())
 def test_validated_sampling_workflows_are_loadable_and_preconfigured(filename, preset):
     workflow = json.loads((ROOT / "workflows" / filename).read_text())
-    nodes = {node["id"]: node for node in workflow["nodes"]}
+    nodes = _execution_node_map(workflow)
 
     assert len(nodes) == 7
     assert {node["type"] for node in nodes.values()} <= set(NODE_CLASS_MAPPINGS)
@@ -601,7 +689,7 @@ def test_validated_sampling_workflows_are_loadable_and_preconfigured(filename, p
 def test_chained_workflows_are_portable_linked_and_preconfigured(filename, preset):
     raw = (ROOT / "workflows" / filename).read_text()
     workflow = json.loads(raw)
-    nodes = {node["id"]: node for node in workflow["nodes"]}
+    nodes = _execution_node_map(workflow)
 
     assert len(nodes) == 30
     assert {node["type"] for node in nodes.values()} <= set(NODE_CLASS_MAPPINGS)
@@ -675,7 +763,7 @@ def test_four_reference_ref2va_forward_attention_workflow_is_portable_and_linked
     path = ROOT / "workflows" / "h3_512p_ref2va_four_reference_forward_attention.json"
     raw = path.read_text()
     workflow = json.loads(raw)
-    nodes = {node["id"]: node for node in workflow["nodes"]}
+    nodes = _execution_node_map(workflow)
 
     assert len(nodes) == 15
     assert {node["type"] for node in nodes.values()} <= set(NODE_CLASS_MAPPINGS) | CORE_NODES
@@ -774,7 +862,7 @@ def test_conditioning_api_examples_use_current_nodes(name, conditioning_node):
 @pytest.mark.parametrize("name", ["fl2va_first_frame", "ref2va_image"])
 def test_conditioning_ui_examples_have_consistent_links(name):
     workflow = json.loads((ROOT / "examples" / f"{name}_workflow.json").read_text())
-    nodes = {node["id"]: node for node in workflow["nodes"]}
+    nodes = _execution_node_map(workflow)
     assert {node["type"] for node in nodes.values()} <= set(NODE_CLASS_MAPPINGS) | CORE_NODES
     assert all(nodes[1]["widgets_values"][index] for index in range(2, 8))
     assert "q8-paged" not in nodes[1]["widgets_values"][3]

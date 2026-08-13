@@ -792,6 +792,7 @@ class MiniMaxH3DiT(nn.Module):
         modulation_cache: ModulationCache | None = None,
         mask: mx.array | None = None,
         blockcache=None,
+        easycache_core=None,
         trajectory_forecast=None,
         forecast_coordinate: float | None = None,
         trajectory_video_row_start: int = 0,
@@ -886,6 +887,17 @@ class MiniMaxH3DiT(nn.Module):
                 video_indices=video_indices,
                 audio_indices=audio_indices,
                 text_indices=text_indices,
+            )
+        core_input = x
+        if easycache_core is not None and easycache_core.last_was_core_reuse:
+            x = easycache_core.reuse_core(x)
+            return self._project_packed_features(
+                x,
+                temb,
+                timestep_indices,
+                video_indices,
+                audio_indices,
+                diagnostics,
             )
 
         paged = getattr(self, "paged_blocks", None)
@@ -1039,6 +1051,9 @@ class MiniMaxH3DiT(nn.Module):
                 audio_indices,
             )
 
+        if easycache_core is not None:
+            easycache_core.update_core(core_input, x)
+
         if trajectory_forecast is not None and forecast_coordinate is not None:
             trajectory_forecast.update(
                 forecast_coordinate,
@@ -1117,7 +1132,25 @@ class MiniMaxH3DiT(nn.Module):
                 )
             return video_result, audio_result
 
-        # 4. Both heads run over every row, then each modality's rows are selected.
+        return self._project_packed_features(
+            x,
+            temb,
+            timestep_indices,
+            video_indices,
+            audio_indices,
+            diagnostics,
+        )
+
+    def _project_packed_features(
+        self,
+        x,
+        temb,
+        timestep_indices,
+        video_indices,
+        audio_indices,
+        diagnostics=None,
+    ):
+        """Run current-timestep output normalization and heads over packed features."""
         x = _diagnostic_run(
             diagnostics,
             "output.norm",

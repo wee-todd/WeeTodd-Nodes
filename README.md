@@ -1,6 +1,7 @@
 # WeeTodd Nodes
 
-Experimental MLX-native MiniMax H3 and LTX 2.3 nodes for ComfyUI on Apple Silicon.
+Experimental MLX-native MiniMax H3, LTX 2.3, and LTX 2.5 nodes for ComfyUI on
+Apple Silicon.
 
 WeeTodd Nodes keeps the MiniMax H3 engine separate from the ComfyUI adapter. The current release
 focuses on synchronized text-to-video-plus-audio generation, staged model unloading, and a
@@ -12,6 +13,57 @@ The matrix compares all six validated sampling policies with clean-speech and fa
 The measured low-memory profile reduced complete ComfyUI process peak by approximately 35 to 39 GB
 while increasing workflow time by approximately 5 to 16 percent. See
 [Validated sampling presets](#validated-sampling-presets) for the measurement boundary.
+
+## LTX 2.5 distilled MLX workflow
+
+[`ltx25_768x512_distilled_two_stage.json`](workflows/ltx25_768x512_distilled_two_stage.json)
+is the starting LTX 2.5 workflow. It follows the official two-stage distilled recipe: eight Euler
+ancestral evaluations at half resolution, the learned 2× latent upscaler, then three Euler
+ancestral evaluations at full resolution. The default 768 by 512, 121-frame, 24 fps graph produces
+synchronized 48 kHz audio and video. It accepts an optional first frame for I2V.
+
+Select **Official parity — 768×512, 5 s, reference FP32, 8+3 ancestral** for the validated starting
+recipe. The preset keeps the user-selected seed. Select **Custom** before changing its pinned
+resolution, duration, memory, prompt-context, or feed-forward fields.
+
+The project-native loader reads the official split ComfyUI checkpoints directly. It remaps only
+verified tensor layouts at load time, so it does not create a second converted copy. The MLX path
+uses fast scaled dot-product attention, BF16 computation, staged Gemma → transformer → decoder
+unloading, streamed video decode, and optional one-block transformer streaming. Keep
+`low_ram_streaming` off for the normal speed-first path; turn it on when transformer residency is
+more important than per-evaluation latency.
+
+After accepting the [LTX 2.5 license](https://huggingface.co/Lightricks/LTX-2.5), place these files
+in standard ComfyUI model folders. Shared roots configured by `extra_model_paths.yaml` are also
+searched.
+
+| ComfyUI folder | Required file |
+| --- | --- |
+| `ComfyUI/models/diffusion_models/` | `ltx-2.5-22b-distilled-transformer-bf16.safetensors` |
+| `ComfyUI/models/text_encoders/` | `gemma4-12b-with-proj-ltx-2.5-bf16.safetensors` |
+| `ComfyUI/models/vae/` | `ltx-2.5-video-vae-conv-bf16.safetensors` |
+| `ComfyUI/models/vae/` | `ltx-2.5-audio-vae-bf16.safetensors` |
+| `ComfyUI/models/latent_upscale_models/` | `ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors` |
+
+The first full BF16 Apple-Silicon smoke test completed at 768 by 512, 121 frames, and 24 fps in
+96.89 seconds inside the generation node. It used the official 8+3 schedule, staged unloading, and
+the normal non-streamed transformer path. MLX peak allocation was 38.13 GiB. The complete fresh
+ComfyUI process peaked at 41.25 GiB and returned to 0.57 GiB after unloading. The verified MP4 has
+H.264 video and stereo 48 kHz AAC audio. Treat this as an initial functional measurement, not a
+cross-project speed or quality claim.
+
+The Generation Config node also exposes `prompt_context`. This value caps real prompt tokens before
+Gemma. Gemma encodes those real tokens from position zero. The trained audiovisual connector then
+appends learned register tokens to a minimum sequence length of 1024. Earlier adaptive-context
+measurements used an incorrect left-padded connector layout and are not valid performance evidence.
+Generation metadata records the selected prompt cap and per-evaluation timings.
+
+The optional `bf16_mpp_experimental` video feed-forward backend casts the modulated video
+feed-forward inputs to BF16 and uses Metal Performance Primitives for both projections. A matched
+same-process run reduced node time from 77.49 to 69.42 seconds, or 10.42 percent. Sampling time fell
+11.79 percent. MLX peak allocation fell by approximately 156 MiB. The accelerated trajectory is
+not bit-identical and audiovisual coupling changes both video and audio. Keep `reference_fp32` for
+reference behavior. Review both picture and sound before selecting the experimental backend.
 
 ## Live H3 previews and early failure protection
 
@@ -128,15 +180,85 @@ and an ordered prior-video reference. Its matching API prompt is
 - Experimental first-frame, last-frame, and combined first/last-frame (`fl2va`) conditioning
 - Experimental ordered image, video, soundtrack, and audio reference (`ref2va`) conditioning
 - Experimental latent-native motion continuation for dense T2VA and FL2VA sampling
+- Visual first, last, and numbered middle-frame FL2VA conditioning at exact 24 fps positions
 - Sparse timed FL2VA keyframes with local-window or global chained-timeline timestamps
 - Direct staged publication of complete latent chains with synchronized overlap removal
 - Experimental 2.5-to-5-second short windows for chained-generation tests
 - Experimental H3-native 1.5x or 2x latent Hi Res Fix with original-audio preservation
 - Independent visual and audio reference-strength control
 - Synchronized H.264 video and 32 kHz stereo AAC audio
-- 41 composable nodes under `WeeTodd/H3`
+- 42 composable nodes under `WeeTodd/H3`
 - Optional standalone LTX 2.3 T2VA and I2VA pipelines under `WeeTodd/LTX 2.3`
+- Five distilled-model nodes under `WeeTodd/LTX 2.5`; direct official split-checkpoint loading,
+  packed Gemma 4 conditioning, the official 8+3-evaluation two-stage schedule, convolutional video
+  VAE, 48 kHz audio decode, learned latent upscaling, staged unloading, and optional block streaming
+  are implemented. First-render parity and performance remain experimental.
 - Learned LTX latent upscaling for decoded H3 `IMAGE` plus `AUDIO`
+
+## Node catalog
+
+This table is generated from the registered node contracts. Update the node description and
+maturity policy when behavior changes, then run `scripts/update_readme_node_catalog.py`. The
+README and workflow commit gate rejects a stale catalog.
+
+<!-- BEGIN GENERATED NODE CATALOG -->
+| Node | Notes | Category | Status |
+| --- | --- | --- | --- |
+| H3 Component Loader | Describe every MiniMax H3 component. This node does not load tensor weights. | H3 — Loaders | Recommended |
+| H3 Model Preview Override | Attach a true-color TAE preview and optional collapse guard to H3 sampling. Core ML can keep preview decoding on the Apple Neural Engine; MLX remains the fallback. Place this node between the component loader and sampler. | H3 — Sampling and acceleration | Experimental |
+| H3 Quantized Transformer Loader | Select and validate a named mixed-precision H3 transformer without loading weights. Both q8 profiles are approximate and keep BlockCache disabled by default. | H3 — Loaders | Experimental |
+| H3 Component Preflight | Validate MiniMax H3 components and estimate staged memory from file headers. Set available memory to zero when unknown. | H3 — Loaders | Recommended |
+| H3 First Frame | Use one image as the first-frame endpoint for an FL2VA generation. | H3 — Conditioning | Supported |
+| H3 Last Frame | Use one image as the last-frame endpoint for an FL2VA generation. | H3 — Conditioning | Supported |
+| H3 First + Last Frame | Use two images as the first-frame and last-frame endpoints for FL2VA. | H3 — Conditioning | Supported |
+| H3 Chained Timeline | Map global timestamps onto equal-length H3 windows and define exact overlap trimming. | H3 — Continuation | Experimental |
+| H3 Frames | Select first, last, and up to six numbered middle images in one visual frame strip. Frame numbers are one-based; the last frame follows the connected generation duration. | H3 — Conditioning | Supported |
+| H3 Timed Keyframe | Append an FL2VA image at an exact 24 fps local timestamp, or map a global chained timeline timestamp into one window. | H3 — Conditioning | Experimental |
+| H3 Reference Image | Append an image identity, subject, style, or scene reference. Reference order controls the prompt labels and packed rotary positions. A 100% pixel budget matches the output canvas area; lower values reduce persistent reference tokens and higher values retain more source detail. | H3 — Conditioning | Supported |
+| H3 Reference Video | Append a video motion and camera reference, with an optional synchronized soundtrack. Supply the source frame rate explicitly. The recommended default matches the output pixel area; native reference resolution is available but can be dramatically slower. | H3 — Conditioning | Experimental |
+| H3 Reference Audio | Append a standalone voice, sound, or music reference. Ref2VA also requires at least one image or video reference. | H3 — Conditioning | Supported |
+| H3 Encode First / Last Frames | Encode FL2VA prompt vision rows and first/last-frame VAE rows in separate staged phases. Each weighted component unloads before the next phase. | H3 — Conditioning | Supported |
+| H3 Encode Timed Keyframes | Encode up to eight sparse FL2VA images at exact 24 fps timestamps, unloading Qwen3-VL before the video VAE stage. | H3 — Conditioning | Experimental |
+| H3 Encode References | Prepare ordered Ref2VA media, then stage Qwen3-VL, the video VAE, and the audio VAE. Each weighted component unloads before the next stage. | H3 — Conditioning | Experimental |
+| H3 Reference Strength | Adjust how strongly FL2VA or Ref2VA trusts visual and audio condition rows. Defaults preserve the released H3 behavior. | H3 — Conditioning | Experimental |
+| H3 Text Encode (Qwen3-VL) | Encode a text-only H3 prompt with Qwen3-VL. The vision tower stays unloaded. The encoder can unload after it produces conditioning. | H3 — Conditioning | Recommended |
+| H3 Unload Qwen3-VL | Release the process-local Qwen3-VL conditioner and clear the MLX cache. | H3 — Conditioning | Supported |
+| H3 Motion Continuation Context | Copy a synchronized tail from H3 video and audio latents for motion continuation. The recommended 22-frame overlap is about 0.92 seconds at 24 fps. | H3 — Continuation | Experimental |
+| H3 Append Latent Chain Window | Append one synchronized latent window to a validated H3 chained timeline. | H3 — Continuation | Experimental |
+| H3 Sample Video + Audio Latents | Sample synchronized MiniMax H3 video and audio latents with MLX. This node does not load or run either VAE. | H3 — Sampling and acceleration | Recommended |
+| H3 Latent Hi Res Fix | Enlarge an H3 video latent and run a second H3 visual refinement pass. The original synchronized audio latent is returned unchanged. | H3 — Sampling and acceleration | Experimental |
+| H3 LoRA Loader (MLX) | Build a lazy, ordered MiniMax H3 LoRA stack. Validate safetensors headers now and load adapter tensors only when the H3 transformer executes. | H3 — Loaders | Supported |
+| H3 Validated Sampling Preset | Apply a measured dense, trajectory-replay, or Turbo sampling policy. Connect all three typed outputs to the H3 sampler. | H3 — Sampling and acceleration | Recommended |
+| H3 EasyCache (MLX) | Configure joint MLX EasyCache residual reuse for H3 video and audio sampling. Choose quality-first, balanced, or speed-first bounded automatic reuse. | H3 — Sampling and acceleration | Experimental |
+| H3 Trajectory Forecast (MLX) | Experimentally forecast compact post-transformer H3 video and audio features. Current timestep output heads still run on every step. Turbo LoRA is supported. | H3 — Sampling and acceleration | Experimental |
+| H3 BlockCache (MLX) | Always run H3 block zero and the current output heads, then safely reuse the cached joint audio/video residual of later transformer blocks when both modality indicators agree. | H3 — Sampling and acceleration | Experimental |
+| H3 Hierarchical BlockCache (MLX) | Split the 50 H3 blocks into three contiguous segments. Always evaluate each segment's anchor block, accept video and audio together, and reuse eligible segment tails independently. | H3 — Sampling and acceleration | Experimental |
+| H3 Unload Transformer | Release the process-local H3 transformer and clear the MLX cache. | H3 — Sampling and acceleration | Supported |
+| H3 Decode Video VAE | Decode the video stream from synchronized H3 latents with the final video VAE. The audio latent stream remains available on the original latent output. | H3 — Decoding | Supported |
+| H3 Unload Video VAE | Release the process-local H3 video VAE and clear the MLX cache. | H3 — Decoding | Supported |
+| H3 Decode Audio VAE | Decode the audio stream from synchronized H3 latents as 32 kHz stereo audio. The video latent stream remains available on the original latent output. | H3 — Decoding | Supported |
+| H3 Unload Audio VAE | Release the process-local H3 audio VAE and clear the MLX cache. | H3 — Decoding | Supported |
+| H3 Trim Continuation Overlap | Remove the repeated motion-continuation overlap from decoded video and audio, then normalize audio to the exact remaining video duration. | H3 — Continuation | Experimental |
+| H3 Publish Video + Audio | Validate and publish synchronized H3 images and 32 kHz stereo audio as MP4. The node writes an atomic JSON metadata sidecar. | H3 — Output | Supported |
+| H3 Direct Publish Latents (MLX) | Decode synchronized H3 latents directly to MP4 through staged MLX VAEs. The node avoids a persistent ComfyUI IMAGE tensor and unloads each VAE after use. | H3 — Output | Recommended |
+| H3 Direct Publish Chained Timeline (MLX) | Decode an H3 latent chain by VAE stage, remove duplicated joins, force exact 24 fps / 32 kHz duration, and atomically publish one MP4. | H3 — Output | Experimental |
+| H3 Model Loader (MLX) | Describe an MLX MiniMax H3 checkpoint. Weights load lazily at generation time. | H3 — Core and convenience | Legacy/convenience |
+| H3 Generation Config | Choose a clearly labeled aspect ratio and move the short-edge size slider, or use exact dimensions. The live canvas remains on H3's required 32-pixel grid. | H3 — Core and convenience | Recommended |
+| H3 Generate Video + Audio | Generate synchronized video and audio with MiniMax H3 through MLX. | H3 — Core and convenience | Legacy/convenience |
+| H3 Unload MLX Runtime | Release state held by the monolithic H3 runtime. | H3 — Core and convenience | Legacy/convenience |
+| LTX 2.3 Model Loader (MLX) | Select a local LTX 2.3 MLX bundle. No weights load in this node. | LTX 2.3 — Loaders | Supported |
+| LTX 2.3 Generation Config | Configure LTX 2.3 mode, canvas, duration, steps, guidance, and memory policy. | LTX 2.3 — Core | Supported |
+| LTX 2.3 Preflight | Validate the selected LTX 2.3 bundle and mode-specific components before allocation. | LTX 2.3 — Loaders | Recommended |
+| LTX 2.3 Generate Video + Audio | Generate synchronized LTX 2.3 video and 48 kHz stereo audio through MLX. | LTX 2.3 — Core | Experimental |
+| LTX 2.3 Upscaler Loader | Select and preflight a learned LTX 2.3 spatial latent upscaler. | LTX 2.3 — Loaders | Experimental |
+| LTX 2.3 Upscale + Publish | Upscale decoded H3 or other ComfyUI video frames with the LTX latent upscaler and preserve the supplied audio. | LTX 2.3 — Upscaling | Experimental |
+| LTX 2.3 Unload MLX Runtime | Release the process-local LTX 2.3 pipeline. | LTX 2.3 — Core | Supported |
+| LTX 2.5 Component Loader (MLX) | Select LTX 2.5 split components without loading weights or downloading files. | LTX 2.5 — Loaders | Experimental |
+| LTX 2.5 Generation Config | Configure the official distilled 8+3-evaluation LTX 2.5 two-stage schedule. | LTX 2.5 — Core | Experimental |
+| LTX 2.5 Preflight | Validate LTX 2.5 component metadata and architecture requirements before allocation. | LTX 2.5 — Loaders | Experimental |
+| LTX 2.5 Generate Video + Audio | Generate synchronized LTX 2.5 video and audio through the MLX adapter. | LTX 2.5 — Core | Experimental |
+| LTX 2.5 Unload MLX Runtime | Release process-local LTX 2.5 state. | LTX 2.5 — Core | Supported |
+<!-- END GENERATED NODE CATALOG -->
 
 The FL2VA path stages Qwen3-VL vision and video-VAE encoding before transformer sampling. The
 Ref2VA path stages media preparation, Qwen3-VL vision, video-VAE encoding, audio-VAE encoding, and
@@ -152,6 +274,16 @@ Reference images use an output-relative pixel budget. The 100-percent default ma
 canvas area while preserving the source aspect ratio. Values from 50 to 400 percent trade
 reference-token cost against source detail; they do not change the output resolution.
 
+Reference videos provide an additional **temporal density** control. Keep **all frames
+(recommended)** when fidelity has priority. The experimental 50-percent and 25-percent options
+uniformly reduce only the frames sent to the video VAE. Qwen3-VL still inspects the complete
+reference clip, and the packed reference retains the original timeline. A matched 640 by 384
+Ref2VA test reduced mean transformer time from 75.54 seconds per evaluation to 53.29 seconds at
+50-percent density and 42.86 seconds at 25-percent density. The preferred drbaph Step-600 v4
+adapter averaged 53.15 seconds at 50-percent density. The tested moderate-motion scene retained
+both subjects and coherent action, but harder motion, lip sync, cuts, and long references still
+require validation. Full density therefore remains the default.
+
 Place **Reference Strength** after the FL2VA or Ref2VA encoder to adjust how strongly the sampler
 trusts its prepared condition rows. Visual strength defaults to `0.999`; audio strength defaults to
 `1.0`. Lower values add more seeded noise to that modality. Start with visual values from `0.7` to
@@ -162,6 +294,13 @@ settings fixed when comparing strengths.
 Start with [`fl2va_first_frame_workflow.json`](examples/fl2va_first_frame_workflow.json) for image-
 to-video-plus-audio or [`ref2va_image_workflow.json`](examples/ref2va_image_workflow.json) for one
 ordered image reference. Replace the placeholder input image and edit the prompt before queuing.
+
+For several visual anchors in one clip, use **H3 Frames** with **Encode Timed Keyframes**. The
+Frames editor starts with First and Last slots. Select a row or bottom thumbnail to show that image
+in the large preview, and use **Add Frame** for up to six middle images. Enter middle positions as
+one-based frame numbers: `001` is First, while Last follows the aligned frame count from the
+connected Generation Config. This keeps the endpoint correct when duration changes. Duplicate
+positions, missing images, and middle positions outside the clip fail before model loading.
 
 ## Motion continuation
 
@@ -356,7 +495,7 @@ Load [`ltx23_t2va_two_stage.json`](workflows/ltx23_t2va_two_stage.json) for the 
 LTX 2.3 graph. The matching API prompt is
 [`ltx23_t2va_two_stage_api.json`](examples/ltx23_t2va_two_stage_api.json).
 
-The graph contains four nodes:
+The graph contains four executable nodes plus one setup note:
 
 | Order | Node | Purpose |
 | ---: | --- | --- |
@@ -614,7 +753,7 @@ Load
 ComfyUI. The matching API prompt is
 [`examples/t2va_low_memory_paged_api.json`](examples/t2va_low_memory_paged_api.json).
 
-The graph contains six nodes:
+The graph contains six executable nodes plus one setup note:
 
 | Order | Node | Purpose |
 | ---: | --- | --- |
@@ -663,6 +802,23 @@ time order.
 Run **Component Preflight** before generation. Do not queue the sampler if preflight reports a
 missing file, unsupported task, incompatible checkpoint, or negative memory headroom.
 
+Before describing a saved workflow as runtime-ready, validate the matching API prompt against the
+target ComfyUI installation:
+
+```bash
+COMFYUI_ROOT=/path/to/ComfyUI
+
+"$COMFYUI_ROOT/.venv/bin/python" scripts/preflight_h3_workflow.py \
+  --project . \
+  --workflow examples/h3_384p_turbo_4real_api.json \
+  --comfy-root "$COMFYUI_ROOT"
+```
+
+Portable workflow tests reject absolute paths and parent traversal. They do not prove that model
+files exist. The live command resolves every component through the active ComfyUI model registry,
+validates component files without loading full weights, validates the required LoRA, and emits
+`"runtime_ready": true` only after all checks pass.
+
 For the published artifacts, preflight should report:
 
 - Transformer paging format: `weetodd-h3-paged-v1`
@@ -706,6 +862,26 @@ EasyCache, BlockCache, Hierarchical BlockCache, and Trajectory Forecast are mutu
 They can change video and audio output. Turbo LoRA with a cache also requires the explicit
 experimental opt-in. None of these options belongs in the first low-memory smoke test.
 
+A matched 640 by 384 Turbo experiment used the drbaph v4 step-600 adapter and the same prompt and
+seed in four clean ComfyUI processes. Seven full-schedule Turbo evaluations completed in 233.17
+seconds. EasyCache speed reuse reduced this to four real evaluations plus three reused transitions:
+150.51 seconds with `output_residual` and 152.70 seconds with
+`core_residual_fresh_heads`. The accepted staged-quality recipe used two base evaluations followed
+by four Turbo evaluations and completed in 203.49 seconds. All four outputs contained 124 video
+frames plus stereo 32 kHz audio and peaked near 14.9 GB. The cache variants are useful speed
+experiments, but they do not replace the staged 2+4 quality preset; review both video and audio for
+each prompt.
+
+EasyCache offers two reuse strategies. `output_residual` is the compatible default and stores the
+small final video-and-audio velocity residual. Experimental `core_residual_fresh_heads` stores the
+larger packed transformer-core residual, skips all transformer blocks on a hit, and still runs the
+current timestep's final normalization and audiovisual output heads. It always runs the final
+sampling transition without reuse. Measure complete ComfyUI peak memory before adopting the
+experimental strategy because its hidden-state cache is larger. A matched 640 by 384 validation
+found nearly identical speed to output-residual reuse, a 101.9 MB cache instead of 3.46 MB, only a
+small video-similarity improvement, and no restoration of dense audio structure. Keep the strategy
+for research comparisons; it is not a recommended preset.
+
 Trajectory Forecast provides an optional `offline_smoothing_replay` mode for audio-sensitive runs.
 The first pass captures actual joint video and audio features. A transformer-free second pass
 restarts from the original latents, reuses the actual anchors, and reconstructs skipped steps from
@@ -741,7 +917,9 @@ the Euler schedule and loads a required Turbo adapter only when sampling starts.
 | Ref2VA four-reference BF16 with Forward Attention replay | 20 | Up to 11 | Four ordered image references, normal-memory BF16 sampling, guarded replay |
 | Turbo, Larry EMA-850 | 5 | 4 | Matching Turbo LoRA |
 | Turbo, Larry v4 step-600 | 5 | 4 | Matching Turbo LoRA |
+| Turbo, drbaph v4 step-600, 384p low-memory | 5 | 4 | Dense Turbo evaluations with no cache |
 | Staged Turbo, drbaph v4 step-600 | 7 | 6 | Two base evaluations, then four LoRA evaluations |
+| Staged Turbo, drbaph v4 step-600, 384p low-memory | 7 | 6 | Measured 640 by 384 two-base-plus-four-Turbo recipe |
 | One-shot staged Turbo, 15-second quality baseline | 7 | 6 total | One continuous 15-second request |
 | Chained staged Turbo, 15-second repaired chain | 7 | 6 per window | Four windows, 22-frame context, repaired A/V joins |
 | Turbo, LightX2V full rank | 5 | 4 | Matching Turbo LoRA |
@@ -749,10 +927,31 @@ the Euler schedule and loads a required Turbo adapter only when sampling starts.
 
 The [`workflows/`](workflows/) directory contains ready-to-load ComfyUI workflows for the measured
 single-window and chained presets. Install a workflow's named LoRA in a ComfyUI LoRA model folder
-before loading a Turbo workflow. WeeTodd does not bundle or download adapters.
+before loading a Turbo workflow. WeeTodd does not bundle or download adapters. Every shipped UI
+workflow includes a **Setup and model downloads** note. Read that note first. It lists the required
+model pages, relative paths, LoRA file, and input placeholders for that specific graph.
 
 The single-window preset workflows are:
 
+- [`h3_384p_turbo_4real.json`](workflows/h3_384p_turbo_4real.json) uses five Euler schedule points
+  for exactly four drbaph Turbo evaluations. It uses the low-memory Q8 component path, staged
+  unloading, and no cache or trajectory forecast. An equivalent clean-process runtime graph
+  completed in 150.97 seconds, peaked at 14.951 GB, and published 124 frames with stereo 32-kHz
+  audio. The saved workflow remains portable until its component paths pass live preflight in the
+  target ComfyUI installation. Use this schedule for the recommended 384p memory/performance
+  balance. Use the staged two-base-plus-four-Turbo schedule when quality has priority over runtime.
+- [`h3_384p_staged_turbo_2base_4turbo.json`](workflows/h3_384p_staged_turbo_2base_4turbo.json)
+  is the measured five-second, 640 by 384 low-memory staged-Turbo workflow. It executes two base
+  evaluations and then four evaluations with the drbaph v4 step-600 adapter. An equivalent
+  clean-process runtime graph completed in 203.49 seconds, peaked at 14.908 GB, and published 124
+  frames with stereo 32-kHz audio. Run live workflow preflight before calling the saved graph
+  runtime-ready.
+- [`h3_384p_ref2va_2char_video_audio_4real.json`](workflows/h3_384p_ref2va_2char_video_audio_4real.json)
+  is a five-second, 640 by 384 strict Ref2VA comparison graph with two ordered character sheets,
+  one video reference, and its synchronized soundtrack as a separate audio reference. Reference
+  images and video default to output-matched pixel area. The saved API prompt is
+  [`h3_384p_ref2va_2char_video_audio_4real_api.json`](examples/h3_384p_ref2va_2char_video_audio_4real_api.json).
+  Reference media is not bundled; replace the portable input filenames before queuing.
 - [`h3_512p_dense_baseline.json`](workflows/h3_512p_dense_baseline.json)
 - [`h3_512p_trajectory_replay.json`](workflows/h3_512p_trajectory_replay.json)
 - [`h3_512p_turbo_larry_ema850.json`](workflows/h3_512p_turbo_larry_ema850.json)

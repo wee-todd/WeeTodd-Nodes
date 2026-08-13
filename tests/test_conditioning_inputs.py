@@ -9,6 +9,7 @@ from wee_todd_nodes.conditioning_inputs import (
     H3TimedKeyframe,
     H3TimedKeyframeStack,
     resolve_reference_image_canvas,
+    resolve_reference_video_canvas,
 )
 
 
@@ -110,12 +111,35 @@ def test_reference_video_validates_frames_fps_and_soundtrack():
             fps=24.0,
             soundtrack=_audio(channels=3),
         ).validate()
+    with pytest.raises(ValueError, match="temporal density"):
+        H3ReferenceInput(
+            "video",
+            _tensor(22, 384, 640, 3),
+            fps=24.0,
+            temporal_density="random",
+        ).validate()
 
 
 def test_reference_image_pixel_budget_scales_area_and_preserves_aspect():
     assert resolve_reference_image_canvas(1600, 900, 640, 384, 100) == (672, 384)
     assert resolve_reference_image_canvas(1600, 900, 640, 384, 50) == (480, 256)
     assert resolve_reference_image_canvas(1600, 900, 640, 384, 400) == (1312, 736)
+
+
+def test_reference_image_pixel_budget_never_enlarges_small_source():
+    assert resolve_reference_image_canvas(320, 192, 640, 384, 400) == (320, 192)
+
+
+def test_reference_video_canvas_never_enlarges_small_source():
+    assert resolve_reference_video_canvas(
+        320, 192, 640, 384, "native H3 reference canvas (high detail / slow)"
+    ) == (192, 320)
+
+
+def test_reference_video_canvas_defaults_to_output_area():
+    assert resolve_reference_video_canvas(
+        1344, 768, 640, 384, "match output (recommended)"
+    ) == (384, 640)
 
 
 def test_reference_image_pixel_budget_is_bounded():

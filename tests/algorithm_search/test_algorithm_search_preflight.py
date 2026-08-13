@@ -54,6 +54,24 @@ def test_profile_preflight_accepts_sharded_transformer_directory(tmp_path):
     )
 
 
+def test_profile_preflight_accepts_paged_transformer_and_text_encoder(tmp_path):
+    transformer = tmp_path / "transformer"
+    text_encoder = tmp_path / "text_encoder"
+    _touch(transformer / "config.json")
+    _touch(transformer / "paged_manifest.json")
+    _touch(text_encoder / "paged_text_encoder_manifest.json")
+    _touch(tmp_path / "tokenizer.json")
+
+    validate_profile_components(
+        model_index=_touch(tmp_path / "model_index.json"),
+        transformer=transformer,
+        text_encoder_directory=text_encoder,
+        processor_directory=tmp_path,
+        tokenizer_directory=tmp_path,
+        prompt_file=_touch(tmp_path / "prompt.txt"),
+    )
+
+
 def test_profile_preflight_rejects_incomplete_transformer_directory(tmp_path):
     transformer = tmp_path / "transformer"
     transformer.mkdir()

@@ -15,6 +15,7 @@ import mlx.core as mx
 import mlx.nn as nn
 from mlx.utils import tree_flatten, tree_unflatten
 
+from .page_prefetch import SequentialPagePrefetch
 from .paged_checkpoint import PagedTensorStore, PageRecord, _sha256
 
 PAGED_QWEN_FORMAT = "weetodd-h3-qwen-paged-v1"
@@ -91,10 +92,28 @@ class PagedTextEncoderManifest:
 class PagedTextLayerExecutor:
     """Materialize and retire one truncated Qwen decoder layer at a time."""
 
-    def __init__(self, manifest: PagedTextEncoderManifest, text_config):
+    def __init__(
+        self,
+        manifest: PagedTextEncoderManifest,
+        text_config,
+        *,
+        prefetch: bool | None = None,
+    ):
         self.manifest = manifest
         self.text_config = text_config
         self.store = PagedTensorStore(manifest)
+        if prefetch is None:
+            # Read-ahead improves the cold-storage case by overlapping the next page with
+            # current-layer compute, but it adds memory-bandwidth work once macOS already has
+            # every page cached. Keep it opt-in until the runtime can identify that state.
+            value = os.environ.get("WEETODD_H3_QWEN_PREFETCH", "0").strip().lower()
+            prefetch = value not in {"0", "false", "no", "off"}
+        self.prefetch = SequentialPagePrefetch(
+            manifest.root,
+            manifest.layers,
+            enabled=prefetch,
+            thread_name="h3-qwen-prefetch",
+        )
 
     @property
     def num_layers(self) -> int:
@@ -104,6 +123,9 @@ class PagedTextLayerExecutor:
     def layer(self, index: int):
         from mlx_vlm.models.qwen3_vl.language import Qwen3VLDecoderLayer
 
+        # A failed speculative read is not fatal. The normal mapped load below remains the source
+        # of truth and reports any real checkpoint error with its existing detailed message.
+        self.prefetch.wait(index)
         values = self.store.load_block(index)
         layer = Qwen3VLDecoderLayer(self.text_config, index)
         prefix = f"model.layers.{index}."
@@ -133,6 +155,7 @@ class PagedTextLayerExecutor:
                 )
             layer.update(tree_unflatten(list(local.items())))
             mx.eval(layer.parameters())
+            self.prefetch.start(index + 1)
             yield layer
         finally:
             local.clear()
@@ -140,12 +163,20 @@ class PagedTextLayerExecutor:
             del layer
             self.store.release()
 
-    def report(self) -> dict[str, int | str]:
+    def close(self) -> None:
+        self.prefetch.close()
+
+    def report(self) -> dict[str, int | float | bool | str]:
+        prefetch = self.prefetch.report()
+        prefetch["prefetch_max_page_bytes"] = prefetch.pop(
+            "prefetch_max_window_bytes"
+        )
         return {
             "format": PAGED_QWEN_FORMAT,
             "layers_loaded": self.store.pages_loaded,
             "peak_layer_bytes": self.store.peak_page_bytes,
             "fixed_bytes": self.manifest.fixed.tensor_bytes,
+            **prefetch,
         }
 
 

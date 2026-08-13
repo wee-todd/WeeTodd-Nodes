@@ -72,6 +72,80 @@ def _output_directory() -> Path:
         return Path.cwd() / "output"
 
 
+def _load_h3_frame_image(image_name: str):
+    """Load one annotated ComfyUI input path only when the frame node executes."""
+    try:
+        import folder_paths
+        import nodes as comfy_nodes
+    except ImportError as error:
+        raise RuntimeError(
+            "H3 Frames image loading requires a running ComfyUI installation."
+        ) from error
+    if not folder_paths.exists_annotated_filepath(image_name):
+        raise ValueError(f"H3 Frames image does not exist in a ComfyUI media folder: {image_name}")
+    image, _mask = comfy_nodes.LoadImage().load_image(image_name)
+    return image
+
+
+def _frames_from_manifest(frame_manifest: str, num_frames: int, image_loader=None):
+    """Convert the one-based Frames editor manifest to the existing timed-keyframe contract."""
+    if image_loader is None:
+        image_loader = _load_h3_frame_image
+    try:
+        entries = json.loads(frame_manifest)
+    except json.JSONDecodeError as error:
+        raise ValueError(
+            "H3 Frames data is not valid JSON; reopen the node and select frames."
+        ) from error
+    if not isinstance(entries, list) or not entries:
+        raise ValueError("H3 Frames requires at least one selected image.")
+    if len(entries) > 8:
+        raise ValueError("H3 Frames supports at most eight images per generation.")
+
+    resolved = []
+    roles = set()
+    for index, entry in enumerate(entries, start=1):
+        if not isinstance(entry, dict):
+            raise ValueError(f"H3 Frames entry {index} must be an object.")
+        role = entry.get("role", "middle")
+        if role not in {"first", "middle", "last"}:
+            raise ValueError(f"H3 Frames entry {index} has an unknown role: {role!r}.")
+        if role in {"first", "last"}:
+            if role in roles:
+                raise ValueError(f"H3 Frames can contain only one {role} image.")
+            roles.add(role)
+        image_name = entry.get("image")
+        if not isinstance(image_name, str) or not image_name.strip():
+            raise ValueError(f"H3 Frames entry {index} does not have a selected image.")
+        if role == "first":
+            frame_number = 1
+        elif role == "last":
+            frame_number = num_frames
+        else:
+            frame_number = entry.get("frame")
+            if isinstance(frame_number, bool) or not isinstance(frame_number, int):
+                raise ValueError(f"H3 Frames middle entry {index} needs an integer frame number.")
+            if not 2 <= frame_number < num_frames:
+                raise ValueError(
+                    f"H3 Frames middle entry {index} must be between frame 2 and "
+                    f"{num_frames - 1}."
+                )
+        resolved.append((frame_number, image_name.strip()))
+
+    frame_numbers = [item[0] for item in resolved]
+    if len(set(frame_numbers)) != len(frame_numbers):
+        raise ValueError("H3 Frames contains two images assigned to the same frame.")
+    stack = H3TimedKeyframeStack()
+    for frame_number, image_name in sorted(resolved):
+        stack = stack.append(
+            H3TimedKeyframe(
+                image_loader(image_name),
+                timestamp_seconds=(frame_number - 1) / 24.0,
+            )
+        )
+    return stack
+
+
 def _publication_environment(ffmpeg_path: str = "") -> dict[str, object]:
     """Describe the output and encoder state seen by this ComfyUI process."""
     from minimax_h3_mlx.media import ffmpeg_status
@@ -139,6 +213,21 @@ def _h3_preview_contact_sheet(frames, completed: int, total: int):
         fill="white",
     )
     return sheet
+
+
+def _save_h3_preview_contact_sheet(image, completed: int, total: int) -> Path | None:
+    """Publish a stable sampler-preview artifact beside normal ComfyUI outputs."""
+    try:
+        import folder_paths
+    except ImportError:
+        return None
+    directory = Path(folder_paths.get_output_directory()) / "WeeTodd" / "previews"
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"h3_live_preview_eval_{completed:02d}_of_{total:02d}.jpg"
+    temporary = path.with_suffix(".tmp.jpg")
+    image.save(temporary, format="JPEG", quality=92)
+    temporary.replace(path)
+    return path
 
 
 _COMPONENT_MODEL_CATEGORIES = {
@@ -313,6 +402,30 @@ _H3_VALIDATED_SAMPLING_PRESETS = {
         "policy": "turbo",
         "lora": "minimax_h3_turbo_v4_step600_ema.safetensors",
     },
+    "Turbo — drbaph v4 step-600 — 5 points / 4 evaluations": {
+        "steps": 5,
+        "policy": "turbo",
+        "lora": "minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors",
+    },
+    "Turbo — drbaph v4 step-600 — 384p low-memory — 5 points / 4 evaluations": {
+        "steps": 5,
+        "policy": "turbo",
+        "lora": "minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors",
+        "measurement": {
+            "task": "t2va",
+            "seed": 0,
+            "canvas": [640, 384],
+            "duration_seconds": 5.0,
+            "memory_mode": "low_memory_bf16",
+            "transformer_evaluations": 4,
+            "cache": "disabled",
+            "complete_workflow_seconds": 150.965,
+            "complete_process_peak_bytes": 14951286752,
+            "seconds_per_evaluation": 28.621493291517254,
+            "output_frames": 124,
+            "audio_sample_rate": 32000,
+        },
+    },
     "Staged Turbo — drbaph v4 step-600 — 2 base + 4 Turbo evaluations": {
         "steps": 7,
         "policy": "turbo",
@@ -328,6 +441,26 @@ _H3_VALIDATED_SAMPLING_PRESETS = {
             "sampling_seconds": 1275.5262,
             "complete_workflow_seconds": 1415.689,
             "av_drift_seconds": 0.0083333,
+        },
+    },
+    "Staged Turbo — drbaph v4 step-600 — 384p low-memory — 2 base + 4 Turbo evaluations": {
+        "steps": 7,
+        "policy": "turbo",
+        "lora": "minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors",
+        "start_after_evaluations": 2,
+        "measurement": {
+            "task": "t2va",
+            "seed": 0,
+            "canvas": [640, 384],
+            "duration_seconds": 5.0,
+            "memory_mode": "low_memory_bf16",
+            "transformer_evaluations": 6,
+            "base_evaluations": 2,
+            "lora_evaluations": 4,
+            "complete_workflow_seconds": 203.493,
+            "complete_process_peak_bytes": 14908409896,
+            "output_frames": 124,
+            "audio_sample_rate": 32000,
         },
     },
     "One-shot staged Turbo — drbaph v4 step-600 — 15-second quality baseline": {
@@ -637,7 +770,7 @@ class WeeToddH3PreviewOverride:
                         ),
                     },
                 ),
-            }
+            },
         }
 
     RETURN_TYPES = ("WEETODD_H3_COMPONENTS",)
@@ -941,6 +1074,49 @@ class WeeToddH3TimedKeyframe:
         return stack, json.dumps(stack.metadata(), indent=2, sort_keys=True)
 
 
+class WeeToddH3Frames:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "config": ("WEETODD_H3_CONFIG",),
+                "frame_manifest": (
+                    "STRING",
+                    {
+                        "default": "[]",
+                        "multiline": True,
+                        "tooltip": "Managed by the visual frame strip. One-based frame numbers.",
+                    },
+                ),
+            }
+        }
+
+    RETURN_TYPES = ("WEETODD_H3_TIMED_KEYFRAMES", "STRING")
+    RETURN_NAMES = ("keyframes", "keyframe_info")
+    FUNCTION = "configure"
+    CATEGORY = "WeeTodd/H3/conditioning"
+    DESCRIPTION = (
+        "Select first, last, and up to six numbered middle images in one visual frame strip. "
+        "Frame numbers are one-based; the last frame follows the connected generation duration."
+    )
+
+    def configure(self, config, frame_manifest):
+        config.validate()
+        from minimax_h3_mlx.packing import align_num_frames
+
+        num_frames = align_num_frames(round(config.duration_seconds * 24))
+        stack = _frames_from_manifest(frame_manifest, num_frames)
+        info = stack.metadata(num_frames)
+        info.update(
+            {
+                "editor_frame_numbering": "one_based",
+                "first_frame": 1,
+                "last_frame": num_frames,
+            }
+        )
+        return stack, json.dumps(info, indent=2, sort_keys=True)
+
+
 def _append_reference(previous_references, reference):
     stack = (previous_references or H3ReferenceStack()).append(reference)
     return stack, json.dumps(stack.metadata(), indent=2, sort_keys=True)
@@ -1001,8 +1177,39 @@ class WeeToddH3ReferenceVideo:
             "required": {
                 "video_frames": ("IMAGE",),
                 "fps": ("FLOAT", {"default": 24.0, "min": 0.01, "max": 240.0, "step": 0.01}),
+                "video_size": (
+                    [
+                        "match output (recommended)",
+                        "native H3 reference canvas (high detail / slow)",
+                    ],
+                    {
+                        "default": "match output (recommended)",
+                        "tooltip": (
+                            "Match output preserves aspect and downsizes only to the generated "
+                            "video's pixel area. Native H3 canvas may improve fine reference "
+                            "detail, but persistent reference tokens make every forward pass "
+                            "slower and increase memory use."
+                        ),
+                    },
+                ),
             },
             "optional": {
+                "temporal_density": (
+                    [
+                        "all frames (recommended)",
+                        "uniform 50% (experimental)",
+                        "uniform 25% (experimental)",
+                    ],
+                    {
+                        "default": "all frames (recommended)",
+                        "tooltip": (
+                            "Experimental uniform sampling reduces persistent reference-video "
+                            "tokens while retaining Qwen inspection of the full clip and rotary "
+                            "timestamps across the original duration. Reduced density can change "
+                            "motion or identity fidelity."
+                        ),
+                    },
+                ),
                 "soundtrack": ("AUDIO",),
                 "previous_references": ("WEETODD_H3_REFERENCES",),
             },
@@ -1014,13 +1221,29 @@ class WeeToddH3ReferenceVideo:
     CATEGORY = "WeeTodd/H3/conditioning"
     DESCRIPTION = (
         "Append a video motion and camera reference, with an optional synchronized soundtrack. "
-        "Supply the source frame rate explicitly."
+        "Supply the source frame rate explicitly. The recommended default matches the output "
+        "pixel area; native reference resolution is available but can be dramatically slower."
     )
 
-    def append(self, video_frames, fps, soundtrack=None, previous_references=None):
+    def append(
+        self,
+        video_frames,
+        fps,
+        video_size="match output (recommended)",
+        temporal_density="all frames (recommended)",
+        soundtrack=None,
+        previous_references=None,
+    ):
         return _append_reference(
             previous_references,
-            H3ReferenceInput("video", video_frames, fps=fps, soundtrack=soundtrack),
+            H3ReferenceInput(
+                "video",
+                video_frames,
+                fps=fps,
+                soundtrack=soundtrack,
+                video_size_mode=video_size,
+                temporal_density=temporal_density,
+            ),
         )
 
 
@@ -1669,6 +1892,7 @@ class WeeToddH3Sample:
                 check_interrupted()
             if progress is not None and update.frames is not None:
                 image = _h3_preview_contact_sheet(update.frames, completed, total)
+                _save_h3_preview_contact_sheet(image, completed, total)
                 progress.update_absolute(
                     completed,
                     total,
@@ -1725,6 +1949,10 @@ class WeeToddH3Sample:
             "transformer_evaluations": latents.transformer_evaluations,
             "easycache_skipped_steps": latents.easycache_skipped_steps,
             "easycache_resolved_threshold": latents.easycache_resolved_threshold,
+            "easycache_reuse_strategy": getattr(
+                latents, "easycache_reuse_strategy", None
+            ),
+            "easycache_cache_bytes": getattr(latents, "easycache_cache_bytes", 0),
             "easycache": asdict(easycache) if easycache is not None else None,
             "blockcache_hits": getattr(latents, "blockcache_hits", 0),
             "blockcache_resolved_threshold": getattr(
@@ -1778,6 +2006,7 @@ class WeeToddH3Sample:
                 "transformer": getattr(latents, "paging_report", None),
                 "text_encoder": getattr(latents, "text_encoder_paging_report", None),
             },
+            "prepared_state": getattr(latents, "prepared_state_report", None),
             "preview_policy": (
                 {
                     "model": Path(preview_config.tae_path).name,
@@ -1916,6 +2145,7 @@ class WeeToddH3LatentHiresFix:
                 check_interrupted()
             if progress is not None and update.frames is not None:
                 image = _h3_preview_contact_sheet(update.frames, completed, total)
+                _save_h3_preview_contact_sheet(image, completed, total)
                 progress.update_absolute(
                     completed,
                     total,
@@ -2215,7 +2445,23 @@ class WeeToddH3EasyCache:
                     "FLOAT",
                     {"default": 0.25, "min": 0.0, "max": 0.5, "step": 0.05},
                 ),
-            }
+            },
+            "optional": {
+                "reuse_strategy": (
+                    ["output_residual", "core_residual_fresh_heads"],
+                    {"default": "output_residual"},
+                ),
+                "allow_turbo_experimental": (
+                    "BOOLEAN",
+                    {
+                        "default": False,
+                        "tooltip": (
+                            "Allow Turbo LoRA with EasyCache for controlled comparisons. "
+                            "This combination can change video and audio."
+                        ),
+                    },
+                ),
+            },
         }
 
     RETURN_TYPES = ("WEETODD_H3_EASYCACHE",)
@@ -2235,6 +2481,8 @@ class WeeToddH3EasyCache:
         end_percent,
         auto_multiplier,
         max_skip_fraction,
+        reuse_strategy="output_residual",
+        allow_turbo_experimental=False,
     ):
         from minimax_h3_mlx.easycache import H3EasyCacheConfig
 
@@ -2245,6 +2493,8 @@ class WeeToddH3EasyCache:
             end_percent=end_percent,
             auto_multiplier=auto_multiplier,
             max_skip_fraction=max_skip_fraction,
+            reuse_strategy=reuse_strategy,
+            allow_turbo_experimental=allow_turbo_experimental,
         )
         config.validate()
         return (config,)
@@ -3453,6 +3703,7 @@ NODE_CLASS_MAPPINGS = {
     "WeeToddH3LastFrame": WeeToddH3LastFrame,
     "WeeToddH3FirstLastFrame": WeeToddH3FirstLastFrame,
     "WeeToddH3ChainedTimeline": WeeToddH3ChainedTimeline,
+    "WeeToddH3Frames": WeeToddH3Frames,
     "WeeToddH3TimedKeyframe": WeeToddH3TimedKeyframe,
     "WeeToddH3ReferenceImage": WeeToddH3ReferenceImage,
     "WeeToddH3ReferenceVideo": WeeToddH3ReferenceVideo,
@@ -3496,6 +3747,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "WeeToddH3LastFrame": "WeeTodd H3 Last Frame",
     "WeeToddH3FirstLastFrame": "WeeTodd H3 First + Last Frame",
     "WeeToddH3ChainedTimeline": "WeeTodd H3 Chained Timeline",
+    "WeeToddH3Frames": "WeeTodd H3 Frames",
     "WeeToddH3TimedKeyframe": "WeeTodd H3 Timed Keyframe",
     "WeeToddH3ReferenceImage": "WeeTodd H3 Reference Image",
     "WeeToddH3ReferenceVideo": "WeeTodd H3 Reference Video",
@@ -3542,3 +3794,15 @@ from .ltx_nodes import (  # noqa: E402
 
 NODE_CLASS_MAPPINGS.update(LTX23_NODE_CLASS_MAPPINGS)
 NODE_DISPLAY_NAME_MAPPINGS.update(LTX23_NODE_DISPLAY_NAME_MAPPINGS)
+
+# LTX 2.5 uses its own split-component contract and never aliases LTX 2.3
+# checkpoints or Gemma 3 state. Imports remain lightweight until execution.
+from .ltx25_nodes import (  # noqa: E402
+    NODE_CLASS_MAPPINGS as LTX25_NODE_CLASS_MAPPINGS,
+)
+from .ltx25_nodes import (  # noqa: E402
+    NODE_DISPLAY_NAME_MAPPINGS as LTX25_NODE_DISPLAY_NAME_MAPPINGS,
+)
+
+NODE_CLASS_MAPPINGS.update(LTX25_NODE_CLASS_MAPPINGS)
+NODE_DISPLAY_NAME_MAPPINGS.update(LTX25_NODE_DISPLAY_NAME_MAPPINGS)

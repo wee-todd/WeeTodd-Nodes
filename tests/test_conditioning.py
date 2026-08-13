@@ -127,10 +127,17 @@ def test_conditioning_cache_can_unload_after_encode(tmp_path: Path):
 
 
 def test_conditioning_retains_paged_encoder_report_after_unload(tmp_path: Path):
+    closed = False
+
+    def close():
+        nonlocal closed
+        closed = True
+
     def factory(spec):
         encoder = FakeEncoder(spec)
         encoder.paged_layers = SimpleNamespace(
-            report=lambda: {"format": "weetodd-h3-qwen-paged-v1", "layers_loaded": 50}
+            report=lambda: {"format": "weetodd-h3-qwen-paged-v1", "layers_loaded": 50},
+            close=close,
         )
         return encoder
 
@@ -142,6 +149,7 @@ def test_conditioning_retains_paged_encoder_report_after_unload(tmp_path: Path):
         "format": "weetodd-h3-qwen-paged-v1",
         "layers_loaded": 50,
     }
+    assert closed is True
 
 
 def test_conditioning_cache_reuses_compatible_encoder(tmp_path: Path):
@@ -291,7 +299,7 @@ def test_comfy_entrypoint_imports_without_mlx():
         "submodule_search_locations=[str(root)]); "
         "module=importlib.util.module_from_spec(spec); "
         "sys.modules[spec.name]=module; spec.loader.exec_module(module); "
-        "assert len(module.NODE_CLASS_MAPPINGS) == 47; "
+        "assert len(module.NODE_CLASS_MAPPINGS) == 54; "
         "assert 'mlx' not in sys.modules and 'mlx.core' not in sys.modules"
     )
 
