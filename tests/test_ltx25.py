@@ -266,6 +266,34 @@ def test_ltx25_official_parity_preset_pins_recipe_and_preserves_extra_values():
     }
 
 
+def test_ltx25_high_quality_preset_pins_verified_1088p_recipe():
+    values = apply_ltx25_generation_preset(
+        LTX25_GENERATION_PRESETS[2],
+        {
+            "width": 768,
+            "height": 512,
+            "duration_seconds": 9.0,
+            "frame_rate": 30.0,
+            "seed": 584293325,
+            "low_memory": False,
+            "low_ram_streaming": True,
+            "prompt_context": "128",
+            "feed_forward_backend": "bf16_mpp_experimental",
+        },
+    )
+    assert values == {
+        "width": 1920,
+        "height": 1088,
+        "duration_seconds": 5.0,
+        "frame_rate": 24.0,
+        "seed": 584293325,
+        "low_memory": True,
+        "low_ram_streaming": False,
+        "prompt_context": "official_1024",
+        "feed_forward_backend": "reference_fp32",
+    }
+
+
 def test_ltx25_runtime_requires_versioned_backend_and_filters_signature(tmp_path, monkeypatch):
     import mlx.core as mx
 

@@ -171,8 +171,9 @@ class WeeToddLTX25GenerationConfig:
                     {
                         "default": LTX25_GENERATION_PRESETS[0],
                         "tooltip": (
-                            "Select the official-parity recipe or Custom to use the controls. "
-                            "The selected seed is always preserved."
+                            "Select a validated two-stage recipe or Custom to use the controls. "
+                            "The selected seed is always preserved. The 1920×1088 option is "
+                            "substantially slower and requires more unified memory."
                         ),
                     },
                 ),

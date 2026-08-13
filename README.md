@@ -22,9 +22,19 @@ ancestral evaluations at half resolution, the learned 2× latent upscaler, then 
 ancestral evaluations at full resolution. The default 768 by 512, 121-frame, 24 fps graph produces
 synchronized 48 kHz audio and video. It accepts an optional first frame for I2V.
 
+[`ltx25_1920x1088_distilled_two_stage.json`](workflows/ltx25_1920x1088_distilled_two_stage.json)
+uses the same quality path at 1920 by 1088. Its first stage runs at 960 by 544 before the learned
+2× latent upscale and full-resolution refinement. Use it when final spatial detail matters and the
+machine has sufficient unified memory; keep the 768 by 512 workflow as the faster starting point.
+
 Select **Official parity — 768×512, 5 s, reference FP32, 8+3 ancestral** for the validated starting
 recipe. The preset keeps the user-selected seed. Select **Custom** before changing its pinned
 resolution, duration, memory, prompt-context, or feed-forward fields.
+
+Select **High quality — 1920×1088, 5 s, reference FP32, 8+3 ancestral** for the verified
+high-resolution recipe. A matched five-second run with seed 584293325 completed in 599.02 seconds
+and produced a 1920 by 1088 H.264 video with stereo 48 kHz AAC audio. Treat that runtime as a
+single-machine measurement, not a general performance guarantee.
 
 The project-native loader reads the official split ComfyUI checkpoints directly. It remaps only
 verified tensor layouts at load time, so it does not create a second converted copy. The MLX path

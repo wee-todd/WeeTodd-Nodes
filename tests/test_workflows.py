@@ -244,6 +244,32 @@ def test_ltx23_standalone_ui_workflow_links_are_consistent():
         assert target_input["type"] == link_type
 
 
+def test_ltx25_high_quality_workflow_uses_verified_preset_and_prompt():
+    workflow = json.loads(
+        (ROOT / "workflows" / "ltx25_1920x1088_distilled_two_stage.json").read_text()
+    )
+    nodes = _execution_node_map(workflow)
+
+    assert len(nodes) == 4
+    assert nodes[2]["widgets_values"] == [
+        "High quality — 1920×1088, 5 s, reference FP32, 8+3 ancestral",
+        1920,
+        1088,
+        5.0,
+        24.0,
+        584293325,
+        True,
+        False,
+        "official_1024",
+        "reference_fp32",
+    ]
+    assert nodes[4]["widgets_values"][1] == "WeeTodd/LTX25_1920x1088_high_quality"
+    prompt = nodes[4]["widgets_values"][0]
+    assert "quiet neighborhood bakery at dawn" in prompt
+    assert "Well, you are ambitious." in prompt
+    assert "clean synchronized speech" in prompt
+
+
 def test_h3_to_ltx23_upscale_api_preserves_comfy_image_and_audio_contracts():
     prompt = json.loads((ROOT / "examples" / "h3_to_ltx23_2x_upscale_api.json").read_text())
 
