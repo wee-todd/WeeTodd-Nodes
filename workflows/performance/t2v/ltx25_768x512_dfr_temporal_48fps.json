@@ -74,7 +74,7 @@
         "Node name for S&R": "WeeToddLTX25GenerationConfig"
       },
       "widgets_values": [
-        "Official parity — 768×512, 5 s, reference FP32, 8+3 ancestral",
+        "Official parity — 768×512, 5 s, reference FP32, 8 ancestral + 3 deterministic",
         768,
         512,
         5,
@@ -251,7 +251,7 @@
       "title": "Setup and model downloads",
       "properties": {},
       "widgets_values": [
-        "## LTX 2.5 DFR temporal refinement\n\n1. Accept the LTX 2.5 license and download the split components.\n2. Put the temporal latent upsampler in `ComfyUI/models/latent_upscale_models/`.\n3. Put the Pixel-Spatial IC-LoRA in `ComfyUI/models/loras/LTX-2.5/`.\n4. Run Preflight before generation.\n5. Queue the workflow after Preflight succeeds.\n\nThis performance workflow runs standard DFR, then one learned x2 temporal round. It preserves stage-one audio, changes 24 fps video to 48 fps at the same duration, and uses video-only MLX refinement. The temporal pass adds four real transformer evaluations per seam-aware tile.\n\n### Downloads\n\n- [LTX 2.5 model components and temporal upsampler](https://huggingface.co/Lightricks/LTX-2.5)\n- [Pixel-Spatial IC-LoRA](https://huggingface.co/Lightricks/LTX-2.5-22b-IC-LoRA-Pixel-Spatial-Upscaler)"
+        "## LTX 2.5 DFR temporal refinement — diagnostic only\n\n1. Accept the LTX 2.5 license and download the split components.\n2. Put the temporal latent upsampler in `ComfyUI/models/latent_upscale_models/`.\n3. Put the Pixel-Spatial IC-LoRA in `ComfyUI/models/loras/LTX-2.5/`.\n4. Run Preflight before generation.\n5. Queue the workflow after Preflight succeeds.\n\nThis experimental workflow runs standard DFR, then one learned x2 temporal round. It preserves stage-one audio, changes 24 fps video to 48 fps at the same duration, and adds four real transformer evaluations per seam-aware tile. Current MLX visual parity is not production-ready: matched Q8 and BF16 probes show mid-clip color corruption. Use this workflow for diagnostics, not final output.\n\n### Downloads\n\n- [LTX 2.5 model components and temporal upsampler](https://huggingface.co/Lightricks/LTX-2.5)\n- [Pixel-Spatial IC-LoRA](https://huggingface.co/Lightricks/LTX-2.5-22b-IC-LoRA-Pixel-Spatial-Upscaler)"
       ],
       "color": "#243447",
       "bgcolor": "#15202b"

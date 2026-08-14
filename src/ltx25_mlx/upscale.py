@@ -497,7 +497,7 @@ def upscale_video_to_file(
                 audio_embeds,
                 sigmas=list(stage2_sigmas),
                 noise_seed=seed + 2,
-                eta=1.0,
+                eta=0.0,
                 s_noise=1.0,
                 check_interrupted=check_interrupted,
                 step_callback=step_callback,

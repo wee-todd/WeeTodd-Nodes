@@ -630,9 +630,10 @@ class WeeToddLTX25DFRTemporalRefinement:
     FUNCTION = "apply"
     CATEGORY = "WeeTodd/LTX 2.5/conditioning"
     DESCRIPTION = (
-        "Add one or two learned x2 temporal DFR rounds. Each round preserves stage-one audio, "
-        "doubles playback frame rate, reapplies one-shot image anchors, and adds four "
-        "transformer evaluations per temporal tile."
+        "Experimentally add one or two learned x2 temporal DFR rounds. Each round preserves "
+        "stage-one audio, doubles playback frame rate, reapplies one-shot image anchors, and "
+        "adds four transformer evaluations per temporal tile. Current MLX visual parity is not "
+        "yet production-validated."
     )
 
     def apply(self, config, temporal_upsampler, rounds):

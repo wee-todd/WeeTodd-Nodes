@@ -12,7 +12,9 @@ Recent experimental controls include target-frame H3 image, clip, and audio guid
 and attention-workspace estimator; independent MLX attention-head and feed-forward row chunking;
 LTX 2.5 timed input keyframes; learned generated-keyframe slots; and lazy ordered LTX 2.5 LoRA
 stacks. An optional modifier predicts a one-shot duration from the prompt with the official LTX
-2.5 duration head. A separate DFR modifier can add learned temporal refinement at 48 or 96 fps.
+2.5 duration head. A separate experimental DFR modifier can add learned temporal refinement at
+48 or 96 fps. Its stream and conditioning contracts pass, but current MLX visual parity is not
+production-ready.
 Existing modifier and conditioning nodes preserve older Generation Config socket order.
 The H3 projection backend adds a backward-compatible `auto` choice; saved workflows that explicitly
 select `mlx` retain that selection. Add a modifier or conditioning node only when the feature is
@@ -54,7 +56,7 @@ Frames** when the graph needs numbered middle frames.
 | Balance | [LTX 2.3 two-stage](workflows/balance/t2v/ltx23_two_stage.json) | Standalone LTX 2.3 synchronized generation. |
 | Balance | [LTX 2.5 768×512](workflows/balance/t2v/ltx25_768x512_two_stage.json) | Recommended LTX 2.5 starting point with the official 8+3 schedule. |
 | Performance | [LTX 2.5 768×512 DFR + Diffusion VAE](workflows/performance/t2v/ltx25_768x512_dfr_diffusion_vae.json) | Experimental full-resolution detail generation and one-step pixel-diffusion decode. |
-| Performance | [LTX 2.5 768×512 DFR temporal 48 fps](workflows/performance/t2v/ltx25_768x512_dfr_temporal_48fps.json) | Experimental learned temporal refinement with untouched stage-one audio. |
+| Performance | [LTX 2.5 768×512 DFR temporal 48 fps](workflows/performance/t2v/ltx25_768x512_dfr_temporal_48fps.json) | Diagnostic-only learned temporal refinement with untouched stage-one audio; current MLX visual parity is not production-ready. |
 | Performance | [LTX 2.5 1920×1088](workflows/performance/t2v/ltx25_1920x1088_two_stage.json) | High-resolution quality-first generation. |
 | Balance | [LTX 2.5 chained timeline](workflows/balance/continuation/ltx25_768p_15s_three_window_chain.json) | Experimental long-timeline continuation and selective regeneration. |
 | Balance | [LTX 2.5 video refine](workflows/balance/video-upscale/ltx25_any_video_pixel_spatial_2x.json) | Refine and upscale any source movie while preserving its audio. |
@@ -197,7 +199,7 @@ work. Results apply to the stated workflow and hardware conditions.
 | LTX 2.5 automatic duration | Usability | Low runtime cost | A real Q8 prompt probe spent 0.027 s in the MLX duration head after prompt encoding. | Opt-in modifier; manual duration remains authoritative unless connected. Raw predicted seconds and resolved `8k+1` frames are recorded. |
 | LTX 2.5 Diffusion VAE width tiling | Decode memory | Experimental | A 32-cell stage-four stripe reduced 512×512 peak from 8.27 GB to 7.62 GB. | Decode slowed from 61.99 s to 100.13 s and output was not pixel-identical. Select `stage4_width_tiles` only when memory is the priority. |
 | LTX 2.5 DFR | Full-resolution detail | Experimental | Adds generated stage-one slots, stage-one latent reference conditioning, and a stage-two-only Pixel-Spatial IC-LoRA. | DFR generatively changes composition and motion. It preserves stage-one audio but is not a decoder-only enhancement. |
-| LTX 2.5 DFR temporal refinement | Motion smoothness | Experimental | One preserved 256×256 T2V latent refined from 49 frames at 24 fps to 97 frames at 48 fps in 11.68 s. A complete matched I2V probe took 41.34 s and peaked at 9.35 GB for the process. | One round adds four evaluations per seam-aware tile. Stage-one audio is untouched. One-shot image and timed-keyframe anchors are reapplied; chained timelines remain gated. |
+| LTX 2.5 DFR temporal refinement | Motion smoothness | Not production-ready | After correcting stage two to deterministic Euler, a 768×512 Q8-paged I2V probe produced 97 frames at 48 fps in 127.97 s and peaked at 9.65 GB. A matched control took 63.58 s and peaked at 9.46 GB. | Streams, audio preservation, first-frame landing, and evaluation counts pass. Both Q8 and BF16 temporal probes develop matching mid-clip color corruption, so quantization is not the cause. Keep this path diagnostic-only. |
 
 ### Remaining optimization priorities
 
@@ -299,7 +301,7 @@ This table is generated from the registered node contracts. Run
 | LTX 2.5 Generated Keyframes | Apply LTX 2.5 generated interior keyframe slots as a composable config modifier. | LTX 2.5 — Conditioning | Supported |
 | LTX 2.5 Diffusion VAE Optimization | Select an MLX Diffusion VAE execution layout. It does not affect the convolutional VAE. | LTX 2.5 — Optimization | Experimental |
 | LTX 2.5 DFR Detail Refinement | Enable MLX Diffusion Fidelity Rendering: segment-grid generated keyframes, stage-one latent reference conditioning, stage-two-only Pixel-Spatial IC-LoRA, and untouched stage-one audio publication. | LTX 2.5 — Conditioning | Experimental |
-| LTX 2.5 DFR Temporal Refinement | Add one or two learned x2 temporal DFR rounds. Each round preserves stage-one audio, doubles playback frame rate, reapplies one-shot image anchors, and adds four transformer evaluations per temporal tile. | LTX 2.5 — Conditioning | Supported |
+| LTX 2.5 DFR Temporal Refinement | Experimentally add one or two learned x2 temporal DFR rounds. Each round preserves stage-one audio, doubles playback frame rate, reapplies one-shot image anchors, and adds four transformer evaluations per temporal tile. Current MLX visual parity is not yet production-validated. | LTX 2.5 — Conditioning | Experimental |
 | LTX 2.5 Preflight | Validate LTX 2.5 component metadata and architecture requirements before allocation. | LTX 2.5 — Loaders | Experimental |
 | LTX 2.5 Timed Keyframe | Append a first, middle, or last image at an exact zero-based pixel-frame index. Nonzero frames use LTX 2.5's generated-keyframe token slots. | LTX 2.5 — Conditioning | Supported |
 | LTX 2.5 Generate Video + Audio | Generate synchronized LTX 2.5 video and audio through the MLX adapter. | LTX 2.5 — Core | Experimental |

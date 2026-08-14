@@ -632,10 +632,10 @@ def test_ltx25_config_pins_official_distilled_schedule_and_grid():
     assert config.delivered_duration_seconds == 5.0
     assert config.stage1_steps + config.stage2_steps == 11
     assert config.stage1_sampler == "euler_ancestral"
-    assert config.stage2_sampler == "euler_ancestral"
+    assert config.stage2_sampler == "euler"
     from ltx25_mlx.runtime import LTX25_STAGE2_SIGMAS
 
-    assert LTX25_STAGE2_SIGMAS == (0.85, 0.725, 0.421875, 0.0)
+    assert LTX25_STAGE2_SIGMAS == (0.909375, 0.725, 0.421875, 0.0)
     assert config.seed + config.ancestral_seed_offset == 10000
     with pytest.raises(ValueError, match="eight stage-one and three stage-two"):
         LTX25GenerationConfig(stage2_steps=4).validate()

@@ -32,11 +32,11 @@ LTX25_DIFFVAE_OPTIMIZATIONS = (
 )
 LTX25_GENERATION_PRESETS = (
     "Custom",
-    "Official parity — 768×512, 5 s, reference FP32, 8+3 ancestral",
-    "High quality — 1920×1088, 5 s, reference FP32, 8+3 ancestral",
+    "Official parity — 768×512, 5 s, reference FP32, 8 ancestral + 3 deterministic",
+    "High quality — 1920×1088, 5 s, reference FP32, 8 ancestral + 3 deterministic",
 )
 LTX25_DISTILLED_SIGMAS = (1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875, 0.0)
-LTX25_STAGE2_SIGMAS = (0.85, 0.725, 0.421875, 0.0)
+LTX25_STAGE2_SIGMAS = (0.909375, 0.725, 0.421875, 0.0)
 
 
 def _metadata(path: Path) -> dict[str, object]:
@@ -258,7 +258,7 @@ class LTX25GenerationConfig:
     stage1_steps: int = 8
     stage2_steps: int = 3
     stage1_sampler: str = "euler_ancestral"
-    stage2_sampler: str = "euler_ancestral"
+    stage2_sampler: str = "euler"
     stage1_eta: float = 1.0
     stage1_s_noise: float = 1.0
     ancestral_seed_offset: int = 10000
@@ -373,8 +373,11 @@ class LTX25GenerationConfig:
                 "The LTX 2.5 distilled path requires eight stage-one and three stage-two "
                 "transformer evaluations."
             )
-        if self.stage1_sampler != "euler_ancestral" or self.stage2_sampler != "euler_ancestral":
-            raise ValueError("LTX 2.5 distilled requires Euler ancestral sampling in both stages.")
+        if self.stage1_sampler != "euler_ancestral" or self.stage2_sampler != "euler":
+            raise ValueError(
+                "LTX 2.5 distilled requires Euler ancestral stage one and deterministic Euler "
+                "stage two."
+            )
         if self.stage1_eta != 1.0 or self.stage1_s_noise != 1.0:
             raise ValueError("LTX 2.5 distilled stage one requires eta=1.0 and s_noise=1.0.")
         if self.ancestral_seed_offset != 10000:

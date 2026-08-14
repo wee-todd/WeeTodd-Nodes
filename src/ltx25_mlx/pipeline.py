@@ -974,7 +974,9 @@ class LTX25DistilledPipeline:
                 audio_embeds,
                 sigmas=list(LTX25_STAGE2_SIGMAS),
                 noise_seed=seed + 2,
-                eta=1.0,
+                # The three-evaluation refinement stage is deterministic in the official
+                # pipeline. Fresh ancestral noise cannot be removed reliably this late.
+                eta=0.0,
                 s_noise=1.0,
                 check_interrupted=check_interrupted,
                 step_callback=(

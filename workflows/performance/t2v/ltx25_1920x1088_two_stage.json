@@ -39,7 +39,7 @@
       ],
       "properties": {"Node name for S&R": "WeeToddLTX25GenerationConfig"},
       "widgets_values": [
-        "High quality — 1920×1088, 5 s, reference FP32, 8+3 ancestral",
+        "High quality — 1920×1088, 5 s, reference FP32, 8 ancestral + 3 deterministic",
         1920,
         1088,
         5.0,

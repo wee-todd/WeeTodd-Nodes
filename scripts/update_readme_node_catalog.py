@@ -72,6 +72,7 @@ EXPERIMENTAL = {
     "WeeToddLTX25GenerateChained",
     "WeeToddLTX25VideoUpscale",
     "WeeToddLTX25DFRDetailing",
+    "WeeToddLTX25DFRTemporalRefinement",
     "WeeToddLTX25DiffVAEOptimization",
 }
 CONVENIENCE = {

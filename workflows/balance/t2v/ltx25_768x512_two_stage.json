@@ -36,7 +36,7 @@
         {"name": "resolved_settings", "type": "STRING", "links": null, "slot_index": 1}
       ],
       "properties": {"Node name for S&R": "WeeToddLTX25GenerationConfig"},
-      "widgets_values": ["Official parity — 768×512, 5 s, reference FP32, 8+3 ancestral", 768, 512, 5.0, 24.0, 584293325, true, false, "official_1024", "reference_fp32"]
+      "widgets_values": ["Official parity — 768×512, 5 s, reference FP32, 8 ancestral + 3 deterministic", 768, 512, 5.0, 24.0, 584293325, true, false, "official_1024", "reference_fp32"]
     },
     {
       "id": 3,

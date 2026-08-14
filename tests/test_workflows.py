@@ -249,7 +249,7 @@ def test_ltx25_high_quality_workflow_uses_verified_preset_and_prompt():
 
     assert len(nodes) == 4
     assert nodes[2]["widgets_values"] == [
-        "High quality — 1920×1088, 5 s, reference FP32, 8+3 ancestral",
+        "High quality — 1920×1088, 5 s, reference FP32, 8 ancestral + 3 deterministic",
         1920,
         1088,
         5.0,

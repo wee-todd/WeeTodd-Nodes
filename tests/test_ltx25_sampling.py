@@ -38,6 +38,19 @@ def test_euler_ancestral_step_terminal_is_exact_denoised_value():
     assert mx.array_equal(result, denoised)
 
 
+def test_euler_eta_zero_matches_deterministic_rectified_flow_step():
+    sample = mx.array([2.0, -1.0], dtype=mx.float32)
+    denoised = mx.array([0.5, 3.0], dtype=mx.float32)
+    sigma = 0.909375
+    sigma_next = 0.725
+    result = euler_ancestral_step(
+        sample, denoised, sigma, sigma_next, noise=None, eta=0.0
+    )
+    ratio = sigma_next / sigma
+    expected = ratio * sample + (1.0 - ratio) * denoised
+    assert mx.allclose(result, expected, rtol=0.0, atol=1e-6)
+
+
 def test_euler_ancestral_loop_is_seeded_and_preserves_conditioned_rows():
     mask = mx.array([[[1.0], [0.0]]], dtype=mx.float32)
     clean = mx.array([[[0.0], [0.75]]], dtype=mx.float32)
