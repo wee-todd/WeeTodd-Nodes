@@ -64,6 +64,24 @@ def test_portable_media_inputs_accepts_comfy_input_names():
     }
 
 
+def test_portable_media_inputs_accepts_unselected_portable_fields():
+    document = graph()
+    document.update(
+        {
+            "2": {"class_type": "LoadImage", "inputs": {"image": ""}},
+            "3": {"class_type": "LoadVideo", "inputs": {"file": ""}},
+            "4": {"class_type": "LoadAudio", "inputs": {"audio": ""}},
+        }
+    )
+
+    assert MODULE.portable_media_inputs(document) == {}
+    assert MODULE.unselected_media_inputs(document) == {
+        "2": "LoadImage",
+        "3": "LoadVideo",
+        "4": "LoadAudio",
+    }
+
+
 @pytest.mark.parametrize("value", ["/tmp/private.png", "../outside.png"])
 def test_portable_media_inputs_rejects_machine_or_parent_paths(value):
     document = graph()

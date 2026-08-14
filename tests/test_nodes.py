@@ -225,7 +225,7 @@ def test_hires_fix_resolves_target_and_preserves_audio_contract(monkeypatch):
 
 
 def test_expected_nodes_are_registered():
-    assert len(NODE_CLASS_MAPPINGS) == 55
+    assert len(NODE_CLASS_MAPPINGS) == 56
     assert "WeeToddH3ComponentLoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3QuantizedTransformerLoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3Preflight" in NODE_CLASS_MAPPINGS
@@ -238,6 +238,7 @@ def test_expected_nodes_are_registered():
     assert "WeeToddH3ReferenceImage" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3ReferenceVideo" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3ReferenceAudio" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX25GenerateChained" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3KeyframeEncode" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3TimedKeyframeEncode" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3ReferenceEncode" in NODE_CLASS_MAPPINGS

@@ -1,0 +1,45 @@
+{
+  "1": {
+    "class_type": "WeeToddLTX25ComponentLoader",
+    "inputs": {
+      "transformer": "ltx-2.5-22b-distilled-transformer-q8-paged",
+      "text_encoder": "gemma4-12b-with-proj-ltx-2.5-q8-paged",
+      "video_vae": "ltx-2.5-video-vae-conv-bf16.safetensors",
+      "audio_vae": "ltx-2.5-audio-vae-bf16.safetensors",
+      "spatial_upscaler": "ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors",
+      "duration_head": ""
+    }
+  },
+  "2": {
+    "class_type": "WeeToddLTX25GenerationConfig",
+    "inputs": {
+      "preset": "Custom",
+      "width": 1344,
+      "height": 768,
+      "duration_seconds": 15.0,
+      "frame_rate": 24.0,
+      "seed": 584293325,
+      "low_memory": true,
+      "low_ram_streaming": true,
+      "prompt_context": "official_1024",
+      "feed_forward_backend": "reference_fp32"
+    }
+  },
+  "3": {
+    "class_type": "WeeToddLTX25Preflight",
+    "inputs": {
+      "model": ["1", 0],
+      "config": ["2", 0]
+    }
+  },
+  "4": {
+    "class_type": "WeeToddLTX25Generate",
+    "inputs": {
+      "model": ["3", 0],
+      "config": ["2", 0],
+      "prompt": "A single continuous fixed-camera, eye-level medium close-up captures a photorealistic NBA-style postgame interview courtside inside a packed professional basketball arena under bright broadcast lighting, with spectators and players moving naturally in the softly blurred background. LeBron James, slightly sweaty and wearing his basketball uniform, occupies most of the frame while an adult Filipina sports reporter with long dark hair and professional broadcast makeup remains beside him in partial profile, holding a handheld microphone toward him. The camera stays completely locked with no cuts, zoom, reframing, or shake. LeBron looks toward the reporter with a thoughtful, respectful expression, blinking naturally and making restrained eyebrow and head movements as he speaks fluent conversational Tagalog in his deep reflective cadence: \"Nasaksihan nating lahat kung ano ang nagawa ni Steph Curry sa buong career niya at kung paano niya binago ang laro. Isa siyang klase ng manlalaro na minsan lang talaga dumarating sa isang henerasyon...\" His mouth articulates the Tagalog dialogue naturally while the reporter listens silently with attentive eye contact, occasional small nods, and a restrained professional smile without interrupting. He trails off naturally at the end as though the interview continues beyond the clip. Clean broadcast-quality speech remains centered over restrained arena ambience: distant crowd chatter, occasional basketball sounds, and PA-system room tone. No narrator, subtitles, music, laugh track, camera movement, cut, or fade.",
+      "filename_prefix": "WeeTodd/LTX25_768p_15s_One_Shot_Benchmark_20260813",
+      "unload_after_generate": true
+    }
+  }
+}

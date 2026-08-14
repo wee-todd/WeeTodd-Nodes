@@ -24,17 +24,11 @@ from .gemma_encoder import LTX25Gemma4Conditioner, resolve_prompt_context_length
 from .runtime import LTX25_STAGE2_SIGMAS, LTX25ComponentSpec
 from .sampling import euler_ancestral_denoise_loop
 from .transformer import inspect_ltx25_ic_lora, load_ltx25_transformer
-
-LTX25_PIXEL_SPATIAL_MODE = "pixel spatial IC-LoRA 2x (recommended)"
-LTX25_UPSCALE_MODES = (
-    "latent upscale only",
-    "latent upscale + stage-two refinement",
+from .upscale_contracts import (
+    LTX25_INPUT_SIZE_POLICIES,
     LTX25_PIXEL_SPATIAL_MODE,
-)
-LTX25_SOURCE_FRAME_ANCHORS = ("none", "first frame", "first + last frames")
-LTX25_INPUT_SIZE_POLICIES = (
-    "center crop to 32px grid (recommended)",
-    "require dimensions divisible by 32",
+    LTX25_SOURCE_FRAME_ANCHORS,
+    LTX25_UPSCALE_MODES,
 )
 
 

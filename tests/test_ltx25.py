@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 from safetensors.numpy import save_file
 
+from ltx25_mlx.components import LTX25VideoDecoder
 from ltx25_mlx.gemma_pack import gemma4_mlx_model_config, remap_gemma4_weight_key
 from ltx25_mlx.runtime import (
     LTX25_GENERATION_PRESETS,
@@ -24,6 +25,7 @@ from ltx25_mlx.upscale import (
     _host_video,
 )
 from wee_todd_nodes.ltx25_nodes import (
+    WeeToddLTX25GenerateChained,
     WeeToddLTX25GenerationConfig,
     WeeToddLTX25VideoUpscale,
 )
@@ -232,6 +234,24 @@ def test_ltx25_config_pins_official_distilled_schedule_and_grid():
         ).validate()
 
 
+def test_ltx25_video_decoder_reports_direct_temporal_streaming(monkeypatch):
+    import mlx.core as mx
+
+    class FakeDecoder:
+        def decode_and_stream(self, *args, **kwargs):
+            self.call = (args, kwargs)
+
+    monkeypatch.setenv("LTX2_VAE_DECODE_BUDGET_GB", "0.00001")
+    wrapper = LTX25VideoDecoder("unused.safetensors")
+    wrapper._decoder = FakeDecoder()
+    latent = mx.zeros((1, 24, 16, 16, 24), dtype=mx.bfloat16)
+    assert wrapper.decode_and_stream(latent, "unused.mp4", frame_rate=24.0) == "unused.mp4"
+    assert wrapper.last_decode_report["publication"] == "direct_ffmpeg_stream"
+    assert wrapper.last_decode_report["temporal_tiling"] is True
+    assert wrapper.last_decode_report["tile_frames"] >= 16
+    assert wrapper.last_decode_report["overlap_frames"] < wrapper.last_decode_report["tile_frames"]
+
+
 def test_ltx25_video_upscaler_exposes_generic_movie_contract():
     inputs = WeeToddLTX25VideoUpscale.INPUT_TYPES()["required"]
     assert inputs["mode"][0] == list(LTX25_UPSCALE_MODES)
@@ -346,6 +366,16 @@ def test_ltx25_generation_config_node_resolves_random_seed(monkeypatch):
     assert config.seed == 2468
     assert json.loads(raw)["real_evaluations"] == 11
     assert config.prompt_context == "official_1024"
+
+
+def test_ltx25_chained_node_exposes_exact_timeline_controls():
+    inputs = WeeToddLTX25GenerateChained.INPUT_TYPES()["required"]
+
+    assert inputs["window_count"][1]["default"] == 3
+    assert inputs["overlap_frames"][1]["default"] == 25
+    assert inputs["overlap_frames"][1]["step"] == 8
+    assert all(f"prompt_{index}" in inputs for index in range(1, 5))
+    assert WeeToddLTX25GenerateChained.OUTPUT_NODE is True
 
 
 def test_ltx25_official_parity_preset_pins_recipe_and_preserves_extra_values():

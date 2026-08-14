@@ -1,0 +1,256 @@
+{
+  "last_node_id": 5,
+  "last_link_id": 4,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "WeeToddLTX25ComponentLoader",
+      "pos": [
+        40,
+        100
+      ],
+      "size": [
+        500,
+        310
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "model",
+          "type": "WEETODD_LTX25_MODEL",
+          "links": [
+            1
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddLTX25ComponentLoader"
+      },
+      "widgets_values": [
+        "ltx-2.5-22b-distilled-transformer-q8-paged",
+        "gemma4-12b-with-proj-ltx-2.5-q8-paged",
+        "ltx-2.5-video-vae-conv-bf16.safetensors",
+        "ltx-2.5-audio-vae-bf16.safetensors",
+        "ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors",
+        ""
+      ]
+    },
+    {
+      "id": 2,
+      "type": "WeeToddLTX25GenerationConfig",
+      "pos": [
+        40,
+        460
+      ],
+      "size": [
+        400,
+        300
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "config",
+          "type": "WEETODD_LTX25_CONFIG",
+          "links": [
+            2,
+            4
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "resolved_settings",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddLTX25GenerationConfig"
+      },
+      "widgets_values": [
+        "Custom",
+        1344,
+        768,
+        15.0,
+        24.0,
+        584293325,
+        true,
+        true,
+        "official_1024",
+        "reference_fp32"
+      ]
+    },
+    {
+      "id": 3,
+      "type": "WeeToddLTX25Preflight",
+      "pos": [
+        610,
+        120
+      ],
+      "size": [
+        360,
+        190
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "WEETODD_LTX25_MODEL",
+          "link": 1
+        },
+        {
+          "name": "config",
+          "type": "WEETODD_LTX25_CONFIG",
+          "link": 2
+        }
+      ],
+      "outputs": [
+        {
+          "name": "model",
+          "type": "WEETODD_LTX25_MODEL",
+          "links": [
+            3
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "preflight_report",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddLTX25Preflight"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 4,
+      "type": "WeeToddLTX25GenerateChained",
+      "pos": [
+        1040,
+        120
+      ],
+      "size": [
+        520,
+        440
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "WEETODD_LTX25_MODEL",
+          "link": 3
+        },
+        {
+          "name": "config",
+          "type": "WEETODD_LTX25_CONFIG",
+          "link": 4
+        }
+      ],
+      "outputs": [
+        {
+          "name": "video_path",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 0
+        },
+        {
+          "name": "generation_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddLTX25GenerateChained"
+      },
+      "widgets_values": [
+        3,
+        25,
+        "A single continuous fixed-camera, eye-level medium close-up begins a photorealistic NBA-style postgame interview courtside inside a packed professional basketball arena under bright broadcast lighting. LeBron James, slightly sweaty in his basketball uniform, occupies most of the frame while an adult Filipina sports reporter with long dark hair and professional broadcast makeup stands beside him in partial profile, holding a handheld microphone toward him. The camera remains completely locked. LeBron looks toward the reporter with a thoughtful, respectful expression and begins speaking fluent conversational Tagalog in a deep reflective cadence: \"Nasaksihan nating lahat kung ano ang nagawa ni Steph Curry sa buong career niya\". His mouth articulates naturally while the reporter listens silently with attentive eye contact and one restrained nod. Clean centered dialogue continues over low crowd chatter, distant basketball sounds, and PA-system room tone; no music, subtitles, narration, or cut.",
+        "The same uninterrupted fixed-camera NBA postgame interview continues from the preceding moment with identical LeBron James appearance, uniform, sweat, reporter, microphone position, bright arena lighting, background crowd, and eye-level medium close-up composition. LeBron keeps looking toward the reporter and continues the same Tagalog sentence without restarting: \"at kung paano niya binago ang laro.\" His deep voice, pace, mouth movement, posture, and reflective expression remain continuous. The reporter stays silent, maintains natural eye contact, and makes a small professional nod. The same restrained arena chatter, occasional basketball sounds, and PA-system room tone continue without an acoustic reset; no music, subtitles, narration, camera movement, or cut.",
+        "The same uninterrupted fixed-camera NBA postgame interview continues with identical LeBron James appearance, basketball uniform, reporter, microphone, arena lighting, softly moving crowd, and eye-level medium close-up composition. LeBron completes the thought in fluent conversational Tagalog without repeating earlier words: \"Isa siyang klase ng manlalaro na minsan lang talaga dumarating sa isang henerasyon...\" He trails off naturally as though the answer will continue, then holds a thoughtful expression while maintaining eye contact with the reporter. She remains silent with a restrained professional smile. Clean dialogue and the same low arena ambience continue smoothly to the end; no music, subtitles, narration, camera movement, cut, or fade.",
+        "",
+        "WeeTodd/LTX25_768p_15s_three_window_chain",
+        true
+      ]
+    },
+    {
+      "id": 5,
+      "type": "MarkdownNote",
+      "pos": [
+        40,
+        -520
+      ],
+      "size": [
+        900,
+        540
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "title": "Setup and model downloads",
+      "properties": {},
+      "widgets_values": [
+        "## ltx25 768p 15s three window chain\n\n1. Install WeeTodd Nodes and restart ComfyUI.\n2. Accept the LTX 2.5 license and download the split model components.\n3. Use `ComfyUI/models/` or shared roots from `extra_model_paths.yaml`.\n4. Queue the workflow after **LTX 2.5 Preflight** succeeds.\n\n### Downloads\n\n- [LTX 2.5 model components](https://huggingface.co/Lightricks/LTX-2.5)"
+      ],
+      "color": "#243447",
+      "bgcolor": "#15202b"
+    }
+  ],
+  "links": [
+    [
+      1,
+      1,
+      0,
+      3,
+      0,
+      "WEETODD_LTX25_MODEL"
+    ],
+    [
+      2,
+      2,
+      0,
+      3,
+      1,
+      "WEETODD_LTX25_CONFIG"
+    ],
+    [
+      3,
+      3,
+      0,
+      4,
+      0,
+      "WEETODD_LTX25_MODEL"
+    ],
+    [
+      4,
+      2,
+      0,
+      4,
+      1,
+      "WEETODD_LTX25_CONFIG"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {
+    "workflow_title": "LTX 2.5 768p 15-second three-window latent chain"
+  },
+  "version": 0.4
+}

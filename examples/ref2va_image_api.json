@@ -32,7 +32,7 @@
       "sampling_method": "euler"
     }
   },
-  "3": {"class_type": "LoadImage", "inputs": {"image": "reference.png"}},
+  "3": {"class_type": "LoadImage", "inputs": {"image": ""}},
   "4": {
     "class_type": "WeeToddH3ReferenceImage",
     "inputs": {"image": ["3", 0], "pixel_budget_percent": 100}

@@ -9,7 +9,6 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-WORKFLOW_GLOBS = ("workflows/*.json", "examples/*_workflow.json")
 NOTE_TITLE = "Setup and model downloads"
 
 H3_OFFICIAL = "https://huggingface.co/MiniMaxAI/MiniMax-H3"
@@ -23,10 +22,12 @@ DRBAPH_V4 = (
 LARRY_TURBO = "https://huggingface.co/larryvrh/MiniMax-H3-Turbo-Lora"
 LTX23 = "https://huggingface.co/Lightricks/LTX-2.3"
 GEMMA3_MLX = "https://huggingface.co/mlx-community/gemma-3-12b-it-4bit"
+LTX25 = "https://huggingface.co/Lightricks/LTX-2.5"
+LTX25_UPSCALER = "https://huggingface.co/Lightricks/LTX-2.5-22b-IC-LoRA-Pixel-Spatial-Upscaler"
 
 
 def _workflow_paths(project: Path) -> list[Path]:
-    return sorted({path for pattern in WORKFLOW_GLOBS for path in project.glob(pattern)})
+    return sorted((project / "workflows").rglob("*.json"))
 
 
 def _first_string_widget(node: dict) -> str | None:
@@ -64,6 +65,27 @@ def _model_note(path: Path, workflow: dict) -> str:
         )
         return "\n".join(lines)
 
+    if any(str(node_type).startswith("WeeToddLTX25") for node_type in types):
+        upscale = "WeeToddLTX25VideoUpscale" in types
+        lines.extend(
+            [
+                "2. Accept the LTX 2.5 license and download the split model components.",
+                "3. Use `ComfyUI/models/` or shared roots from `extra_model_paths.yaml`.",
+                (
+                    "4. Select a source movie. Queue the workflow."
+                    if upscale
+                    else "4. Queue the workflow after **LTX 2.5 Preflight** succeeds."
+                ),
+                "",
+                "### Downloads",
+                "",
+                f"- [LTX 2.5 model components]({LTX25})",
+            ]
+        )
+        if upscale:
+            lines.append(f"- [Pixel-spatial upscaler IC-LoRA]({LTX25_UPSCALER})")
+        return "\n".join(lines)
+
     component_nodes = [node for node in nodes if node.get("type") == "WeeToddH3ComponentLoader"]
     component_values = component_nodes[0].get("widgets_values", []) if component_nodes else []
     component_text = " ".join(str(value) for value in component_values)
@@ -75,8 +97,10 @@ def _model_note(path: Path, workflow: dict) -> str:
     )
 
     media = []
+    media_types = []
     for node in nodes:
         if node.get("type") in {"LoadImage", "LoadVideo"}:
+            media_types.append(node.get("type"))
             value = _first_string_widget(node)
             if value and value not in media:
                 media.append(value)
@@ -87,10 +111,13 @@ def _model_note(path: Path, workflow: dict) -> str:
             "3. Keep the relative Component Loader paths unchanged.",
         ]
     )
-    if media:
-        lines.append(
-            "4. Replace these input placeholders: " + ", ".join(f"`{item}`" for item in media) + "."
-        )
+    if media_types:
+        inputs = []
+        if "LoadImage" in media_types:
+            inputs.append("required images")
+        if "LoadVideo" in media_types:
+            inputs.append("required video or audio source")
+        lines.append("4. Select the " + " and ".join(inputs) + " in ComfyUI.")
         queue_step = 5
     else:
         queue_step = 4

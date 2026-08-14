@@ -30,6 +30,10 @@ LTX25_STAGE2_SIGMAS = (0.85, 0.725, 0.421875, 0.0)
 
 def _metadata(path: Path) -> dict[str, object]:
     """Read and JSON-decode a safetensors metadata header without loading weights."""
+    if path.is_dir():
+        from .paged_checkpoint import LTX25PagedManifest
+
+        return LTX25PagedManifest.load(path).metadata
     with safe_open(path, framework="numpy") as handle:
         raw = handle.metadata() or {}
     parsed: dict[str, object] = {}
@@ -131,14 +135,16 @@ class LTX25ComponentSpec:
         }
         paths = self.paths()
         missing = [
-            name for name in sorted(required) if name not in paths or not paths[name].is_file()
+            name for name in sorted(required) if name not in paths or not paths[name].exists()
         ]
         if missing:
             raise FileNotFoundError(
                 "LTX 2.5 split component files are missing: " + ", ".join(missing)
             )
         for name, path in paths.items():
-            if path.suffix != ".safetensors":
+            if path.is_dir() and name not in {"transformer_path", "text_encoder_path"}:
+                raise ValueError(f"Only LTX 2.5 transformer and text encoder may be paged: {path}")
+            if path.is_file() and path.suffix != ".safetensors":
                 raise ValueError(f"LTX 2.5 {name} must be a .safetensors file: {path}")
 
         transformer_meta = _metadata(paths["transformer_path"])
@@ -191,7 +197,11 @@ class LTX25ComponentSpec:
         inventory = []
         total = 0
         for name, path in paths.items():
-            size = path.stat().st_size
+            size = (
+                sum(file.stat().st_size for file in path.rglob("*") if file.is_file())
+                if path.is_dir()
+                else path.stat().st_size
+            )
             total += size
             inventory.append({"component": name, "file": path.name, "bytes": size})
         return {
@@ -492,7 +502,7 @@ class LTX25RuntimeCache:
                 feed_forward_runtime = feed_forward_runtime_status()
             except (ImportError, AttributeError):
                 feed_forward_runtime = None
-            return {
+            result = {
                 "prompt": prompt,
                 "video_path": str(result_path),
                 "generation": asdict(config),
@@ -505,11 +515,126 @@ class LTX25RuntimeCache:
                 "mlx_peak_bytes": int(mx.get_peak_memory()) if mx is not None else None,
                 "total_seconds": time.perf_counter() - started,
                 "stage_timings": getattr(pipeline, "last_timings", {}),
+                "video_decode": getattr(
+                    getattr(pipeline, "video_decoder_block", None),
+                    "last_decode_report",
+                    {},
+                ),
                 "resolved_prompt_context": getattr(pipeline, "last_prompt_context", None),
                 "feed_forward_backend": getattr(pipeline, "feed_forward_report", None),
                 "feed_forward_runtime": feed_forward_runtime,
+                "paged_transformer": getattr(pipeline, "paged_transformer_report", None),
+                "paged_text_encoder": getattr(
+                    getattr(pipeline, "prompt_encoder", None),
+                    "paged_checkpoint_report",
+                    None,
+                ),
                 "runtime_cached": not unload_after,
             }
+            try:
+                from wee_todd_nodes.process_memory import complete_process_memory
+
+                result.update(complete_process_memory())
+            except (ImportError, AttributeError):
+                result["complete_process_memory_scope"] = "unavailable"
+            return result
+        finally:
+            if unload_after or not succeeded:
+                self.unload()
+
+    def generate_chain_to_file(
+        self,
+        spec: LTX25ComponentSpec,
+        config: LTX25GenerationConfig,
+        prompts: list[str],
+        output_path: str | Path,
+        *,
+        window_count: int,
+        overlap_frames: int,
+        unload_after: bool = True,
+        check_interrupted=None,
+        step_callback=None,
+    ) -> dict[str, object]:
+        """Generate an exact latent-native LTX 2.5 chained timeline."""
+        from .chaining import plan_ltx25_chain
+
+        report = spec.validate(config.pipeline_mode)
+        scales = tuple(int(value) for value in report["video_scale_factors"])
+        config.validate(scale_factors=scales)
+        plan = plan_ltx25_chain(
+            total_frames=config.num_frames,
+            window_count=window_count,
+            overlap_frames=overlap_frames,
+            frame_rate=config.frame_rate,
+        )
+        if len(prompts) != window_count or any(not prompt.strip() for prompt in prompts):
+            raise ValueError("Every LTX 2.5 chained window requires a non-empty prompt.")
+        if check_interrupted is not None:
+            check_interrupted()
+        try:
+            import mlx.core as mx
+
+            mx.reset_peak_memory()
+        except (ImportError, AttributeError):
+            mx = None
+        started = time.perf_counter()
+        pipeline = self.get(spec, config)
+        succeeded = False
+        try:
+            with self._lock:
+                result_path = pipeline.generate_chained_and_save(
+                    prompts=prompts,
+                    output_path=str(output_path),
+                    height=config.height,
+                    width=config.width,
+                    total_frames=config.num_frames,
+                    window_count=window_count,
+                    overlap_frames=overlap_frames,
+                    frame_rate=config.frame_rate,
+                    seed=config.seed,
+                    check_interrupted=check_interrupted,
+                    step_callback=step_callback,
+                    prompt_context=config.prompt_context,
+                )
+            if check_interrupted is not None:
+                check_interrupted()
+            succeeded = True
+            result = {
+                "prompts": prompts,
+                "video_path": str(result_path),
+                "generation": asdict(config),
+                "num_frames": config.num_frames,
+                "delivered_duration_seconds": config.delivered_duration_seconds,
+                "pipeline_mode": config.pipeline_mode,
+                "model_version": report["model_version"],
+                "video_decoder": report["video_decoder"],
+                "video_scale_factors": report["video_scale_factors"],
+                "chain_plan": plan.as_dict(),
+                "mlx_peak_bytes": int(mx.get_peak_memory()) if mx is not None else None,
+                "total_seconds": time.perf_counter() - started,
+                "stage_timings": getattr(pipeline, "last_timings", {}),
+                "video_decode": getattr(
+                    getattr(pipeline, "video_decoder_block", None),
+                    "last_decode_report",
+                    {},
+                ),
+                "resolved_prompt_context": getattr(pipeline, "last_prompt_context", None),
+                "feed_forward_backend": getattr(pipeline, "feed_forward_report", None),
+                "paged_transformer": getattr(pipeline, "paged_transformer_report", None),
+                "paged_text_encoder": getattr(
+                    getattr(pipeline, "prompt_encoder", None),
+                    "paged_checkpoint_report",
+                    None,
+                ),
+                "runtime_cached": not unload_after,
+            }
+            try:
+                from wee_todd_nodes.process_memory import complete_process_memory
+
+                result.update(complete_process_memory())
+            except (ImportError, AttributeError):
+                result["complete_process_memory_scope"] = "unavailable"
+            return result
         finally:
             if unload_after or not succeeded:
                 self.unload()

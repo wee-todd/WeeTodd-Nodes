@@ -1,0 +1,663 @@
+{
+  "last_node_id": 11,
+  "last_link_id": 15,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "WeeToddH3ComponentLoader",
+      "pos": [
+        40,
+        80
+      ],
+      "size": [
+        360,
+        300
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "components",
+          "type": "WEETODD_H3_COMPONENTS",
+          "links": [
+            14
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3ComponentLoader"
+      },
+      "widgets_values": [
+        "MiniMax-H3/FL2VA",
+        "fl2va",
+        "MiniMax-H3/transformers/q8_extended_paged",
+        "MiniMax-H3/FL2VA/text_encoder",
+        "MiniMax-H3/FL2VA/processor",
+        "MiniMax-H3/FL2VA/tokenizer",
+        "MiniMax-H3/vae/q8/video_vae_affine_q8.safetensors",
+        "MiniMax-H3/FL2VA/audio_vae",
+        false
+      ]
+    },
+    {
+      "id": 2,
+      "type": "WeeToddH3GenerationConfig",
+      "pos": [
+        40,
+        430
+      ],
+      "size": [
+        360,
+        300
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "config",
+          "type": "WEETODD_H3_CONFIG",
+          "links": [
+            12
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "resolved_resolution",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3GenerationConfig"
+      },
+      "widgets_values": [
+        5,
+        7,
+        0,
+        "ratio + size",
+        "512 px short edge \u2014 balanced preview",
+        "16:9 \u2014 widescreen landscape",
+        512,
+        896,
+        512,
+        true,
+        "normal",
+        "automatic",
+        "mlx",
+        "euler"
+      ]
+    },
+    {
+      "id": 3,
+      "type": "LoadImage",
+      "pos": [
+        460,
+        40
+      ],
+      "size": [
+        300,
+        310
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            1
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "MASK",
+          "type": "MASK",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoadImage"
+      },
+      "widgets_values": [
+        "",
+        "image"
+      ]
+    },
+    {
+      "id": 4,
+      "type": "WeeToddH3FirstLastFrame",
+      "pos": [
+        820,
+        80
+      ],
+      "size": [
+        290,
+        120
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "first_frame",
+          "type": "IMAGE",
+          "link": 1
+        },
+        {
+          "name": "last_frame",
+          "type": "IMAGE",
+          "link": 15
+        }
+      ],
+      "outputs": [
+        {
+          "name": "keyframes",
+          "type": "WEETODD_H3_KEYFRAMES",
+          "links": [
+            2
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "keyframe_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3FirstLastFrame"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 5,
+      "type": "WeeToddH3KeyframeEncode",
+      "pos": [
+        1180,
+        80
+      ],
+      "size": [
+        470,
+        390
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "components",
+          "type": "WEETODD_H3_COMPONENTS",
+          "link": 3
+        },
+        {
+          "name": "config",
+          "type": "WEETODD_H3_CONFIG",
+          "link": 4
+        },
+        {
+          "name": "keyframes",
+          "type": "WEETODD_H3_KEYFRAMES",
+          "link": 2
+        }
+      ],
+      "outputs": [
+        {
+          "name": "conditioning",
+          "type": "WEETODD_H3_CONDITIONING",
+          "links": [
+            5
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "conditioning_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3KeyframeEncode"
+      },
+      "widgets_values": [
+        "<Picture 1> defines the exact opening frame. <Picture 2> defines the exact final frame.\nPreserve the same subject identity, clothing, environment, and lighting across both\npictures.\n\nintegrated_multimodal_description: [Shot 1] Begin exactly from <Picture 1>. The subject\nperforms one simple physically continuous action that naturally reaches the pose and\ncomposition in <Picture 2>. Keep screen direction, camera height, background geometry, and\nlight direction stable. Use one continuous restrained camera move with no cut, fade,\nteleport, duplicate subject, or reset. End exactly on <Picture 2>.\n\noverall_soundscape: Maintain one continuous acoustic space. Synchronize footsteps, contact\nsounds, clothing movement, and breathing with the visible action. No dialogue.\n\nnon_diegetic_music: N/A"
+      ]
+    },
+    {
+      "id": 6,
+      "type": "WeeToddH3Sample",
+      "pos": [
+        1680,
+        100
+      ],
+      "size": [
+        380,
+        280
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "components",
+          "type": "WEETODD_H3_COMPONENTS",
+          "link": 6
+        },
+        {
+          "name": "conditioning",
+          "type": "WEETODD_H3_CONDITIONING",
+          "link": 5
+        },
+        {
+          "name": "config",
+          "type": "WEETODD_H3_CONFIG",
+          "link": 8
+        },
+        {
+          "name": "trajectory_forecast",
+          "type": "WEETODD_H3_TRAJECTORY_FORECAST",
+          "link": 13
+        },
+        {
+          "name": "loras",
+          "type": "WEETODD_H3_LORAS",
+          "link": 11
+        }
+      ],
+      "outputs": [
+        {
+          "name": "latents",
+          "type": "WEETODD_H3_LATENTS",
+          "links": [
+            7
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "sampling_info",
+          "type": "STRING",
+          "links": [
+            10
+          ],
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3Sample"
+      },
+      "widgets_values": [
+        true
+      ]
+    },
+    {
+      "id": 7,
+      "type": "WeeToddH3DirectPublishLatents",
+      "pos": [
+        2100,
+        90
+      ],
+      "size": [
+        390,
+        290
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "components",
+          "type": "WEETODD_H3_COMPONENTS",
+          "link": 9
+        },
+        {
+          "name": "latents",
+          "type": "WEETODD_H3_LATENTS",
+          "link": 7
+        },
+        {
+          "name": "sampling_info",
+          "type": "STRING",
+          "link": 10
+        }
+      ],
+      "outputs": [
+        {
+          "name": "video_path",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 0
+        },
+        {
+          "name": "generation_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3DirectPublishLatents"
+      },
+      "widgets_values": [
+        "WeeTodd/H3_fflf2va_balance",
+        18,
+        0.025,
+        "{\"workflow\":\"h3_fflf2va_balance\",\"profile\":\"balance\",\"task\":\"fflf2va\",\"seed\":0,\"real_transformer_evaluations\":6,\"cache\":\"disabled\",\"preview\":\"enabled\",\"reference_sizing\":\"not applicable\"}",
+        ""
+      ]
+    },
+    {
+      "id": 8,
+      "type": "WeeToddH3ValidatedSamplingPreset",
+      "pos": [
+        1210,
+        480
+      ],
+      "size": [
+        430,
+        300
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "config",
+          "type": "WEETODD_H3_CONFIG",
+          "link": 12
+        }
+      ],
+      "outputs": [
+        {
+          "name": "config",
+          "type": "WEETODD_H3_CONFIG",
+          "links": [
+            4,
+            8
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "loras",
+          "type": "WEETODD_H3_LORAS",
+          "links": [
+            11
+          ],
+          "slot_index": 1
+        },
+        {
+          "name": "trajectory_forecast",
+          "type": "WEETODD_H3_TRAJECTORY_FORECAST",
+          "links": [
+            13
+          ],
+          "slot_index": 2
+        },
+        {
+          "name": "preset_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 3
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3ValidatedSamplingPreset"
+      },
+      "widgets_values": [
+        "Staged Turbo \u2014 drbaph v4 step-600 \u2014 2 base + 4 Turbo evaluations"
+      ]
+    },
+    {
+      "id": 9,
+      "type": "MarkdownNote",
+      "pos": [
+        40.0,
+        -520.0
+      ],
+      "size": [
+        760,
+        500
+      ],
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "title": "Setup and model downloads",
+      "properties": {},
+      "widgets_values": [
+        "## h3 fflf2va balance\n\n1. Install WeeTodd Nodes and restart ComfyUI.\n2. Download the H3 components listed below.\n3. Keep the relative Component Loader paths unchanged.\n4. Select the required images in ComfyUI.\n5. Queue the workflow after all required inputs are selected.\n\n### H3 downloads\n\n- [Official MiniMax H3 partition, processor, tokenizer, and audio VAE](https://huggingface.co/MiniMaxAI/MiniMax-H3)\n  Save the repository under `ComfyUI/models/MiniMax-H3`.\n- [Q8-extended paged transformer](https://huggingface.co/Vayden/MiniMax-H3-MLX-q8-extended-paged)\n  Save it under `ComfyUI/models/MiniMax-H3/transformers/q8_extended_paged`.\n- [Qwen3-VL Q8 paged conditioner](https://huggingface.co/Vayden/Qwen3-VL-32B-H3-MLX-q8-paged)\n  Save it under `ComfyUI/models/MiniMax-H3/text_encoders/q8-paged`.\n- [MiniMax H3 video VAE MLX Q8](https://huggingface.co/Vayden/MiniMax-H3-Video-VAE-MLX-Q8)\n  Save it under `ComfyUI/models/MiniMax-H3/vae/q8`.\n\n### Required LoRA\n\n- [drbaph v4 step-600 EMA adapter](https://huggingface.co/drbaph/MiniMax-H3-Turbo-Lora-ComfyUI/blob/main/minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors)\n- Save it as `ComfyUI/models/loras/minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors`."
+      ],
+      "color": "#243447",
+      "bgcolor": "#15202b"
+    },
+    {
+      "id": 10,
+      "type": "WeeToddH3PreviewOverride",
+      "pos": [
+        440,
+        80
+      ],
+      "size": [
+        390,
+        270
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "components",
+          "type": "WEETODD_H3_COMPONENTS",
+          "link": 14
+        }
+      ],
+      "outputs": [
+        {
+          "name": "components",
+          "type": "WEETODD_H3_COMPONENTS",
+          "links": [
+            3,
+            6,
+            9
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3PreviewOverride"
+      },
+      "widgets_values": [
+        "taeh3.safetensors",
+        "auto",
+        "taeh3_coreml_256.mlpackage",
+        1,
+        6,
+        256,
+        "conservative collapse guard"
+      ]
+    },
+    {
+      "id": 11,
+      "type": "LoadImage",
+      "pos": [
+        460,
+        390
+      ],
+      "size": [
+        300,
+        310
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            15
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "MASK",
+          "type": "MASK",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoadImage"
+      },
+      "widgets_values": [
+        "",
+        "image"
+      ]
+    }
+  ],
+  "links": [
+    [
+      1,
+      3,
+      0,
+      4,
+      0,
+      "IMAGE"
+    ],
+    [
+      2,
+      4,
+      0,
+      5,
+      2,
+      "WEETODD_H3_KEYFRAMES"
+    ],
+    [
+      3,
+      10,
+      0,
+      5,
+      0,
+      "WEETODD_H3_COMPONENTS"
+    ],
+    [
+      4,
+      8,
+      0,
+      5,
+      1,
+      "WEETODD_H3_CONFIG"
+    ],
+    [
+      5,
+      5,
+      0,
+      6,
+      1,
+      "WEETODD_H3_CONDITIONING"
+    ],
+    [
+      6,
+      10,
+      0,
+      6,
+      0,
+      "WEETODD_H3_COMPONENTS"
+    ],
+    [
+      7,
+      6,
+      0,
+      7,
+      1,
+      "WEETODD_H3_LATENTS"
+    ],
+    [
+      8,
+      8,
+      0,
+      6,
+      2,
+      "WEETODD_H3_CONFIG"
+    ],
+    [
+      9,
+      10,
+      0,
+      7,
+      0,
+      "WEETODD_H3_COMPONENTS"
+    ],
+    [
+      10,
+      6,
+      1,
+      7,
+      2,
+      "STRING"
+    ],
+    [
+      11,
+      8,
+      1,
+      6,
+      4,
+      "WEETODD_H3_LORAS"
+    ],
+    [
+      12,
+      2,
+      0,
+      8,
+      0,
+      "WEETODD_H3_CONFIG"
+    ],
+    [
+      13,
+      8,
+      2,
+      6,
+      3,
+      "WEETODD_H3_TRAJECTORY_FORECAST"
+    ],
+    [
+      14,
+      1,
+      0,
+      10,
+      0,
+      "WEETODD_H3_COMPONENTS"
+    ],
+    [
+      15,
+      11,
+      0,
+      4,
+      1,
+      "IMAGE"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {
+    "ds": {
+      "scale": 0.62,
+      "offset": [
+        40,
+        80
+      ]
+    }
+  },
+  "version": 0.4
+}

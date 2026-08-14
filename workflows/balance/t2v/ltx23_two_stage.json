@@ -1,0 +1,112 @@
+{
+  "last_node_id": 5,
+  "last_link_id": 4,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "WeeToddLTX23ModelLoader",
+      "pos": [40, 80],
+      "size": [360, 150],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [{"name": "model", "type": "WEETODD_LTX23_MODEL", "links": [1], "slot_index": 0}],
+      "properties": {"Node name for S&R": "WeeToddLTX23ModelLoader"},
+      "widgets_values": ["LTX-2.3/q8", "mlx-community/gemma-3-12b-it-4bit"]
+    },
+    {
+      "id": 2,
+      "type": "WeeToddLTX23GenerationConfig",
+      "pos": [40, 290],
+      "size": [380, 360],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {"name": "config", "type": "WEETODD_LTX23_CONFIG", "links": [2, 4], "slot_index": 0},
+        {"name": "resolved_settings", "type": "STRING", "links": null, "slot_index": 1}
+      ],
+      "properties": {"Node name for S&R": "WeeToddLTX23GenerationConfig"},
+      "widgets_values": ["two_stage", 704, 448, 5.0, 24.0, 0, 0, 0, 3.0, 1.0, true, false]
+    },
+    {
+      "id": 3,
+      "type": "WeeToddLTX23Preflight",
+      "pos": [500, 90],
+      "size": [340, 180],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [
+        {"name": "model", "type": "WEETODD_LTX23_MODEL", "link": 1},
+        {"name": "config", "type": "WEETODD_LTX23_CONFIG", "link": 2}
+      ],
+      "outputs": [
+        {"name": "model", "type": "WEETODD_LTX23_MODEL", "links": [3], "slot_index": 0},
+        {"name": "preflight_report", "type": "STRING", "links": null, "slot_index": 1}
+      ],
+      "properties": {"Node name for S&R": "WeeToddLTX23Preflight"},
+      "widgets_values": []
+    },
+    {
+      "id": 4,
+      "type": "WeeToddLTX23Generate",
+      "pos": [920, 90],
+      "size": [500, 430],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {"name": "model", "type": "WEETODD_LTX23_MODEL", "link": 3},
+        {"name": "config", "type": "WEETODD_LTX23_CONFIG", "link": 4},
+        {"name": "first_frame", "type": "IMAGE", "link": null}
+      ],
+      "outputs": [
+        {"name": "video_path", "type": "STRING", "links": null, "slot_index": 0},
+        {"name": "generation_info", "type": "STRING", "links": null, "slot_index": 1}
+      ],
+      "properties": {"Node name for S&R": "WeeToddLTX23Generate"},
+      "widgets_values": [
+        "Cinematic live-action medium-wide shot inside a warmly lit neighborhood bakery at dawn, with amber pendant lights, flour-dusted wood, copper pans, and cool blue window light. A gray-haired baker in his sixties, wearing a white shirt and dark green apron, carefully slides a tray of rising bread toward the oven while a small orange cat watches from a stool. The baker pauses, notices one loaf slowly swelling into a comically perfect dome, and leans closer as his eyebrows lift and the cat tilts its head. Steam curls above the tray, the apron shifts with his breathing, and fine flour drifts through the light. The camera makes one gentle push toward the bread and settles with the baker, cat, and glowing oven clearly framed. The room carries quiet oven crackle, soft tray scrapes, distant morning birds, and the baker says in a dry, quiet voice, \"Well, you are ambitious.\" No music.",
+        "WeeTodd/LTX23_two_stage",
+        true
+      ]
+    },
+    {
+      "id": 5,
+      "type": "MarkdownNote",
+      "pos": [
+        40.0,
+        -480.0
+      ],
+      "size": [
+        760,
+        500
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "title": "Setup and model downloads",
+      "properties": {},
+      "widgets_values": [
+        "## ltx23 two stage\n\n1. Install WeeTodd Nodes and restart ComfyUI.\n2. Download the licensed LTX 2.3 files and the Gemma encoder.\n3. Assemble the README model bundle under `ComfyUI/models/LTX-2.3/q8`.\n4. Queue the workflow after **LTX 2.3 Preflight** succeeds.\n\n### Downloads\n\n- [LTX 2.3 model files](https://huggingface.co/Lightricks/LTX-2.3)\n- [Gemma 3 MLX encoder](https://huggingface.co/mlx-community/gemma-3-12b-it-4bit)"
+      ],
+      "color": "#243447",
+      "bgcolor": "#15202b"
+    }
+  ],
+  "links": [
+    [1, 1, 0, 3, 0, "WEETODD_LTX23_MODEL"],
+    [2, 2, 0, 3, 1, "WEETODD_LTX23_CONFIG"],
+    [3, 3, 0, 4, 0, "WEETODD_LTX23_MODEL"],
+    [4, 2, 0, 4, 1, "WEETODD_LTX23_CONFIG"]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {},
+  "version": 0.4
+}

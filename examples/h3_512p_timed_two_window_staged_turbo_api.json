@@ -41,7 +41,7 @@
       "target_duration_seconds": 8.0
     }
   },
-  "4": {"class_type": "LoadImage", "inputs": {"image": "first_frame.png"}},
+  "4": {"class_type": "LoadImage", "inputs": {"image": ""}},
   "5": {
     "class_type": "WeeToddH3TimedKeyframe",
     "inputs": {
@@ -88,7 +88,7 @@
   },
   "11": {
     "class_type": "LoadImage",
-    "inputs": {"image": "timed_chain_validation/raincoat_anchor_late.png"}
+    "inputs": {"image": ""}
   },
   "12": {
     "class_type": "WeeToddH3TimedKeyframe",

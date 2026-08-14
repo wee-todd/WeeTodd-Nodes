@@ -16,12 +16,11 @@ from ltx25_mlx.runtime import (
     apply_ltx25_generation_preset,
     backend_capability,
 )
-from ltx25_mlx.upscale import (
+from ltx25_mlx.upscale_contracts import (
     LTX25_INPUT_SIZE_POLICIES,
     LTX25_PIXEL_SPATIAL_MODE,
     LTX25_SOURCE_FRAME_ANCHORS,
     LTX25_UPSCALE_MODES,
-    upscale_video_to_file,
 )
 
 from .ltx_nodes import (
@@ -56,7 +55,7 @@ def _register_ltx25_model_folders() -> None:
 
 def _resolve_component(value: str, categories: tuple[str, ...]) -> Path:
     path = Path(value).expanduser()
-    if path.is_absolute() or path.is_file():
+    if path.is_absolute() or path.exists():
         return path
     if ".." in path.parts:
         raise ValueError("Relative LTX 2.5 component paths cannot contain '..'.")
@@ -83,7 +82,7 @@ def _resolve_component(value: str, categories: tuple[str, ...]) -> Path:
             tail = Path(*path.parts[1:])
             candidates.extend(root / tail for root in roots)
         for candidate in candidates:
-            if candidate.is_file():
+            if candidate.exists():
                 return candidate
         return models_dir / path
     except ImportError:
@@ -393,6 +392,143 @@ class WeeToddLTX25Generate:
                 image_path.unlink(missing_ok=True)
 
 
+class WeeToddLTX25GenerateChained:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "model": ("WEETODD_LTX25_MODEL",),
+                "config": ("WEETODD_LTX25_CONFIG",),
+                "window_count": ("INT", {"default": 3, "min": 2, "max": 4, "step": 1}),
+                "overlap_frames": (
+                    "INT",
+                    {
+                        "default": 25,
+                        "min": 9,
+                        "max": 57,
+                        "step": 8,
+                        "tooltip": (
+                            "Must equal 8n+1. Twenty-five frames is the balanced 24 fps default."
+                        ),
+                    },
+                ),
+                "prompt_1": ("STRING", {"multiline": True, "dynamicPrompts": True}),
+                "prompt_2": (
+                    "STRING",
+                    {
+                        "multiline": True,
+                        "dynamicPrompts": True,
+                        "default": "",
+                        "tooltip": "Leave empty to reuse the preceding window prompt.",
+                    },
+                ),
+                "prompt_3": (
+                    "STRING",
+                    {
+                        "multiline": True,
+                        "dynamicPrompts": True,
+                        "default": "",
+                        "tooltip": "Leave empty to reuse the preceding window prompt.",
+                    },
+                ),
+                "prompt_4": (
+                    "STRING",
+                    {
+                        "multiline": True,
+                        "dynamicPrompts": True,
+                        "default": "",
+                        "tooltip": (
+                            "Used only when window_count is four; empty reuses window three."
+                        ),
+                    },
+                ),
+                "filename_prefix": ("STRING", {"default": "WeeTodd/LTX25_chained"}),
+                "unload_after_generate": ("BOOLEAN", {"default": True}),
+            }
+        }
+
+    RETURN_TYPES = ("STRING", "STRING")
+    RETURN_NAMES = ("video_path", "generation_info")
+    OUTPUT_NODE = True
+    FUNCTION = "generate"
+    CATEGORY = "WeeTodd/LTX 2.5"
+    DESCRIPTION = (
+        "Generate two to four overlapping LTX 2.5 windows with timeline-aligned latent guides, "
+        "causal-aware latent transitions, and one synchronized audio/video decode."
+    )
+
+    def generate(
+        self,
+        model,
+        config,
+        window_count,
+        overlap_frames,
+        prompt_1,
+        prompt_2,
+        prompt_3,
+        prompt_4,
+        filename_prefix,
+        unload_after_generate,
+    ):
+        from ltx25_mlx.chaining import plan_ltx25_chain
+
+        report = model.validate(config.pipeline_mode)
+        config.validate(scale_factors=tuple(int(value) for value in report["video_scale_factors"]))
+        plan = plan_ltx25_chain(
+            total_frames=config.num_frames,
+            window_count=int(window_count),
+            overlap_frames=int(overlap_frames),
+            frame_rate=config.frame_rate,
+        )
+        candidates = [prompt_1, prompt_2, prompt_3, prompt_4]
+        prompts = []
+        for index in range(int(window_count)):
+            value = str(candidates[index]).strip()
+            if not value:
+                if not prompts:
+                    raise ValueError("LTX 2.5 chained window one requires a prompt.")
+                value = prompts[-1]
+            prompts.append(value)
+
+        released = _release_h3_stages()
+        final = _safe_target(filename_prefix, config.seed)
+        final.parent.mkdir(parents=True, exist_ok=True)
+        partial = final.with_name(f".{final.stem}.partial{final.suffix}")
+        metadata_path = final.with_suffix(".json")
+        partial_metadata = final.with_name(f".{final.stem}.metadata.partial.json")
+        try:
+            info = RUNTIME.generate_chain_to_file(
+                model,
+                config,
+                prompts,
+                partial,
+                window_count=int(window_count),
+                overlap_frames=int(overlap_frames),
+                unload_after=unload_after_generate,
+                check_interrupted=_check_interrupted(),
+                step_callback=_comfy_progress(int(window_count) * 11),
+            )
+            if not partial.is_file() or partial.stat().st_size == 0:
+                raise RuntimeError("LTX 2.5 chained pipeline did not produce a video file.")
+            info.update(
+                video_path=str(final),
+                h3_components_released=released,
+                software=_software_versions(),
+                chain_plan=plan.as_dict(),
+            )
+            partial_metadata.write_text(json.dumps(info, indent=2, sort_keys=True) + "\n")
+            os.replace(partial, final)
+            os.replace(partial_metadata, metadata_path)
+            return {
+                "ui": {"gifs": [_preview(final)]},
+                "result": (str(final), json.dumps(info, indent=2, sort_keys=True)),
+            }
+        except BaseException:
+            partial.unlink(missing_ok=True)
+            partial_metadata.unlink(missing_ok=True)
+            raise
+
+
 class WeeToddLTX25VideoUpscale:
     @classmethod
     def INPUT_TYPES(cls):
@@ -585,6 +721,8 @@ class WeeToddLTX25VideoUpscale:
             pixel_lora_path = None
             if mode == LTX25_PIXEL_SPATIAL_MODE:
                 pixel_lora_path = str(_resolve_component(pixel_spatial_lora, ("loras", "ltx25")))
+            from ltx25_mlx.upscale import upscale_video_to_file
+
             result = upscale_video_to_file(
                 model,
                 images,
@@ -646,6 +784,7 @@ NODE_CLASS_MAPPINGS = {
     "WeeToddLTX25GenerationConfig": WeeToddLTX25GenerationConfig,
     "WeeToddLTX25Preflight": WeeToddLTX25Preflight,
     "WeeToddLTX25Generate": WeeToddLTX25Generate,
+    "WeeToddLTX25GenerateChained": WeeToddLTX25GenerateChained,
     "WeeToddLTX25VideoUpscale": WeeToddLTX25VideoUpscale,
     "WeeToddLTX25Unload": WeeToddLTX25Unload,
 }
@@ -655,6 +794,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "WeeToddLTX25GenerationConfig": "WeeTodd LTX 2.5 Generation Config",
     "WeeToddLTX25Preflight": "WeeTodd LTX 2.5 Preflight",
     "WeeToddLTX25Generate": "WeeTodd LTX 2.5 Generate Video + Audio",
+    "WeeToddLTX25GenerateChained": "WeeTodd LTX 2.5 Generate Chained Timeline",
     "WeeToddLTX25VideoUpscale": "WeeTodd LTX 2.5 Video Upscale / Refine",
     "WeeToddLTX25Unload": "WeeTodd LTX 2.5 Unload MLX Runtime",
 }

@@ -15,9 +15,13 @@ REQUIRED_SIDECARS = ("tokenizer_config.json", "processor_config.json")
 SUPPORTED_MODEL_TYPES = ("gemma4_unified",)
 
 
-def _parse_json_object(raw: str | None, *, label: str, source: Path) -> dict[str, Any]:
+def _parse_json_object(
+    raw: str | dict[str, Any] | None, *, label: str, source: Path
+) -> dict[str, Any]:
     if raw is None:
         raise ValueError(f"LTX 2.5 Gemma pack {source} is missing {label!r} metadata.")
+    if isinstance(raw, dict):
+        return raw
     try:
         value = json.loads(raw)
     except json.JSONDecodeError as exc:
@@ -38,12 +42,25 @@ def inspect_gemma4_pack(path: str | Path) -> dict[str, object]:
     allocates or materializes any weights.
     """
     source = Path(path).expanduser()
-    if not source.is_file() or source.suffix != ".safetensors":
-        raise FileNotFoundError(f"LTX 2.5 Gemma pack is not a safetensors file: {source}")
+    paged_manifest = None
+    if source.is_dir():
+        from .paged_checkpoint import LTX25PagedManifest
 
-    with safe_open(source, framework="numpy") as handle:
-        metadata = handle.metadata() or {}
-        keys = set(handle.keys())
+        paged_manifest = LTX25PagedManifest.load(source)
+        if paged_manifest.kind != "gemma":
+            raise ValueError(f"Expected a paged Gemma pack, got {paged_manifest.kind!r}.")
+        header_paths = (paged_manifest.fixed_path, *paged_manifest.layer_paths)
+    elif source.is_file() and source.suffix == ".safetensors":
+        header_paths = (source,)
+    else:
+        raise FileNotFoundError(f"LTX 2.5 Gemma pack is not a safetensors file: {source}")
+    metadata = paged_manifest.metadata if paged_manifest is not None else {}
+    keys: set[str] = set()
+    for header_path in header_paths:
+        with safe_open(header_path, framework="numpy") as handle:
+            if paged_manifest is None:
+                metadata = handle.metadata() or {}
+            keys.update(handle.keys())
 
     config = _parse_json_object(
         metadata.get(GEMMA_CONFIG_METADATA_KEY),
@@ -117,6 +134,7 @@ def inspect_gemma4_pack(path: str | Path) -> dict[str, object]:
                 "model.diffusion_model.audio_embeddings_connector.",
             )
         ),
+        "paged_q8": paged_manifest is not None,
     }
 
 

@@ -120,6 +120,7 @@ class LTX25VideoDecoder:
         self.path = Path(path).expanduser()
         self.verbose = verbose
         self._decoder = None
+        self.last_decode_report: dict[str, object] = {}
 
     def load(self):
         if self._decoder is not None:
@@ -160,7 +161,32 @@ class LTX25VideoDecoder:
         frame_rate: float = 24.0,
         audio_path: str | None = None,
     ) -> str:
-        self.load().decode_and_stream(
+        decoder = self.load()
+        # ltx-core-mlx computes a conservative temporal tile from the actual
+        # latent shape and streams completed RGB frames directly to ffmpeg. Keep
+        # that bounded path visible in generation metadata instead of presenting
+        # decode as an opaque final allocation.
+        try:
+            import os
+
+            from ltx_core_mlx.model.video_vae.video_vae import _compute_decode_tiling
+
+            tiling = _compute_decode_tiling(video_latent.shape, frame_rate=frame_rate)
+            temporal = getattr(tiling, "temporal_config", None)
+            self.last_decode_report = {
+                "publication": "direct_ffmpeg_stream",
+                "decode_budget_gib": float(os.environ.get("LTX2_VAE_DECODE_BUDGET_GB", "8.0")),
+                "temporal_tiling": temporal is not None,
+                "tile_frames": (
+                    int(temporal.tile_size_in_frames) if temporal is not None else None
+                ),
+                "overlap_frames": (
+                    int(temporal.tile_overlap_in_frames) if temporal is not None else None
+                ),
+            }
+        except (ImportError, AttributeError, TypeError, ValueError):
+            self.last_decode_report = {"publication": "direct_ffmpeg_stream"}
+        decoder.decode_and_stream(
             video_latent,
             output_path,
             frame_rate=frame_rate,

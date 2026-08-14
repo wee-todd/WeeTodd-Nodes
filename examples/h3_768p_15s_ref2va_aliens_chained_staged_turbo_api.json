@@ -70,7 +70,7 @@
   "6": {
     "class_type": "LoadImage",
     "inputs": {
-      "image": "tall_white_reference_sheet.png"
+      "image": ""
     }
   },
   "7": {
@@ -86,7 +86,7 @@
   "8": {
     "class_type": "LoadImage",
     "inputs": {
-      "image": "grey_alien_reference_sheet.png"
+      "image": ""
     }
   },
   "9": {
@@ -106,7 +106,7 @@
   "10": {
     "class_type": "LoadVideo",
     "inputs": {
-      "file": "H3_768p_15s_One_Clip_Staged_Turbo_Benchmark_20260811.mp4"
+      "file": ""
     }
   },
   "11": {

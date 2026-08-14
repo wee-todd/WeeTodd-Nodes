@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import math
+import os
 from dataclasses import dataclass
 from pathlib import Path
+from threading import RLock
 from types import MethodType
 from typing import Any
 
@@ -260,7 +263,15 @@ def _compute_rope_freqs_float64(
 
 def transformer_metadata(path: str | Path) -> dict[str, Any]:
     """Return decoded safetensors metadata without materializing tensors."""
-    with safe_open(Path(path).expanduser(), framework="numpy") as handle:
+    source = Path(path).expanduser()
+    if source.is_dir():
+        from .paged_checkpoint import LTX25PagedManifest
+
+        manifest = LTX25PagedManifest.load(source)
+        if manifest.kind != "transformer":
+            raise ValueError(f"Expected a paged transformer, got {manifest.kind!r}: {source}")
+        return manifest.metadata
+    with safe_open(source, framework="numpy") as handle:
         raw = handle.metadata() or {}
     decoded: dict[str, Any] = {}
     for key, value in raw.items():
@@ -402,7 +413,7 @@ def _load_resident_transformer_with_loras(
 class _OfficialComfyBlockStreamer:
     """Adapt official Comfy block names to the existing MLX streaming API."""
 
-    def __new__(cls, path: str | Path):
+    def __new__(cls, path, *, paged_manifest=None):
         from ltx_core_mlx.loader.block_streaming import BlockStreamer
 
         prefix = "model.diffusion_model.transformer_blocks."
@@ -418,7 +429,187 @@ class _OfficialComfyBlockStreamer:
                 converted.append((full_key, mapped.removeprefix(block_prefix)))
             remapped[index] = converted
         streamer._block_key_map = remapped
+        if paged_manifest is not None:
+            return _PrefetchedBlockStreamer(streamer, paged_manifest)
         return streamer
+
+
+class _PrefetchedBlockStreamer:
+    """Add bounded read-ahead and measurements to the upstream block streamer."""
+
+    def __init__(self, streamer, manifest, *, enabled: bool | None = None):
+        from .page_prefetch import LTX25PagePrefetch
+
+        self._streamer = streamer
+        self._manifest = manifest
+        self._prefetch = LTX25PagePrefetch(
+            manifest.root,
+            manifest.layers,
+            enabled=LTX25PagePrefetch.default_enabled() if enabled is None else enabled,
+            thread_name="ltx25-transformer-prefetch",
+        )
+        self.bind_calls = 0
+        self.bind_seconds = 0.0
+        self._prefetch.start(0)
+
+    @property
+    def block_count(self):
+        return self._streamer.block_count
+
+    @property
+    def block_prefix(self):
+        return self._streamer.block_prefix
+
+    def block_keys(self, index):
+        return self._streamer.block_keys(index)
+
+    def bind(self, block, index, evict_previous=None, lora_sources=None):
+        import time
+
+        self._prefetch.wait(index)
+        started = time.perf_counter()
+        self._streamer.bind(
+            block,
+            index,
+            evict_previous=evict_previous,
+            lora_sources=lora_sources,
+        )
+        self.bind_calls += 1
+        self.bind_seconds += time.perf_counter() - started
+        next_index = (index + 1) % self._manifest.num_layers
+        self._prefetch.start(next_index)
+
+    def report(self):
+        return {
+            "streamed_bind_calls": self.bind_calls,
+            "streamed_bind_seconds": self.bind_seconds,
+            **self._prefetch.report(),
+        }
+
+    def close(self):
+        self._prefetch.close()
+        self._streamer.close()
+
+
+_STREAMING_EVAL_LOCK = RLock()
+
+
+class _StreamingEvalWindow:
+    """Delay the upstream streaming barrier until a safe block window ends."""
+
+    def __init__(self, window: int, eval_fn=mx.eval) -> None:
+        if window < 1:
+            raise ValueError("LTX 2.5 streaming window must be at least one block.")
+        self.window = int(window)
+        self.eval_fn = eval_fn
+        self.calls = 0
+        self.flushes = 0
+        self._pending = None
+
+    def __call__(self, *arrays):
+        self.calls += 1
+        self._pending = arrays
+        if self.calls % self.window == 0:
+            return self.flush()
+        return None
+
+    def flush(self):
+        if self._pending is None:
+            return None
+        arrays = self._pending
+        self._pending = None
+        self.flushes += 1
+        return self.eval_fn(*arrays)
+
+
+def _streaming_window_from_environment(*, paged: bool) -> int:
+    raw = os.environ.get("WEETODD_LTX25_STREAMING_WINDOW", "1").strip()
+    try:
+        window = int(raw)
+    except ValueError as exc:
+        raise ValueError(
+            "WEETODD_LTX25_STREAMING_WINDOW must be the integer 1 or 2."
+        ) from exc
+    if window not in {1, 2}:
+        raise ValueError("WEETODD_LTX25_STREAMING_WINDOW must be the integer 1 or 2.")
+    if window > 1 and not paged:
+        raise ValueError(
+            "LTX 2.5 two-block streaming requires a paged transformer checkpoint."
+        )
+    return window
+
+
+class _WindowedStreamingLTXModel(nn.Module):
+    """Stream through multiple compiled block slots before one Metal barrier."""
+
+    def __init__(self, model, streamer, *, window: int, lora_sources=None) -> None:
+        super().__init__()
+        if len(model.transformer_blocks) != window:
+            raise ValueError("LTX 2.5 streaming block slots do not match the window size.")
+        self.inner = model
+        shared_blocks = tuple(model.transformer_blocks)
+        compiled_blocks = tuple(mx.compile(block, inputs=block) for block in shared_blocks)
+        object.__setattr__(self, "_streamer", streamer)
+        object.__setattr__(self, "_shared_blocks", shared_blocks)
+        object.__setattr__(self, "_compiled_blocks", compiled_blocks)
+        object.__setattr__(self, "_lora_sources", lora_sources or [])
+        object.__setattr__(self, "_window", int(window))
+        object.__setattr__(self, "_eval_calls", 0)
+        object.__setattr__(self, "_eval_flushes", 0)
+
+    def __call__(self, *args, **kwargs):
+        if kwargs.get("block_provider") is not None:
+            return self.inner(*args, **kwargs)
+
+        from ltx_core_mlx.model.transformer import model as model_module
+
+        streamer = object.__getattribute__(self, "_streamer")
+        shared_blocks = object.__getattribute__(self, "_shared_blocks")
+        compiled_blocks = object.__getattribute__(self, "_compiled_blocks")
+        lora_sources = object.__getattribute__(self, "_lora_sources")
+        window = object.__getattribute__(self, "_window")
+        previous = [None] * window
+        use_compiled = kwargs.get("perturbations") is None
+
+        def provider(index: int):
+            slot = index % window
+            streamer.bind(
+                shared_blocks[slot],
+                index,
+                evict_previous=previous[slot],
+                lora_sources=lora_sources or None,
+            )
+            previous[slot] = index
+            return compiled_blocks[slot] if use_compiled else shared_blocks[slot]
+
+        kwargs["block_provider"] = provider
+        with _STREAMING_EVAL_LOCK:
+            original_eval = model_module._mx_eval
+            gate = _StreamingEvalWindow(window, original_eval)
+            model_module._mx_eval = gate
+            try:
+                result = self.inner(*args, **kwargs)
+            finally:
+                try:
+                    gate.flush()
+                finally:
+                    model_module._mx_eval = original_eval
+                    object.__setattr__(self, "_eval_calls", gate.calls)
+                    object.__setattr__(self, "_eval_flushes", gate.flushes)
+            return result
+
+    def __getattr__(self, name: str):
+        try:
+            return super().__getattr__(name)
+        except AttributeError:
+            return getattr(super().__getattr__("inner"), name)
+
+    def streaming_window_report(self) -> dict[str, int]:
+        return {
+            "streaming_window": object.__getattribute__(self, "_window"),
+            "streaming_eval_calls": object.__getattribute__(self, "_eval_calls"),
+            "streaming_eval_flushes": object.__getattribute__(self, "_eval_flushes"),
+        }
 
 
 def load_ltx25_transformer(
@@ -433,12 +624,29 @@ def load_ltx25_transformer(
     from ltx_core_mlx.utils.weights import apply_quantization, load_split_safetensors
 
     source = Path(path).expanduser()
+    paged_manifest = None
+    if source.is_dir():
+        from .paged_checkpoint import LTX25PagedManifest
+
+        paged_manifest = LTX25PagedManifest.load(source)
+        if paged_manifest.kind != "transformer":
+            raise ValueError(f"Expected a paged transformer, got {paged_manifest.kind!r}.")
+        if not low_ram_streaming:
+            raise ValueError(
+                "Paged LTX 2.5 transformer checkpoints require low_ram_streaming=true."
+            )
     resolved_loras = tuple((Path(item).expanduser(), float(strength)) for item, strength in loras)
     for lora_path, _strength in resolved_loras:
         inspect_ltx25_ic_lora(lora_path)
     config = LTX25TransformerConfig.from_metadata(transformer_metadata(source))
     model = LTX25Model.build(config)
-    weights = remap_comfy_transformer_weights(load_split_safetensors(source))
+    if paged_manifest is None:
+        raw_weights = load_split_safetensors(source)
+        block_sources = source
+    else:
+        raw_weights = dict(mx.load(str(paged_manifest.fixed_path)))
+        block_sources = list(paged_manifest.layer_paths)
+    weights = remap_comfy_transformer_weights(raw_weights)
     if not weights:
         raise ValueError(f"LTX 2.5 transformer {source} has no recognized weights.")
     if low_ram_streaming:
@@ -448,14 +656,27 @@ def load_ltx25_transformer(
             LTXV_LORA_COMFY_RENAMING_MAP,
         )
 
+        streaming_window = _streaming_window_from_environment(paged=paged_manifest is not None)
         model.transformer_blocks = [model.transformer_blocks[0]]
-        apply_quantization(model, weights)
+        quantization_weights = weights
+        if paged_manifest is not None:
+            first_page = remap_comfy_transformer_weights(
+                dict(mx.load(str(paged_manifest.layer_paths[0])))
+            )
+            quantization_weights = {**weights, **first_page}
+        apply_quantization(model, quantization_weights)
         non_block = [
             (key, value)
             for key, value in weights.items()
             if not key.startswith("transformer_blocks.")
         ]
         model.load_weights(non_block, strict=False)
+        if streaming_window > 1:
+            first_block = model.transformer_blocks[0]
+            model.transformer_blocks = [
+                first_block,
+                *(copy.deepcopy(first_block) for _ in range(streaming_window - 1)),
+            ]
         lora_sources = [
             BlockLoraSource(
                 lora_path,
@@ -465,11 +686,36 @@ def load_ltx25_transformer(
             )
             for lora_path, strength in resolved_loras
         ]
-        model = StreamingLTXModel(
-            model,
-            _OfficialComfyBlockStreamer(source),
-            lora_sources=lora_sources,
-        )
+        streamer = _OfficialComfyBlockStreamer(block_sources, paged_manifest=paged_manifest)
+        if streaming_window == 1:
+            model = StreamingLTXModel(model, streamer, lora_sources=lora_sources)
+        else:
+            model = _WindowedStreamingLTXModel(
+                model,
+                streamer,
+                window=streaming_window,
+                lora_sources=lora_sources,
+            )
+        if paged_manifest is not None:
+            object.__setattr__(
+                model,
+                "paged_checkpoint_report",
+                {
+                    "format": paged_manifest.format,
+                    "bits": paged_manifest.bits,
+                    "group_size": paged_manifest.group_size,
+                    "fixed_bytes": paged_manifest.fixed.tensor_bytes,
+                    "peak_layer_bytes": max(
+                        record.tensor_bytes for record in paged_manifest.layers
+                    ),
+                    "streaming_window": streaming_window,
+                },
+            )
+            object.__setattr__(
+                model,
+                "_weetodd_paged_streamer",
+                object.__getattribute__(model, "_streamer"),
+            )
         mx.eval(model.parameters())
         aggressive_cleanup()
         return model

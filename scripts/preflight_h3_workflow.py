@@ -95,10 +95,13 @@ def portable_media_inputs(graph: dict[str, dict]) -> dict[str, str]:
         if field is None:
             continue
         value = node["inputs"].get(field)
-        if not isinstance(value, str) or not value:
+        if not isinstance(value, str):
             raise ValueError(
-                f"Workflow media node {node_id!r} ({node['class_type']}) has no literal {field!r}."
+                f"Workflow media node {node_id!r} ({node['class_type']}) must use a literal "
+                f"{field!r} value."
             )
+        if not value:
+            continue
         path = Path(value).expanduser()
         if path.is_absolute() or ".." in path.parts:
             raise ValueError(
@@ -106,6 +109,17 @@ def portable_media_inputs(graph: dict[str, dict]) -> dict[str, str]:
             )
         values[node_id] = value
     return values
+
+
+def unselected_media_inputs(graph: dict[str, dict]) -> dict[str, str]:
+    """Return media nodes that require a user selection before live execution."""
+
+    return {
+        node_id: node["class_type"]
+        for node_id, node in graph.items()
+        if (field := MEDIA_INPUT_FIELDS.get(node["class_type"])) is not None
+        and node.get("inputs", {}).get(field) == ""
+    }
 
 
 def missing_media_inputs(graph: dict[str, dict], folder_paths) -> dict[str, str]:
@@ -162,6 +176,15 @@ def runtime_preflight(
 
     components = WeeToddH3ComponentLoader().specify(**component_node["inputs"])[0]
     config = WeeToddH3GenerationConfig().configure(**config_node["inputs"])[0]
+    unselected_media = unselected_media_inputs(graph)
+    if unselected_media:
+        details = "; ".join(
+            f"node {node_id} ({node_type})" for node_id, node_type in unselected_media.items()
+        )
+        raise ValueError(
+            "Select every required workflow image, video, or audio input before runtime "
+            f"preflight. Unselected inputs: {details}"
+        )
     missing_media = missing_media_inputs(graph, folder_paths)
     if missing_media:
         details = "; ".join(f"node {node_id}={path}" for node_id, path in missing_media.items())

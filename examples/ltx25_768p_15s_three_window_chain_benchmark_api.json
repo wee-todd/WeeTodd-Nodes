@@ -1,0 +1,50 @@
+{
+  "1": {
+    "class_type": "WeeToddLTX25ComponentLoader",
+    "inputs": {
+      "transformer": "ltx-2.5-22b-distilled-transformer-q8-paged",
+      "text_encoder": "gemma4-12b-with-proj-ltx-2.5-q8-paged",
+      "video_vae": "ltx-2.5-video-vae-conv-bf16.safetensors",
+      "audio_vae": "ltx-2.5-audio-vae-bf16.safetensors",
+      "spatial_upscaler": "ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors",
+      "duration_head": ""
+    }
+  },
+  "2": {
+    "class_type": "WeeToddLTX25GenerationConfig",
+    "inputs": {
+      "preset": "Custom",
+      "width": 1344,
+      "height": 768,
+      "duration_seconds": 15.0,
+      "frame_rate": 24.0,
+      "seed": 584293325,
+      "low_memory": true,
+      "low_ram_streaming": true,
+      "prompt_context": "official_1024",
+      "feed_forward_backend": "reference_fp32"
+    }
+  },
+  "3": {
+    "class_type": "WeeToddLTX25Preflight",
+    "inputs": {
+      "model": ["1", 0],
+      "config": ["2", 0]
+    }
+  },
+  "4": {
+    "class_type": "WeeToddLTX25GenerateChained",
+    "inputs": {
+      "model": ["3", 0],
+      "config": ["2", 0],
+      "window_count": 3,
+      "overlap_frames": 25,
+      "prompt_1": "A single continuous fixed-camera, eye-level medium close-up begins a photorealistic NBA-style postgame interview courtside inside a packed professional basketball arena under bright broadcast lighting. LeBron James, slightly sweaty in his basketball uniform, occupies most of the frame while an adult Filipina sports reporter with long dark hair and professional broadcast makeup stands beside him in partial profile, holding a handheld microphone toward him. The camera remains completely locked. LeBron looks toward the reporter with a thoughtful, respectful expression and begins speaking fluent conversational Tagalog in a deep reflective cadence: \"Nasaksihan nating lahat kung ano ang nagawa ni Steph Curry sa buong career niya\". His mouth articulates naturally while the reporter listens silently with attentive eye contact and one restrained nod. Clean centered dialogue continues over low crowd chatter, distant basketball sounds, and PA-system room tone; no music, subtitles, narration, or cut.",
+      "prompt_2": "The same uninterrupted fixed-camera NBA postgame interview continues from the preceding moment with identical LeBron James appearance, uniform, sweat, reporter, microphone position, bright arena lighting, background crowd, and eye-level medium close-up composition. LeBron keeps looking toward the reporter and continues the same Tagalog sentence without restarting: \"at kung paano niya binago ang laro.\" His deep voice, pace, mouth movement, posture, and reflective expression remain continuous. The reporter stays silent, maintains natural eye contact, and makes a small professional nod. The same restrained arena chatter, occasional basketball sounds, and PA-system room tone continue without an acoustic reset; no music, subtitles, narration, camera movement, or cut.",
+      "prompt_3": "The same uninterrupted fixed-camera NBA postgame interview continues with identical LeBron James appearance, basketball uniform, reporter, microphone, arena lighting, softly moving crowd, and eye-level medium close-up composition. LeBron completes the thought in fluent conversational Tagalog without repeating earlier words: \"Isa siyang klase ng manlalaro na minsan lang talaga dumarating sa isang henerasyon...\" He trails off naturally as though the answer will continue, then holds a thoughtful expression while maintaining eye contact with the reporter. She remains silent with a restrained professional smile. Clean dialogue and the same low arena ambience continue smoothly to the end; no music, subtitles, narration, camera movement, cut, or fade.",
+      "prompt_4": "",
+      "filename_prefix": "WeeTodd/LTX25_768p_15s_Three_Window_Chain_Benchmark_20260813",
+      "unload_after_generate": true
+    }
+  }
+}
