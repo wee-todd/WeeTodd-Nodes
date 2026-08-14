@@ -209,6 +209,7 @@ class LTX25DistilledPipeline:
         video_latent: mx.array,
         carry_frames: tuple[int, ...],
         carry_keyframes: mx.array,
+        image_anchors=(),
         num_frames: int,
         requested_num_frames: int,
         frame_rate: float,
@@ -224,10 +225,16 @@ class LTX25DistilledPipeline:
     ) -> tuple[mx.array, int, float]:
         from ltx_core_mlx.components.patchifiers import VideoLatentPatchifier
         from ltx_core_mlx.conditioning.types.keyframe_cond import VideoConditionByKeyframeIndex
+        from ltx_core_mlx.conditioning.types.latent_cond import VideoConditionByLatentIndex
         from ltx_core_mlx.utils.positions import compute_video_positions
         from ltx_pipelines_mlx.utils.helpers import create_noised_state
 
-        from .dfr import plan_dfr_temporal_tiles, stitch_dfr_temporal_tiles
+        from .dfr import (
+            plan_dfr_temporal_tiles,
+            scale_dfr_temporal_image_anchors,
+            select_dfr_generated_slot_tokens,
+            stitch_dfr_temporal_tiles,
+        )
         from .generated_keyframes import GeneratedKeyframeSlots, set_generated_keyframe_marker
         temporal_sigmas = LTX25_DISTILLED_SIGMAS[4:]
         temporal_reports = []
@@ -272,6 +279,7 @@ class LTX25DistilledPipeline:
             current_fps *= 2.0
             seam_frames = tuple(2 * frame for frame in carry_frames)
             seam_lookup = {frame: index for index, frame in enumerate(seam_frames)}
+            image_anchors = scale_dfr_temporal_image_anchors(image_anchors)
             tiles = plan_dfr_temporal_tiles(seam_frames, num_frames, 2**round_index)
             tile_outputs = []
             slot_frames_all: list[int] = []
@@ -288,7 +296,25 @@ class LTX25DistilledPipeline:
                 local_latent_frames = tile_video.shape[2]
                 local_frames = (local_latent_frames - 1) * 8 + 1
                 conditionings = []
+                tile_image_anchors = tuple(
+                    anchor
+                    for anchor in image_anchors
+                    if tile.pixel_start <= anchor.pixel_frame <= tile.pixel_end
+                )
+                explicit_frames = {anchor.pixel_frame for anchor in tile_image_anchors}
+                for anchor in tile_image_anchors:
+                    local_frame = anchor.pixel_frame - tile.pixel_start
+                    if anchor.replace and local_frame == 0:
+                        conditionings.append(
+                            VideoConditionByLatentIndex(
+                                frame_indices=[0],
+                                clean_latent=anchor.latent_tokens,
+                                strength=anchor.strength,
+                            )
+                        )
                 for anchor in tile.anchor_frames:
+                    if anchor in explicit_frames:
+                        continue
                     if anchor not in seam_lookup:
                         raise RuntimeError("A DFR temporal anchor is missing from the carry bag.")
                     keyframe = carry_keyframes[
@@ -304,26 +330,47 @@ class LTX25DistilledPipeline:
                             strength=0.95,
                         )
                     )
-                local_slots = tuple(frame - tile.pixel_start for frame in tile.slot_frames)
-                slot_initials = mx.concatenate(
-                    [
-                        tile_video[
-                            :,
-                            :,
-                            min(max(round(frame / 8), 0), local_latent_frames - 1) :
-                            min(max(round(frame / 8), 0), local_latent_frames - 1) + 1,
-                        ]
-                        for frame in local_slots
-                    ],
-                    axis=2,
+                for anchor in tile_image_anchors:
+                    local_frame = anchor.pixel_frame - tile.pixel_start
+                    if anchor.replace and local_frame == 0:
+                        continue
+                    conditionings.append(
+                        VideoConditionByKeyframeIndex(
+                            frame_idx=local_frame,
+                            keyframe_latent=anchor.latent_tokens,
+                            spatial_dims=(local_latent_frames, latent_h, latent_w),
+                            frame_rate=conditioning_fps,
+                            strength=anchor.strength,
+                        )
+                    )
+                local_slots = tuple(
+                    frame - tile.pixel_start
+                    for frame in tile.slot_frames
+                    if frame not in explicit_frames
                 )
-                slots = GeneratedKeyframeSlots(
-                    local_slots,
-                    spatial_dims=(local_latent_frames, latent_h, latent_w),
-                    frame_rate=conditioning_fps,
-                    initial_keyframes=slot_initials,
-                )
-                conditionings.append(slots)
+                slots = None
+                if local_slots:
+                    slot_initials = mx.concatenate(
+                        [
+                            tile_video[
+                                :,
+                                :,
+                                min(max(round(frame / 8), 0), local_latent_frames - 1) :
+                                min(max(round(frame / 8), 0), local_latent_frames - 1) + 1,
+                            ]
+                            for frame in local_slots
+                        ],
+                        axis=2,
+                    )
+                    slots = GeneratedKeyframeSlots(
+                        local_slots,
+                        spatial_dims=(local_latent_frames, latent_h, latent_w),
+                        frame_rate=conditioning_fps,
+                        initial_keyframes=slot_initials,
+                    )
+                    # Generated slots must remain last because their learned marker
+                    # is applied to the final appended projection rows.
+                    conditionings.append(slots)
                 tile_tokens, _ = patchifier.patchify(tile_video)
                 state = create_noised_state(
                     base_shape=tile_tokens.shape,
@@ -339,7 +386,7 @@ class LTX25DistilledPipeline:
                     sigma=temporal_sigmas[0],
                     initial_latent=tile_tokens,
                 )
-                slot_rows = slots.token_count
+                slot_rows = slots.token_count if slots is not None else 0
                 set_generated_keyframe_marker(self.dit, slot_rows)
                 evaluation_times = []
                 try:
@@ -376,17 +423,23 @@ class LTX25DistilledPipeline:
                     result.video_latent[:, :generated_rows],
                     (local_latent_frames, latent_h, latent_w),
                 )
-                slot_output = patchifier.unpatchify(
-                    result.video_latent[:, generated_rows : generated_rows + slot_rows],
-                    (len(local_slots), latent_h, latent_w),
-                )
-                mx.eval(tile_output, slot_output)
+                slot_output = None
+                if slot_rows:
+                    slot_output = patchifier.unpatchify(
+                        select_dfr_generated_slot_tokens(result.video_latent, slot_rows),
+                        (len(local_slots), latent_h, latent_w),
+                    )
+                    mx.eval(slot_output)
+                mx.eval(tile_output)
                 tile_outputs.append(tile_output)
-                slot_frames_all.extend(tile.slot_frames)
-                slot_latents_all.extend(
-                    slot_output[:, :, index : index + 1]
-                    for index in range(slot_output.shape[2])
-                )
+                if slot_output is not None:
+                    slot_frames_all.extend(
+                        frame for frame in tile.slot_frames if frame not in explicit_frames
+                    )
+                    slot_latents_all.extend(
+                        slot_output[:, :, index : index + 1]
+                        for index in range(slot_output.shape[2])
+                    )
                 tile_reports.append(
                     {
                         "tile": tile_index + 1,
@@ -537,13 +590,6 @@ class LTX25DistilledPipeline:
             raise ValueError("LTX 2.5 DFR temporal rounds must be zero, one, or two.")
         if temporal_upsample_rounds and not dfr_enabled:
             raise ValueError("LTX 2.5 temporal rounds require DFR detailing.")
-        if temporal_upsample_rounds and (
-            image is not None or (images is not None and len(images) > 0)
-        ):
-            raise ValueError(
-                "LTX 2.5 temporal DFR currently supports text conditioning only. "
-                "Remove supplied keyframes or disable temporal refinement."
-            )
         if temporal_upsample_rounds and (continuation is not None or return_continuation):
             raise ValueError(
                 "LTX 2.5 temporal DFR is not yet available for chained timelines."
@@ -639,7 +685,7 @@ class LTX25DistilledPipeline:
                 video_encoder=encoder,
                 frame_rate=frame_rate,
             )
-        generated_slot_rows = 0
+        stage1_generated_slot_rows = 0
         if generated_keyframes or dfr_slot_frames:
             from .generated_keyframes import (
                 GeneratedKeyframeSlots,
@@ -658,8 +704,8 @@ class LTX25DistilledPipeline:
                 frame_rate=frame_rate,
             )
             conditionings.append(slots)
-            generated_slot_rows = slots.token_count
-            set_generated_keyframe_marker(self.dit, generated_slot_rows)
+            stage1_generated_slot_rows = slots.token_count
+            set_generated_keyframe_marker(self.dit, stage1_generated_slot_rows)
         audio_conditionings = []
         if continuation is not None:
             low_prefix_tokens = continuation.video_latent_frames * latent_h * latent_w
@@ -732,7 +778,7 @@ class LTX25DistilledPipeline:
                 ),
             )
         finally:
-            if generated_slot_rows:
+            if stage1_generated_slot_rows:
                 set_generated_keyframe_marker(self.dit, 0)
         mx.eval(stage1.video_latent, stage1.audio_latent)
         timings["stage1_seconds"] = time.perf_counter() - stage1_started
@@ -740,18 +786,15 @@ class LTX25DistilledPipeline:
         upscale_started = time.perf_counter()
         generated = stage1.video_latent[:, : latent_f * latent_h * latent_w, :]
         stage1_audio_generated = stage1.audio_latent[:, :audio_tokens, :]
-        stage1_slot_tokens = (
-            mx.contiguous(
-                stage1.video_latent[
-                    :,
-                    latent_f * latent_h * latent_w : latent_f * latent_h * latent_w
-                    + generated_slot_rows,
-                    :,
-                ]
+        stage1_slot_tokens = None
+        if dfr_enabled:
+            from .dfr import select_dfr_generated_slot_tokens
+
+            stage1_slot_tokens = mx.contiguous(
+                select_dfr_generated_slot_tokens(
+                    stage1.video_latent, stage1_generated_slot_rows
+                )
             )
-            if dfr_enabled
-            else None
-        )
         dfr_audio_tokens = (
             mx.contiguous(stage1_audio_generated[:, :requested_audio_tokens, :])
             if dfr_enabled
@@ -791,6 +834,7 @@ class LTX25DistilledPipeline:
         full_h, full_w = latent_h * 2, latent_w * 2
 
         full_conditionings = []
+        temporal_image_anchors = ()
         if resolved_images:
             encoder = self.image_conditioner.load()
             full_conditionings = combined_image_conditionings(
@@ -801,6 +845,23 @@ class LTX25DistilledPipeline:
                 video_encoder=encoder,
                 frame_rate=frame_rate,
             )
+            if temporal_upsample_rounds:
+                from .dfr import extract_dfr_temporal_image_anchors
+
+                temporal_image_anchors = extract_dfr_temporal_image_anchors(
+                    full_conditionings,
+                    latent_h=full_h,
+                    latent_w=full_w,
+                )
+                timings["temporal_image_anchors"] = [
+                    {
+                        "frame": anchor.pixel_frame,
+                        "strength": anchor.strength,
+                        "replace": anchor.replace,
+                    }
+                    for anchor in temporal_image_anchors
+                ]
+        stage2_generated_slot_rows = 0
         if dfr_enabled:
             from ltx_core_mlx.conditioning.types.reference_video_cond import (
                 VideoConditionByReferenceLatent,
@@ -811,14 +872,6 @@ class LTX25DistilledPipeline:
             if upscaled_slot_keyframes is None:
                 raise RuntimeError("DFR stage one did not produce seeded keyframe slots.")
             full_conditionings.append(
-                GeneratedKeyframeSlots(
-                    dfr_slot_frames,
-                    spatial_dims=(latent_f, full_h, full_w),
-                    frame_rate=frame_rate,
-                    initial_keyframes=upscaled_slot_keyframes,
-                )
-            )
-            full_conditionings.append(
                 VideoConditionByReferenceLatent(
                     reference_latent=generated,
                     reference_positions=video_positions,
@@ -826,6 +879,16 @@ class LTX25DistilledPipeline:
                     strength=1.0,
                 )
             )
+            full_slots = GeneratedKeyframeSlots(
+                dfr_slot_frames,
+                spatial_dims=(latent_f, full_h, full_w),
+                frame_rate=frame_rate,
+                initial_keyframes=upscaled_slot_keyframes,
+            )
+            # Generated slots must be the final appended rows because the
+            # learned keyframe marker is applied to the projection tail.
+            full_conditionings.append(full_slots)
+            stage2_generated_slot_rows = full_slots.token_count
         audio_conditionings2 = []
         if continuation is not None:
             high_prefix_tokens = continuation.video_latent_frames * full_h * full_w
@@ -899,7 +962,7 @@ class LTX25DistilledPipeline:
             self.load(extra_loras=(dfr_detailing_lora,))
             model = X0Model(self.dit)
         if dfr_enabled:
-            set_generated_keyframe_marker(self.dit, generated_slot_rows)
+            set_generated_keyframe_marker(self.dit, stage2_generated_slot_rows)
         set_mpp_feed_forward_enabled(self.dit, self.feed_forward_stage_scope in {"all", "stage2"})
         stage2_started = time.perf_counter()
         try:
@@ -936,12 +999,11 @@ class LTX25DistilledPipeline:
             (latent_f, full_h, full_w),
         )
         if temporal_upsample_rounds:
-            stage2_slot_tokens = stage2.video_latent[
-                :,
-                latent_f * full_h * full_w : latent_f * full_h * full_w
-                + generated_slot_rows,
-                :,
-            ]
+            from .dfr import select_dfr_generated_slot_tokens
+
+            stage2_slot_tokens = select_dfr_generated_slot_tokens(
+                stage2.video_latent, stage2_generated_slot_rows
+            )
             carry_keyframes = self.video_patchifier.unpatchify(
                 stage2_slot_tokens,
                 (len(dfr_slot_frames), full_h, full_w),
@@ -950,6 +1012,7 @@ class LTX25DistilledPipeline:
                 video_latent=video_latent,
                 carry_frames=dfr_slot_frames,
                 carry_keyframes=carry_keyframes,
+                image_anchors=temporal_image_anchors,
                 num_frames=num_frames,
                 requested_num_frames=requested_num_frames,
                 frame_rate=frame_rate,

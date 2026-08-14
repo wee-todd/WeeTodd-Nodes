@@ -197,7 +197,7 @@ work. Results apply to the stated workflow and hardware conditions.
 | LTX 2.5 automatic duration | Usability | Low runtime cost | A real Q8 prompt probe spent 0.027 s in the MLX duration head after prompt encoding. | Opt-in modifier; manual duration remains authoritative unless connected. Raw predicted seconds and resolved `8k+1` frames are recorded. |
 | LTX 2.5 Diffusion VAE width tiling | Decode memory | Experimental | A 32-cell stage-four stripe reduced 512×512 peak from 8.27 GB to 7.62 GB. | Decode slowed from 61.99 s to 100.13 s and output was not pixel-identical. Select `stage4_width_tiles` only when memory is the priority. |
 | LTX 2.5 DFR | Full-resolution detail | Experimental | Adds generated stage-one slots, stage-one latent reference conditioning, and a stage-two-only Pixel-Spatial IC-LoRA. | DFR generatively changes composition and motion. It preserves stage-one audio but is not a decoder-only enhancement. |
-| LTX 2.5 DFR temporal refinement | Motion smoothness | Experimental | One preserved 256×256 T2V latent refined from 49 frames at 24 fps to 97 frames at 48 fps in 11.68 s. The video-only Q8-paged stage peaked at 2.66 GB in MLX. | One round adds four evaluations per seam-aware tile. PCM audio was byte-identical. T2V only until image and chain conditioning parity is complete. |
+| LTX 2.5 DFR temporal refinement | Motion smoothness | Experimental | One preserved 256×256 T2V latent refined from 49 frames at 24 fps to 97 frames at 48 fps in 11.68 s. A complete matched I2V probe took 41.34 s and peaked at 9.35 GB for the process. | One round adds four evaluations per seam-aware tile. Stage-one audio is untouched. One-shot image and timed-keyframe anchors are reapplied; chained timelines remain gated. |
 
 ### Remaining optimization priorities
 
@@ -299,7 +299,7 @@ This table is generated from the registered node contracts. Run
 | LTX 2.5 Generated Keyframes | Apply LTX 2.5 generated interior keyframe slots as a composable config modifier. | LTX 2.5 — Conditioning | Supported |
 | LTX 2.5 Diffusion VAE Optimization | Select an MLX Diffusion VAE execution layout. It does not affect the convolutional VAE. | LTX 2.5 — Optimization | Experimental |
 | LTX 2.5 DFR Detail Refinement | Enable MLX Diffusion Fidelity Rendering: segment-grid generated keyframes, stage-one latent reference conditioning, stage-two-only Pixel-Spatial IC-LoRA, and untouched stage-one audio publication. | LTX 2.5 — Conditioning | Experimental |
-| LTX 2.5 DFR Temporal Refinement | Add one or two learned x2 temporal DFR rounds. Each round preserves stage-one audio, doubles playback frame rate, and adds four transformer evaluations per temporal tile. | LTX 2.5 — Conditioning | Supported |
+| LTX 2.5 DFR Temporal Refinement | Add one or two learned x2 temporal DFR rounds. Each round preserves stage-one audio, doubles playback frame rate, reapplies one-shot image anchors, and adds four transformer evaluations per temporal tile. | LTX 2.5 — Conditioning | Supported |
 | LTX 2.5 Preflight | Validate LTX 2.5 component metadata and architecture requirements before allocation. | LTX 2.5 — Loaders | Experimental |
 | LTX 2.5 Timed Keyframe | Append a first, middle, or last image at an exact zero-based pixel-frame index. Nonzero frames use LTX 2.5's generated-keyframe token slots. | LTX 2.5 — Conditioning | Supported |
 | LTX 2.5 Generate Video + Audio | Generate synchronized LTX 2.5 video and audio through the MLX adapter. | LTX 2.5 — Core | Experimental |

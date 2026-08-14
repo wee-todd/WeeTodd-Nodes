@@ -21,6 +21,79 @@ class DFRTemporalTile(NamedTuple):
     drop_latent_prefix: int
 
 
+class DFRTemporalImageAnchor(NamedTuple):
+    pixel_frame: int
+    latent_tokens: mx.array
+    strength: float
+    replace: bool
+
+
+def extract_dfr_temporal_image_anchors(
+    conditionings: Sequence[object], *, latent_h: int, latent_w: int
+) -> tuple[DFRTemporalImageAnchor, ...]:
+    """Retain already encoded explicit image anchors for temporal DFR rounds."""
+    rows_per_frame = int(latent_h) * int(latent_w)
+    anchors: list[DFRTemporalImageAnchor] = []
+    for conditioning in conditionings:
+        frame_indices = getattr(conditioning, "frame_indices", None)
+        clean_latent = getattr(conditioning, "clean_latent", None)
+        if frame_indices is not None and clean_latent is not None:
+            for index, pixel_frame in enumerate(frame_indices):
+                start = index * rows_per_frame
+                end = start + rows_per_frame
+                if end > clean_latent.shape[1]:
+                    raise ValueError("An LTX 2.5 image anchor has an invalid latent row count.")
+                anchors.append(
+                    DFRTemporalImageAnchor(
+                        int(pixel_frame),
+                        mx.contiguous(clean_latent[:, start:end]),
+                        float(conditioning.strength),
+                        True,
+                    )
+                )
+            continue
+        pixel_frame = getattr(conditioning, "frame_idx", None)
+        keyframe_latent = getattr(conditioning, "keyframe_latent", None)
+        if pixel_frame is not None and keyframe_latent is not None:
+            if keyframe_latent.shape[1] != rows_per_frame:
+                raise ValueError("An LTX 2.5 keyframe anchor has an invalid latent row count.")
+            anchors.append(
+                DFRTemporalImageAnchor(
+                    int(pixel_frame),
+                    mx.contiguous(keyframe_latent),
+                    float(conditioning.strength),
+                    False,
+                )
+            )
+    if len({anchor.pixel_frame for anchor in anchors}) != len(anchors):
+        raise ValueError("Temporal DFR image anchors must target distinct pixel frames.")
+    return tuple(sorted(anchors, key=lambda anchor: anchor.pixel_frame))
+
+
+def scale_dfr_temporal_image_anchors(
+    anchors: Sequence[DFRTemporalImageAnchor], factor: int = 2
+) -> tuple[DFRTemporalImageAnchor, ...]:
+    if factor < 1:
+        raise ValueError("Temporal DFR image-anchor scale must be positive.")
+    return tuple(
+        DFRTemporalImageAnchor(
+            anchor.pixel_frame * factor,
+            anchor.latent_tokens,
+            anchor.strength,
+            anchor.replace,
+        )
+        for anchor in anchors
+    )
+
+
+def select_dfr_generated_slot_tokens(latent: mx.array, slot_rows: int) -> mx.array:
+    """Select the trailing rows marked as generated keyframe slots."""
+    rows = int(slot_rows)
+    if rows < 0 or rows > latent.shape[1]:
+        raise ValueError("Temporal DFR generated-slot row count is invalid.")
+    return latent[:, latent.shape[1] - rows :] if rows else latent[:, :0]
+
+
 def choose_dfr_segment_length(content_frames: int) -> int:
     """Choose the 24/32-frame segment that needs the least tail padding."""
     if content_frames < 1:
@@ -127,9 +200,13 @@ def stitch_dfr_temporal_tiles(
 
 __all__ = [
     "DFR_SEGMENT_CANDIDATES",
+    "DFRTemporalImageAnchor",
     "DFRTemporalTile",
     "choose_dfr_segment_length",
+    "extract_dfr_temporal_image_anchors",
     "plan_dfr_temporal_tiles",
     "resolve_dfr_canvas",
+    "scale_dfr_temporal_image_anchors",
+    "select_dfr_generated_slot_tokens",
     "stitch_dfr_temporal_tiles",
 ]

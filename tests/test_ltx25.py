@@ -6,9 +6,13 @@ from safetensors.numpy import save_file
 
 from ltx25_mlx.components import LTX25VideoDecoder
 from ltx25_mlx.dfr import (
+    DFRTemporalImageAnchor,
     choose_dfr_segment_length,
+    extract_dfr_temporal_image_anchors,
     plan_dfr_temporal_tiles,
     resolve_dfr_canvas,
+    scale_dfr_temporal_image_anchors,
+    select_dfr_generated_slot_tokens,
     stitch_dfr_temporal_tiles,
 )
 from ltx25_mlx.duration_head import LTX25DurationHead, seconds_to_ltx25_frames
@@ -244,6 +248,66 @@ def test_ltx25_dfr_temporal_tiles_are_gapless_after_discarded_lead_in():
     stitched = stitch_dfr_temporal_tiles(latents, tiles)
     assert stitched.shape == (1, 1, 13, 1, 1)
     assert stitched[:, :, :7].tolist() == latents[0].tolist()
+
+
+def test_ltx25_dfr_temporal_image_anchors_reuse_encoded_rows_and_scale_frames():
+    import mlx.core as mx
+
+    class First:
+        frame_indices = [0]
+        clean_latent = mx.arange(24).reshape(1, 6, 4)
+        strength = 1.0
+
+    class Middle:
+        frame_idx = 17
+        keyframe_latent = mx.arange(24, 48).reshape(1, 6, 4)
+        strength = 0.7
+
+    anchors = extract_dfr_temporal_image_anchors([First(), Middle()], latent_h=2, latent_w=3)
+    assert [anchor.pixel_frame for anchor in anchors] == [0, 17]
+    assert [anchor.replace for anchor in anchors] == [True, False]
+    assert anchors[0].latent_tokens.tolist() == First.clean_latent.tolist()
+    scaled = scale_dfr_temporal_image_anchors(anchors)
+    assert [anchor.pixel_frame for anchor in scaled] == [0, 34]
+    assert scaled[1].strength == pytest.approx(0.7)
+    assert scaled[1].latent_tokens.tolist() == Middle.keyframe_latent.tolist()
+
+
+def test_ltx25_dfr_temporal_image_anchor_rejects_duplicate_frames():
+    from types import SimpleNamespace
+
+    import mlx.core as mx
+
+    duplicate = DFRTemporalImageAnchor(8, mx.zeros((1, 4, 2)), 1.0, False)
+    with pytest.raises(ValueError, match="distinct"):
+        # Exercise extraction's collision contract through two keyframe-like values.
+        extract_dfr_temporal_image_anchors(
+            [
+                SimpleNamespace(
+                    frame_idx=duplicate.pixel_frame,
+                    keyframe_latent=duplicate.latent_tokens,
+                    strength=1.0,
+                ),
+                SimpleNamespace(
+                    frame_idx=duplicate.pixel_frame,
+                    keyframe_latent=duplicate.latent_tokens,
+                    strength=0.8,
+                ),
+            ],
+            latent_h=2,
+            latent_w=2,
+        )
+
+
+def test_ltx25_dfr_temporal_slots_are_selected_after_appended_anchors():
+    import mlx.core as mx
+
+    generated = mx.full((1, 4, 2), 1)
+    explicit_anchor = mx.full((1, 2, 2), 2)
+    generated_slot = mx.full((1, 2, 2), 3)
+    result = mx.concatenate([generated, explicit_anchor, generated_slot], axis=1)
+    selected = select_dfr_generated_slot_tokens(result, 2)
+    assert selected.tolist() == generated_slot.tolist()
 
 
 def test_ltx25_dfr_temporal_modifier_preserves_audio_policy(tmp_path):
