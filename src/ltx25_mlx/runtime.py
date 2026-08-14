@@ -170,6 +170,13 @@ class LTX25ComponentSpec:
         text_meta = _metadata(paths["text_encoder_path"])
         gemma_pack = inspect_gemma4_pack(paths["text_encoder_path"])
         video_vae_meta = _metadata(paths["video_vae_path"])
+        if "duration_head_path" in paths:
+            duration_meta = _metadata(paths["duration_head_path"])
+            with safe_open(paths["duration_head_path"], framework="numpy") as handle:
+                if not any(name.startswith("duration_head.") for name in handle.keys()):
+                    raise ValueError("The selected LTX 2.5 duration head has no duration tensors.")
+            if _version_tuple(duration_meta.get("model_version")) < (2, 5):
+                raise ValueError("The selected duration head is not identified as LTX 2.5.")
         model_version = transformer_meta.get("model_version")
         if _version_tuple(model_version) < (2, 5):
             raise ValueError(
@@ -243,6 +250,9 @@ class LTX25GenerationConfig:
     width: int = 768
     height: int = 512
     duration_seconds: float = 5.0
+    duration_mode: str = "manual"
+    auto_duration_min_seconds: float = 1.0
+    auto_duration_max_seconds: float = 20.0
     frame_rate: float = 24.0
     seed: int = 0
     stage1_steps: int = 8
@@ -260,6 +270,8 @@ class LTX25GenerationConfig:
     dfr_enabled: bool = False
     dfr_detailing_lora_path: str = ""
     dfr_detailing_lora_strength: float = 1.0
+    dfr_temporal_upsampler_path: str = ""
+    dfr_temporal_rounds: int = 0
     diffvae_optimization: str = "combined"
     diffvae_query_chunk_size: int = 512
     diffvae_context_width_chunks: int = 4
@@ -277,6 +289,13 @@ class LTX25GenerationConfig:
     def validate(self, *, scale_factors: tuple[int, int, int] = (8, 32, 32)) -> None:
         if self.pipeline_mode not in LTX25_CONFIG_MODES:
             raise ValueError(f"Unsupported LTX 2.5 pipeline mode: {self.pipeline_mode!r}.")
+        if self.duration_mode not in {"manual", "automatic"}:
+            raise ValueError("LTX 2.5 duration mode must be manual or automatic.")
+        if not 0.25 <= self.auto_duration_min_seconds <= self.auto_duration_max_seconds <= 30.0:
+            raise ValueError(
+                "LTX 2.5 automatic duration bounds must satisfy "
+                "0.25 <= minimum <= maximum <= 30 seconds."
+            )
         if self.prompt_context not in LTX25_PROMPT_CONTEXTS:
             raise ValueError(f"Unsupported LTX 2.5 prompt context mode: {self.prompt_context!r}.")
         if self.feed_forward_backend not in LTX25_FEED_FORWARD_BACKENDS:
@@ -328,6 +347,25 @@ class LTX25GenerationConfig:
             detail = inspect_ltx25_ic_lora(detail_path)
             if detail["reference_downscale_factor"] != 2:
                 raise ValueError("LTX 2.5 DFR requires a 2x Pixel-Spatial IC-LoRA.")
+        if self.dfr_temporal_rounds not in {0, 1, 2}:
+            raise ValueError("LTX 2.5 DFR temporal rounds must be zero, one, or two.")
+        if self.dfr_temporal_rounds:
+            if not self.dfr_enabled:
+                raise ValueError("LTX 2.5 temporal rounds require DFR detailing.")
+            temporal_path = Path(self.dfr_temporal_upsampler_path).expanduser()
+            if not temporal_path.is_file() or temporal_path.suffix != ".safetensors":
+                raise FileNotFoundError(
+                    f"LTX 2.5 temporal upsampler not found: {temporal_path}"
+                )
+            from .components import inspect_ltx25_latent_upsampler
+
+            temporal_report = inspect_ltx25_latent_upsampler(temporal_path)
+            if temporal_report["spatial_upsample"] or not temporal_report[
+                "temporal_upsample"
+            ]:
+                raise ValueError(
+                    "LTX 2.5 temporal refinement requires a temporal-only upsampler."
+                )
         if not 1.0 <= self.frame_rate <= 60.0:
             raise ValueError("LTX 2.5 frame rate must be between 1 and 60 fps.")
         if self.stage1_steps != 8 or self.stage2_steps != 3:
@@ -449,6 +487,8 @@ class LTX25RuntimeCache:
             config.diffvae_query_chunk_size,
             config.diffvae_context_width_chunks,
             config.diffvae_stage4_tile_width,
+            config.dfr_temporal_upsampler_path,
+            config.dfr_temporal_rounds,
         )
         with self._lock:
             if self._pipeline is None or self._key != key:
@@ -467,6 +507,7 @@ class LTX25RuntimeCache:
                     "diffvae_query_chunk_size": config.diffvae_query_chunk_size,
                     "diffvae_context_width_chunks": config.diffvae_context_width_chunks,
                     "diffvae_stage4_tile_width": config.diffvae_stage4_tile_width,
+                    "temporal_upsampler_path": config.dfr_temporal_upsampler_path,
                     "loras": spec.loras,
                 }
                 signature = inspect.signature(pipeline_class)
@@ -501,6 +542,10 @@ class LTX25RuntimeCache:
         report = spec.validate(config.pipeline_mode)
         scales = tuple(int(value) for value in report["video_scale_factors"])
         config.validate(scale_factors=scales)
+        if config.duration_mode == "automatic" and not spec.duration_head_path:
+            raise ValueError(
+                "Automatic LTX 2.5 duration requires a duration head in the component loader."
+            )
         if check_interrupted is not None:
             check_interrupted()
         try:
@@ -552,6 +597,10 @@ class LTX25RuntimeCache:
                 if config.dfr_enabled
                 else None
             ),
+            "temporal_upsample_rounds": config.dfr_temporal_rounds,
+            "auto_duration": config.duration_mode == "automatic",
+            "auto_duration_min_seconds": config.auto_duration_min_seconds,
+            "auto_duration_max_seconds": config.auto_duration_max_seconds,
         }
         signature = inspect.signature(pipeline.generate_and_save)
         accepts_kwargs = any(
@@ -581,12 +630,22 @@ class LTX25RuntimeCache:
                 feed_forward_runtime = feed_forward_runtime_status()
             except (ImportError, AttributeError):
                 feed_forward_runtime = None
+            resolved_num_frames = int(
+                getattr(pipeline, "last_num_frames", None) or config.num_frames
+            )
+            resolved_frame_rate = float(
+                getattr(pipeline, "last_output_frame_rate", None) or config.frame_rate
+            )
             result = {
                 "prompt": prompt,
                 "video_path": str(result_path),
                 "generation": asdict(config),
-                "num_frames": config.num_frames,
-                "delivered_duration_seconds": config.delivered_duration_seconds,
+                "num_frames": resolved_num_frames,
+                "frame_rate": resolved_frame_rate,
+                "delivered_duration_seconds": (resolved_num_frames - 1) / resolved_frame_rate,
+                "predicted_duration_seconds": getattr(
+                    pipeline, "last_predicted_duration_seconds", None
+                ),
                 "pipeline_mode": config.pipeline_mode,
                 "model_version": report["model_version"],
                 "video_decoder": report["video_decoder"],
@@ -640,6 +699,15 @@ class LTX25RuntimeCache:
         report = spec.validate(config.pipeline_mode)
         scales = tuple(int(value) for value in report["video_scale_factors"])
         config.validate(scale_factors=scales)
+        if config.duration_mode != "manual":
+            raise ValueError(
+                "Automatic duration is only available for one-shot LTX 2.5 generation; "
+                "set an explicit total duration for chained timelines."
+            )
+        if config.dfr_temporal_rounds:
+            raise ValueError(
+                "LTX 2.5 temporal DFR is not yet available for chained timelines."
+            )
         plan = plan_ltx25_chain(
             total_frames=config.num_frames,
             window_count=window_count,

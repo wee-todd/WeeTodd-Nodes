@@ -396,6 +396,50 @@ class WeeToddLTX25GenerationConfig:
         return config, json.dumps(info, indent=2, sort_keys=True)
 
 
+class WeeToddLTX25AutoDuration:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "config": ("WEETODD_LTX25_CONFIG",),
+                "minimum_seconds": (
+                    "FLOAT",
+                    {"default": 1.0, "min": 0.25, "max": 30.0, "step": 0.25},
+                ),
+                "maximum_seconds": (
+                    "FLOAT",
+                    {"default": 20.0, "min": 0.25, "max": 30.0, "step": 0.25},
+                ),
+            }
+        }
+
+    RETURN_TYPES = ("WEETODD_LTX25_CONFIG", "STRING")
+    RETURN_NAMES = ("config", "duration_settings")
+    FUNCTION = "apply"
+    CATEGORY = "WeeTodd/LTX 2.5"
+    DESCRIPTION = (
+        "Predict one-shot duration from the prompt with the official LTX 2.5 duration head. "
+        "The manual duration remains unchanged when this modifier is not connected."
+    )
+
+    def apply(self, config, minimum_seconds, maximum_seconds):
+        updated = replace(
+            config,
+            duration_mode="automatic",
+            auto_duration_min_seconds=float(minimum_seconds),
+            auto_duration_max_seconds=float(maximum_seconds),
+        )
+        updated.validate()
+        info = {
+            "mode": "automatic",
+            "minimum_seconds": updated.auto_duration_min_seconds,
+            "maximum_seconds": updated.auto_duration_max_seconds,
+            "requires_component": "ltx-2.5-duration-head-bf16.safetensors",
+            "scope": "one-shot generation",
+        }
+        return updated, json.dumps(info, indent=2, sort_keys=True)
+
+
 class WeeToddLTX25GeneratedKeyframes:
     @classmethod
     def INPUT_TYPES(cls):
@@ -561,6 +605,62 @@ class WeeToddLTX25DFRDetailing:
             indent=2,
             sort_keys=True,
         )
+
+
+class WeeToddLTX25DFRTemporalRefinement:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "config": ("WEETODD_LTX25_CONFIG",),
+                "temporal_upsampler": (
+                    "STRING",
+                    {
+                        "default": (
+                            "ltx-2.5-latent-temporal-upscaler-x2-bf16-1.0.safetensors"
+                        )
+                    },
+                ),
+                "rounds": ("INT", {"default": 1, "min": 1, "max": 2, "step": 1}),
+            }
+        }
+
+    RETURN_TYPES = ("WEETODD_LTX25_CONFIG", "STRING")
+    RETURN_NAMES = ("config", "temporal_settings")
+    FUNCTION = "apply"
+    CATEGORY = "WeeTodd/LTX 2.5/conditioning"
+    DESCRIPTION = (
+        "Add one or two learned x2 temporal DFR rounds. Each round preserves stage-one audio, "
+        "doubles playback frame rate, and adds four transformer evaluations per temporal tile."
+    )
+
+    def apply(self, config, temporal_upsampler, rounds):
+        resolved = _resolve_component(
+            temporal_upsampler,
+            ("latent_upscale_models", "ltx25"),
+        )
+        from ltx25_mlx.components import inspect_ltx25_latent_upsampler
+
+        upsampler_report = inspect_ltx25_latent_upsampler(resolved)
+        if upsampler_report["spatial_upsample"] or not upsampler_report[
+            "temporal_upsample"
+        ]:
+            raise ValueError("LTX 2.5 temporal refinement requires a temporal-only upsampler.")
+        updated = replace(
+            config,
+            dfr_temporal_upsampler_path=str(resolved),
+            dfr_temporal_rounds=int(rounds),
+        )
+        updated.validate()
+        info = {
+            "rounds": updated.dfr_temporal_rounds,
+            "output_frame_multiplier": 2**updated.dfr_temporal_rounds,
+            "output_fps_multiplier": 2**updated.dfr_temporal_rounds,
+            "audio_policy": "preserve stage-one audio",
+            "transformer_evaluations_per_tile_per_round": 4,
+            "upsampler": upsampler_report,
+        }
+        return updated, json.dumps(info, indent=2, sort_keys=True)
 
 
 class WeeToddLTX25Preflight:
@@ -1113,9 +1213,11 @@ NODE_CLASS_MAPPINGS = {
     "WeeToddLTX25ComponentLoader": WeeToddLTX25ComponentLoader,
     "WeeToddLTX25LoRALoader": WeeToddLTX25LoRALoader,
     "WeeToddLTX25GenerationConfig": WeeToddLTX25GenerationConfig,
+    "WeeToddLTX25AutoDuration": WeeToddLTX25AutoDuration,
     "WeeToddLTX25GeneratedKeyframes": WeeToddLTX25GeneratedKeyframes,
     "WeeToddLTX25DiffVAEOptimization": WeeToddLTX25DiffVAEOptimization,
     "WeeToddLTX25DFRDetailing": WeeToddLTX25DFRDetailing,
+    "WeeToddLTX25DFRTemporalRefinement": WeeToddLTX25DFRTemporalRefinement,
     "WeeToddLTX25Preflight": WeeToddLTX25Preflight,
     "WeeToddLTX25Keyframe": WeeToddLTX25Keyframe,
     "WeeToddLTX25Generate": WeeToddLTX25Generate,
@@ -1128,9 +1230,11 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "WeeToddLTX25ComponentLoader": "WeeTodd LTX 2.5 Component Loader (MLX)",
     "WeeToddLTX25LoRALoader": "WeeTodd LTX 2.5 LoRA Loader (MLX)",
     "WeeToddLTX25GenerationConfig": "WeeTodd LTX 2.5 Generation Config",
+    "WeeToddLTX25AutoDuration": "WeeTodd LTX 2.5 Automatic Duration",
     "WeeToddLTX25GeneratedKeyframes": "WeeTodd LTX 2.5 Generated Keyframes",
     "WeeToddLTX25DiffVAEOptimization": "WeeTodd LTX 2.5 Diffusion VAE Optimization",
     "WeeToddLTX25DFRDetailing": "WeeTodd LTX 2.5 DFR Detail Refinement",
+    "WeeToddLTX25DFRTemporalRefinement": "WeeTodd LTX 2.5 DFR Temporal Refinement",
     "WeeToddLTX25Preflight": "WeeTodd LTX 2.5 Preflight",
     "WeeToddLTX25Keyframe": "WeeTodd LTX 2.5 Timed Keyframe",
     "WeeToddLTX25Generate": "WeeTodd LTX 2.5 Generate Video + Audio",

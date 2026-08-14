@@ -5,7 +5,13 @@ import pytest
 from safetensors.numpy import save_file
 
 from ltx25_mlx.components import LTX25VideoDecoder
-from ltx25_mlx.dfr import choose_dfr_segment_length, resolve_dfr_canvas
+from ltx25_mlx.dfr import (
+    choose_dfr_segment_length,
+    plan_dfr_temporal_tiles,
+    resolve_dfr_canvas,
+    stitch_dfr_temporal_tiles,
+)
+from ltx25_mlx.duration_head import LTX25DurationHead, seconds_to_ltx25_frames
 from ltx25_mlx.gemma_pack import gemma4_mlx_model_config, remap_gemma4_weight_key
 from ltx25_mlx.generated_keyframes import (
     GeneratedKeyframeSlots,
@@ -30,9 +36,12 @@ from ltx25_mlx.upscale import (
     _host_audio_or_silence,
     _host_video,
 )
+from ltx25_mlx.video_only import LTX25VideoOnlyX0Model
 from wee_todd_nodes.ltx25_nodes import (
     LTX25KeyframeStack,
+    WeeToddLTX25AutoDuration,
     WeeToddLTX25DFRDetailing,
+    WeeToddLTX25DFRTemporalRefinement,
     WeeToddLTX25DiffVAEOptimization,
     WeeToddLTX25GenerateChained,
     WeeToddLTX25GeneratedKeyframes,
@@ -41,6 +50,51 @@ from wee_todd_nodes.ltx25_nodes import (
     WeeToddLTX25LoRALoader,
     WeeToddLTX25VideoUpscale,
 )
+
+
+def test_ltx25_duration_head_matches_constant_log_seconds():
+    import mlx.core as mx
+    from mlx.utils import tree_flatten
+
+    head = LTX25DurationHead(
+        video_dim=4,
+        audio_dim=2,
+        hidden_dim=4,
+        num_queries=1,
+        num_heads=2,
+        mlp_hidden=4,
+    )
+    weights = [(name, mx.zeros_like(value)) for name, value in tree_flatten(head.parameters())]
+    # A zero network with this final bias predicts exp(log(2.5)) seconds.
+    weights = [
+        (name, mx.array([np.log(2.5)], dtype=value.dtype) if name == "mlp_out.bias" else value)
+        for name, value in weights
+    ]
+    head.load_weights(weights, strict=True)
+    seconds = head(video_tokens=mx.zeros((1, 3, 4), dtype=mx.bfloat16))
+    mx.eval(seconds)
+    assert float(seconds.item()) == pytest.approx(2.5, abs=0.02)
+
+
+@pytest.mark.parametrize(
+    ("seconds", "expected"),
+    ((2.375, 57), (5.0, 113), (0.1, 25), (99.0, 473)),
+)
+def test_ltx25_duration_snaps_to_official_temporal_grid(seconds, expected):
+    assert seconds_to_ltx25_frames(seconds, frame_rate=24.0) == expected
+
+
+def test_ltx25_auto_duration_modifier_is_explicit_and_bounded():
+    source = LTX25GenerationConfig(duration_seconds=5.0)
+    updated, raw = WeeToddLTX25AutoDuration().apply(source, 2.0, 12.0)
+    assert source.duration_mode == "manual"
+    assert updated.duration_mode == "automatic"
+    assert updated.duration_seconds == 5.0
+    assert updated.auto_duration_min_seconds == 2.0
+    assert updated.auto_duration_max_seconds == 12.0
+    assert json.loads(raw)["scope"] == "one-shot generation"
+    with pytest.raises(ValueError, match="bounds"):
+        WeeToddLTX25AutoDuration().apply(source, 10.0, 2.0)
 
 
 def test_ltx25_generated_keyframes_modifier_preserves_base_workflow_contract():
@@ -175,6 +229,103 @@ def test_ltx25_dfr_canvas_matches_official_segment_policy():
     assert choose_dfr_segment_length(96) == 32
     assert resolve_dfr_canvas(49) == (49, 24, (24, 48))
     assert resolve_dfr_canvas(41) == (49, 24, (24, 48))
+
+
+def test_ltx25_dfr_temporal_tiles_are_gapless_after_discarded_lead_in():
+    import mlx.core as mx
+
+    tiles = plan_dfr_temporal_tiles((48, 96), 97, 2)
+    assert [(tile.pixel_start, tile.pixel_end) for tile in tiles] == [(0, 48), (0, 96)]
+    assert [tile.drop_latent_prefix for tile in tiles] == [0, 7]
+    latents = [
+        mx.full((1, 1, tile.latent_end_exclusive - tile.latent_start, 1, 1), index)
+        for index, tile in enumerate(tiles)
+    ]
+    stitched = stitch_dfr_temporal_tiles(latents, tiles)
+    assert stitched.shape == (1, 1, 13, 1, 1)
+    assert stitched[:, :, :7].tolist() == latents[0].tolist()
+
+
+def test_ltx25_dfr_temporal_modifier_preserves_audio_policy(tmp_path):
+    adapter = tmp_path / "detail.safetensors"
+    save_file(
+        {
+            "transformer_blocks.0.attn1.to_q.lora_A.weight": np.zeros(
+                (2, 4), dtype=np.float32
+            ),
+            "transformer_blocks.0.attn1.to_q.lora_B.weight": np.zeros(
+                (4, 2), dtype=np.float32
+            ),
+        },
+        adapter,
+        metadata={"model_version": "2.5.0", "reference_downscale_factor": "2"},
+    )
+    temporal = tmp_path / "temporal.safetensors"
+    save_file(
+        {"conv_in.weight": np.zeros((1,), dtype=np.float32)},
+        temporal,
+        metadata={
+            "config": json.dumps(
+                {
+                    "_class_name": "LatentUpsampler",
+                    "in_channels": 128,
+                    "dims": 3,
+                    "spatial_upsample": False,
+                    "temporal_upsample": True,
+                    "rational_resampler": True,
+                }
+            )
+        },
+    )
+    config, _ = WeeToddLTX25DFRDetailing().apply(
+        LTX25GenerationConfig(duration_seconds=2.0), str(adapter), 1.0
+    )
+    updated, raw = WeeToddLTX25DFRTemporalRefinement().apply(config, str(temporal), 1)
+    assert updated.dfr_temporal_rounds == 1
+    assert updated.dfr_temporal_upsampler_path == str(temporal)
+    assert json.loads(raw)["audio_policy"] == "preserve stage-one audio"
+
+
+def test_ltx25_video_only_transformer_skips_audio_contract():
+    import mlx.core as mx
+    from ltx_core_mlx.model.transformer.model import LTXModel, LTXModelConfig
+
+    transformer = LTXModel(
+        LTXModelConfig(
+            num_layers=1,
+            video_dim=8,
+            audio_dim=4,
+            video_num_heads=2,
+            audio_num_heads=1,
+            video_head_dim=4,
+            audio_head_dim=4,
+            av_cross_num_heads=1,
+            av_cross_head_dim=4,
+            video_patch_channels=4,
+            audio_patch_channels=4,
+            ff_mult=2.0,
+            timestep_embedding_dim=8,
+            positional_embedding_max_pos=(20, 32, 32),
+            audio_positional_embedding_max_pos=(20,),
+        )
+    )
+    model = LTX25VideoOnlyX0Model(transformer)
+    latent = mx.zeros((1, 3, 4), dtype=mx.bfloat16)
+    output, audio = model(
+        video_latent=latent,
+        audio_latent=None,
+        sigma=mx.array([0.5], dtype=mx.bfloat16),
+        video_text_embeds=None,
+        audio_text_embeds=None,
+        video_positions=None,
+        audio_positions=None,
+        video_attention_mask=None,
+        audio_attention_mask=None,
+    )
+    mx.eval(output)
+    assert output.shape == latent.shape
+    assert bool(mx.all(mx.isfinite(output)).item())
+    assert audio is None
 
 
 def test_ltx25_generated_keyframes_accept_spatially_upscaled_stage1_seeds():

@@ -366,8 +366,8 @@ class LTX25AudioConditioner:
         _cleanup()
 
 
-def load_ltx25_spatial_upsampler(path: str | Path):
-    """Load the official 2x latent upscaler from embedded configuration."""
+def load_ltx25_latent_upsampler(path: str | Path):
+    """Load an official spatial or temporal latent upsampler from checkpoint metadata."""
     from ltx_core_mlx.model.upsampler.model import LatentUpsampler
     from ltx_core_mlx.utils.weights import load_split_safetensors
 
@@ -382,12 +382,40 @@ def load_ltx25_spatial_upsampler(path: str | Path):
     return upsampler
 
 
+def inspect_ltx25_latent_upsampler(path: str | Path) -> dict[str, object]:
+    """Validate an upsampler header without loading its tensors."""
+    source = Path(path).expanduser()
+    if not source.is_file() or source.suffix != ".safetensors":
+        raise FileNotFoundError(f"LTX 2.5 latent upsampler not found: {source}")
+    config = _metadata_config(source)
+    if config.get("_class_name") != "LatentUpsampler":
+        raise ValueError("The selected checkpoint is not an LTX latent upsampler.")
+    if int(config.get("in_channels", 0)) != 128 or int(config.get("dims", 0)) != 3:
+        raise ValueError("The selected latent upsampler has an incompatible LTX 2.5 layout.")
+    return {
+        "path": str(source),
+        "spatial_upsample": bool(config.get("spatial_upsample", False)),
+        "temporal_upsample": bool(config.get("temporal_upsample", False)),
+        "rational_resampler": bool(config.get("rational_resampler", False)),
+    }
+
+
+def load_ltx25_spatial_upsampler(path: str | Path):
+    """Load the official spatial latent upsampler."""
+    model = load_ltx25_latent_upsampler(path)
+    if not model.spatial_upsample or model.temporal_upsample:
+        raise ValueError("The selected LTX 2.5 checkpoint is not a spatial-only upsampler.")
+    return model
+
+
 __all__ = [
     "LTX25AudioConditioner",
     "LTX25AudioDecoder",
     "LTX25ImageConditioner",
     "LTX25LatentNormalizer",
     "LTX25VideoDecoder",
+    "inspect_ltx25_latent_upsampler",
+    "load_ltx25_latent_upsampler",
     "load_ltx25_spatial_upsampler",
     "remap_convolution_layout",
 ]

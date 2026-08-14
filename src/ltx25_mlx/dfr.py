@@ -2,7 +2,23 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from typing import NamedTuple
+
+import mlx.core as mx
+
 DFR_SEGMENT_CANDIDATES = (24, 32)
+DFR_TILE_LEAD_SEGMENTS = 1
+
+
+class DFRTemporalTile(NamedTuple):
+    pixel_start: int
+    pixel_end: int
+    latent_start: int
+    latent_end_exclusive: int
+    anchor_frames: tuple[int, ...]
+    slot_frames: tuple[int, ...]
+    drop_latent_prefix: int
 
 
 def choose_dfr_segment_length(content_frames: int) -> int:
@@ -32,4 +48,88 @@ def resolve_dfr_canvas(
     return padded + 1, segment, positions
 
 
-__all__ = ["DFR_SEGMENT_CANDIDATES", "choose_dfr_segment_length", "resolve_dfr_canvas"]
+def _latent_index(pixel_frame: int, temporal_scale: int = 8) -> int:
+    if pixel_frame < 0 or (pixel_frame and pixel_frame % temporal_scale):
+        raise ValueError(f"DFR frame {pixel_frame} is not on the temporal latent grid.")
+    return pixel_frame // temporal_scale
+
+
+def plan_dfr_temporal_tiles(
+    seam_frames: Sequence[int],
+    num_frames: int,
+    tile_count: int,
+    *,
+    temporal_scale: int = 8,
+) -> tuple[DFRTemporalTile, ...]:
+    """Partition one temporal round into seam-aware denoise tiles."""
+    seams = tuple(int(value) for value in seam_frames)
+    if not seams or seams[-1] != num_frames - 1:
+        raise ValueError("DFR temporal seams must end on the final output frame.")
+    boundaries = (0, *seams)
+    spans = tuple(
+        right - left for left, right in zip(boundaries, boundaries[1:], strict=False)
+    )
+    if any(span < temporal_scale * 2 or span % temporal_scale for span in spans):
+        raise ValueError("DFR temporal seam spans must contain at least two latent intervals.")
+    count = min(max(1, int(tile_count)), len(spans))
+    base, remainder = divmod(len(spans), count)
+    owned_counts = tuple(base + (1 if index < remainder else 0) for index in range(count))
+    tiles = []
+    own_start = 0
+    for index, owned in enumerate(owned_counts):
+        own_end = own_start + owned
+        window_start = max(0, own_start - (DFR_TILE_LEAD_SEGMENTS if index else 0))
+        pixel_start = boundaries[window_start]
+        pixel_end = boundaries[own_end]
+        latent_start = _latent_index(pixel_start, temporal_scale)
+        drop = _latent_index(boundaries[own_start], temporal_scale) - latent_start
+        if own_start:
+            drop += 1
+        anchors = tuple(
+            boundaries[item]
+            for item in range(window_start, own_end + 1)
+            if boundaries[item]
+        )
+        slots = tuple(
+            (boundaries[item] + boundaries[item + 1]) // 2
+            for item in range(window_start, own_end)
+        )
+        tiles.append(
+            DFRTemporalTile(
+                pixel_start,
+                pixel_end,
+                latent_start,
+                _latent_index(pixel_end, temporal_scale) + 1,
+                anchors,
+                slots,
+                drop,
+            )
+        )
+        own_start = own_end
+    return tuple(tiles)
+
+
+def stitch_dfr_temporal_tiles(
+    latents: Sequence[mx.array], tiles: Sequence[DFRTemporalTile]
+) -> mx.array:
+    if len(latents) != len(tiles) or not latents:
+        raise ValueError("DFR temporal tile outputs must match the tile plan.")
+    pieces = []
+    for latent, tile in zip(latents, tiles, strict=True):
+        expected = tile.latent_end_exclusive - tile.latent_start
+        if latent.ndim != 5 or latent.shape[2] != expected:
+            raise ValueError("A DFR temporal tile returned an invalid latent shape.")
+        if not 0 <= tile.drop_latent_prefix < expected:
+            raise ValueError("A DFR temporal tile has an invalid discarded prefix.")
+        pieces.append(latent[:, :, tile.drop_latent_prefix :])
+    return mx.concatenate(pieces, axis=2)
+
+
+__all__ = [
+    "DFR_SEGMENT_CANDIDATES",
+    "DFRTemporalTile",
+    "choose_dfr_segment_length",
+    "plan_dfr_temporal_tiles",
+    "resolve_dfr_canvas",
+    "stitch_dfr_temporal_tiles",
+]

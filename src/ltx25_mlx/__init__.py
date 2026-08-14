@@ -27,6 +27,10 @@ _EXPORT_MODULES = {
     "resolve_prompt_context_length": ".gemma_encoder",
     "tokenize_gemma4": ".gemma_encoder",
     "LTX25Gemma4Conditioner": ".gemma_encoder",
+    "LTX25DurationHead": ".duration_head",
+    "load_ltx25_duration_head": ".duration_head",
+    "seconds_to_ltx25_frames": ".duration_head",
+    "LTX25VideoOnlyX0Model": ".video_only",
 }
 
 

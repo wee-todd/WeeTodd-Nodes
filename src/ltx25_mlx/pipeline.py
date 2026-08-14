@@ -73,6 +73,7 @@ class LTX25DistilledPipeline:
         audio_vae_path: str,
         spatial_upscaler_path: str,
         duration_head_path: str = "",
+        temporal_upsampler_path: str = "",
         low_memory: bool = True,
         low_ram_streaming: bool = False,
         feed_forward_backend: str = "reference_fp32",
@@ -84,9 +85,12 @@ class LTX25DistilledPipeline:
         loras: tuple[tuple[str, float], ...] = (),
         verbose: bool = True,
     ) -> None:
-        del duration_head_path
         self.transformer_path = Path(transformer_path)
+        self.duration_head_path = Path(duration_head_path) if duration_head_path else None
         self.spatial_upscaler_path = Path(spatial_upscaler_path)
+        self.temporal_upsampler_path = (
+            Path(temporal_upsampler_path) if temporal_upsampler_path else None
+        )
         self.low_memory = low_memory
         self.low_ram_streaming = low_ram_streaming
         self.feed_forward_backend = feed_forward_backend
@@ -110,10 +114,15 @@ class LTX25DistilledPipeline:
         self.dit = None
         self._loaded_loras = None
         self.upsampler = None
+        self.temporal_upsampler = None
+        self.duration_head = None
         self.last_timings: dict[str, object] = {}
         self.last_prompt_context: int | None = None
         self.feed_forward_report: dict[str, object] | None = None
         self.paged_transformer_report: dict[str, object] | None = None
+        self.last_num_frames: int | None = None
+        self.last_predicted_duration_seconds: float | None = None
+        self.last_output_frame_rate: float | None = None
 
         from ltx_core_mlx.components.patchifiers import (
             AudioPatchifier,
@@ -124,6 +133,15 @@ class LTX25DistilledPipeline:
         self.audio_patchifier = AudioPatchifier()
 
     def load(self, *, extra_loras: tuple[tuple[str, float], ...] = ()) -> None:
+        self._load_transformer(extra_loras=extra_loras)
+        if self.upsampler is None:
+            self.upsampler = load_ltx25_spatial_upsampler(self.spatial_upscaler_path)
+
+    def _load_transformer(
+        self,
+        *,
+        extra_loras: tuple[tuple[str, float], ...] = (),
+    ) -> None:
         desired_loras = (*self.loras, *extra_loras)
         if self.dit is not None and self._loaded_loras != desired_loras:
             self._release_transformer()
@@ -137,8 +155,6 @@ class LTX25DistilledPipeline:
             self._loaded_loras = desired_loras
             self.feed_forward_report = getattr(self.dit, "feed_forward_backend_report", None)
             self.paged_transformer_report = getattr(self.dit, "paged_checkpoint_report", None)
-        if self.upsampler is None:
-            self.upsampler = load_ltx25_spatial_upsampler(self.spatial_upscaler_path)
 
     def _release_transformer(self) -> None:
         if self.dit is not None:
@@ -157,8 +173,289 @@ class LTX25DistilledPipeline:
     def _release_sampling(self) -> None:
         self._release_transformer()
         self.upsampler = None
+        self.temporal_upsampler = None
         self.image_conditioner.free()
         mx.clear_cache()
+
+    def _load_temporal_upsampler(self):
+        if self.temporal_upsampler_path is None:
+            raise ValueError("LTX 2.5 DFR temporal rounds require a temporal upsampler checkpoint.")
+        if self.temporal_upsampler is None:
+            from .components import load_ltx25_latent_upsampler
+
+            model = load_ltx25_latent_upsampler(self.temporal_upsampler_path)
+            if model.spatial_upsample or not model.temporal_upsample:
+                raise ValueError(
+                    "The selected LTX 2.5 checkpoint is not a temporal-only upsampler."
+                )
+            self.temporal_upsampler = model
+        return self.temporal_upsampler
+
+    def _temporal_upsample(self, latent: mx.array) -> mx.array:
+        model = self._load_temporal_upsampler()
+        denormalized = self.latent_normalizer.denormalize_latent(
+            latent.transpose(0, 2, 3, 4, 1)
+        ).transpose(0, 4, 1, 2, 3)
+        upscaled = model(denormalized)
+        normalized = self.latent_normalizer.normalize_latent(
+            upscaled.transpose(0, 2, 3, 4, 1)
+        ).transpose(0, 4, 1, 2, 3)
+        mx.eval(normalized)
+        return normalized
+
+    def _run_dfr_temporal_rounds(
+        self,
+        *,
+        video_latent: mx.array,
+        carry_frames: tuple[int, ...],
+        carry_keyframes: mx.array,
+        num_frames: int,
+        requested_num_frames: int,
+        frame_rate: float,
+        rounds: int,
+        latent_h: int,
+        latent_w: int,
+        video_embeds: mx.array,
+        audio_embeds: mx.array,
+        seed: int,
+        check_interrupted,
+        step_callback,
+        timings: dict[str, object],
+    ) -> tuple[mx.array, int, float]:
+        from ltx_core_mlx.components.patchifiers import VideoLatentPatchifier
+        from ltx_core_mlx.conditioning.types.keyframe_cond import VideoConditionByKeyframeIndex
+        from ltx_core_mlx.utils.positions import compute_video_positions
+        from ltx_pipelines_mlx.utils.helpers import create_noised_state
+
+        from .dfr import plan_dfr_temporal_tiles, stitch_dfr_temporal_tiles
+        from .generated_keyframes import GeneratedKeyframeSlots, set_generated_keyframe_marker
+        temporal_sigmas = LTX25_DISTILLED_SIGMAS[4:]
+        temporal_reports = []
+        completed_offset = 11
+        current_fps = frame_rate
+        patchifier = VideoLatentPatchifier()
+        planned_frames = num_frames
+        planned_seams = carry_frames
+        total_temporal_evaluations = 0
+        for level in range(1, rounds + 1):
+            planned_frames = 2 * (planned_frames - 1) + 1
+            planned_seams = tuple(2 * frame for frame in planned_seams)
+            total_temporal_evaluations += 4 * len(
+                plan_dfr_temporal_tiles(planned_seams, planned_frames, 2**level)
+            )
+        total_progress = 11 + total_temporal_evaluations
+        for round_index in range(1, rounds + 1):
+            round_started = time.perf_counter()
+            if self.low_memory:
+                self._release_transformer()
+            video_latent = self._temporal_upsample(video_latent)
+            if self.low_memory:
+                from ltx_core_mlx.utils.memory import aggressive_cleanup
+
+                self.temporal_upsampler = None
+                aggressive_cleanup()
+                reload_started = time.perf_counter()
+                self._load_transformer()
+                timings.setdefault("temporal_transformer_reload_seconds", []).append(
+                    time.perf_counter() - reload_started
+                )
+            elif self._loaded_loras != self.loras:
+                reload_started = time.perf_counter()
+                self._load_transformer()
+                timings.setdefault("temporal_transformer_reload_seconds", []).append(
+                    time.perf_counter() - reload_started
+                )
+            from .video_only import LTX25VideoOnlyX0Model
+
+            video_only_model = LTX25VideoOnlyX0Model(self.dit)
+            num_frames = 2 * (num_frames - 1) + 1
+            current_fps *= 2.0
+            seam_frames = tuple(2 * frame for frame in carry_frames)
+            seam_lookup = {frame: index for index, frame in enumerate(seam_frames)}
+            tiles = plan_dfr_temporal_tiles(seam_frames, num_frames, 2**round_index)
+            tile_outputs = []
+            slot_frames_all: list[int] = []
+            slot_latents_all: list[mx.array] = []
+            tile_reports = []
+            conditioning_fps = min(current_fps, 60.0)
+            for tile_index, tile in enumerate(tiles):
+                if check_interrupted is not None:
+                    check_interrupted()
+                tile_started = time.perf_counter()
+                tile_video = video_latent[
+                    :, :, tile.latent_start : tile.latent_end_exclusive
+                ]
+                local_latent_frames = tile_video.shape[2]
+                local_frames = (local_latent_frames - 1) * 8 + 1
+                conditionings = []
+                for anchor in tile.anchor_frames:
+                    if anchor not in seam_lookup:
+                        raise RuntimeError("A DFR temporal anchor is missing from the carry bag.")
+                    keyframe = carry_keyframes[
+                        :, :, seam_lookup[anchor] : seam_lookup[anchor] + 1
+                    ]
+                    keyframe_tokens, _ = patchifier.patchify(keyframe)
+                    conditionings.append(
+                        VideoConditionByKeyframeIndex(
+                            frame_idx=anchor - tile.pixel_start,
+                            keyframe_latent=keyframe_tokens,
+                            spatial_dims=(local_latent_frames, latent_h, latent_w),
+                            frame_rate=conditioning_fps,
+                            strength=0.95,
+                        )
+                    )
+                local_slots = tuple(frame - tile.pixel_start for frame in tile.slot_frames)
+                slot_initials = mx.concatenate(
+                    [
+                        tile_video[
+                            :,
+                            :,
+                            min(max(round(frame / 8), 0), local_latent_frames - 1) :
+                            min(max(round(frame / 8), 0), local_latent_frames - 1) + 1,
+                        ]
+                        for frame in local_slots
+                    ],
+                    axis=2,
+                )
+                slots = GeneratedKeyframeSlots(
+                    local_slots,
+                    spatial_dims=(local_latent_frames, latent_h, latent_w),
+                    frame_rate=conditioning_fps,
+                    initial_keyframes=slot_initials,
+                )
+                conditionings.append(slots)
+                tile_tokens, _ = patchifier.patchify(tile_video)
+                state = create_noised_state(
+                    base_shape=tile_tokens.shape,
+                    conditionings=conditionings,
+                    spatial_dims=(local_latent_frames, latent_h, latent_w),
+                    positions=compute_video_positions(
+                        local_latent_frames,
+                        latent_h,
+                        latent_w,
+                        frame_rate=conditioning_fps,
+                    ),
+                    seed=seed + round_index * 1000 + tile_index,
+                    sigma=temporal_sigmas[0],
+                    initial_latent=tile_tokens,
+                )
+                slot_rows = slots.token_count
+                set_generated_keyframe_marker(self.dit, slot_rows)
+                evaluation_times = []
+                try:
+                    result = euler_ancestral_denoise_loop(
+                        video_only_model,
+                        state,
+                        None,
+                        video_embeds,
+                        audio_embeds,
+                        sigmas=temporal_sigmas,
+                        noise_seed=seed + round_index * 1000 + tile_index,
+                        eta=0.5,
+                        check_interrupted=check_interrupted,
+                        step_callback=(
+                            (
+                                lambda completed, _total, offset=completed_offset: step_callback(
+                                    offset + completed,
+                                    total_progress,
+                                )
+                            )
+                            if step_callback is not None
+                            else None
+                        ),
+                        evaluation_timing_callback=(
+                            lambda index, elapsed, records=evaluation_times: records.append(
+                                {"evaluation": index, "seconds": elapsed}
+                            )
+                        ),
+                    )
+                finally:
+                    set_generated_keyframe_marker(self.dit, 0)
+                generated_rows = local_latent_frames * latent_h * latent_w
+                tile_output = patchifier.unpatchify(
+                    result.video_latent[:, :generated_rows],
+                    (local_latent_frames, latent_h, latent_w),
+                )
+                slot_output = patchifier.unpatchify(
+                    result.video_latent[:, generated_rows : generated_rows + slot_rows],
+                    (len(local_slots), latent_h, latent_w),
+                )
+                mx.eval(tile_output, slot_output)
+                tile_outputs.append(tile_output)
+                slot_frames_all.extend(tile.slot_frames)
+                slot_latents_all.extend(
+                    slot_output[:, :, index : index + 1]
+                    for index in range(slot_output.shape[2])
+                )
+                tile_reports.append(
+                    {
+                        "tile": tile_index + 1,
+                        "frames": local_frames,
+                        "seconds": time.perf_counter() - tile_started,
+                        "evaluations": evaluation_times,
+                    }
+                )
+                completed_offset += len(temporal_sigmas) - 1
+            video_latent = stitch_dfr_temporal_tiles(tile_outputs, tiles)
+            first_slots: dict[int, mx.array] = {}
+            for frame, latent in zip(slot_frames_all, slot_latents_all, strict=True):
+                first_slots.setdefault(frame, latent)
+            carry_map = {
+                frame: carry_keyframes[:, :, index : index + 1]
+                for index, frame in enumerate(seam_frames)
+            }
+            carry_map.update(first_slots)
+            carry_frames = tuple(sorted(carry_map))
+            carry_keyframes = mx.concatenate([carry_map[frame] for frame in carry_frames], axis=2)
+            mx.eval(video_latent, carry_keyframes)
+            temporal_reports.append(
+                {
+                    "round": round_index,
+                    "output_frames": num_frames,
+                    "conditioning_fps": conditioning_fps,
+                    "playback_fps": current_fps,
+                    "tiles": tile_reports,
+                    "seconds": time.perf_counter() - round_started,
+                }
+            )
+        target_frames = (requested_num_frames - 1) * 2**rounds + 1
+        target_latents = (target_frames - 1) // 8 + 1
+        video_latent = video_latent[:, :, :target_latents]
+        timings["temporal_rounds"] = temporal_reports
+        return video_latent, target_frames, current_fps
+
+    def _predict_num_frames(
+        self,
+        video_embeds: mx.array,
+        audio_embeds: mx.array,
+        *,
+        frame_rate: float,
+        min_seconds: float,
+        max_seconds: float,
+    ) -> int:
+        if self.duration_head_path is None:
+            raise ValueError(
+                "Automatic LTX 2.5 duration requires the official duration-head checkpoint."
+            )
+        from .duration_head import load_ltx25_duration_head, seconds_to_ltx25_frames
+
+        if self.duration_head is None:
+            self.duration_head = load_ltx25_duration_head(self.duration_head_path)
+        seconds_array = self.duration_head(video_embeds, audio_embeds)
+        mx.eval(seconds_array)
+        if seconds_array.shape != (1,):
+            raise ValueError(
+                "LTX 2.5 automatic duration supports one prompt at a time; "
+                f"got {seconds_array.shape}."
+            )
+        seconds = float(seconds_array.item())
+        self.last_predicted_duration_seconds = seconds
+        return seconds_to_ltx25_frames(
+            seconds,
+            frame_rate=frame_rate,
+            min_seconds=min_seconds,
+            max_seconds=max_seconds,
+        )
 
     def encode_prompt_batch(
         self,
@@ -227,11 +524,30 @@ class LTX25DistilledPipeline:
         generated_keyframes: int = 0,
         dfr_enabled: bool = False,
         dfr_detailing_lora: tuple[str, float] | None = None,
+        temporal_upsample_rounds: int = 0,
+        auto_duration: bool = False,
+        auto_duration_min_seconds: float = 1.0,
+        auto_duration_max_seconds: float = 20.0,
         **_unused,
     ):
         """Generate synchronized latents using official 8+3 stage semantics."""
         if stage1_steps != 8 or stage2_steps != 3:
             raise ValueError("LTX 2.5 distilled generation requires exactly 8+3 evaluations.")
+        if temporal_upsample_rounds not in {0, 1, 2}:
+            raise ValueError("LTX 2.5 DFR temporal rounds must be zero, one, or two.")
+        if temporal_upsample_rounds and not dfr_enabled:
+            raise ValueError("LTX 2.5 temporal rounds require DFR detailing.")
+        if temporal_upsample_rounds and (
+            image is not None or (images is not None and len(images) > 0)
+        ):
+            raise ValueError(
+                "LTX 2.5 temporal DFR currently supports text conditioning only. "
+                "Remove supplied keyframes or disable temporal refinement."
+            )
+        if temporal_upsample_rounds and (continuation is not None or return_continuation):
+            raise ValueError(
+                "LTX 2.5 temporal DFR is not yet available for chained timelines."
+            )
         from ltx_core_mlx.components.patchifiers import (
             compute_video_latent_shape,
             snap_output_dimensions,
@@ -261,9 +577,25 @@ class LTX25DistilledPipeline:
             time.perf_counter() - prompt_started if encoded_prompt is None else 0.0
         )
         self.last_prompt_context = resolved_context
+        self.last_predicted_duration_seconds = None
+        if auto_duration:
+            duration_started = time.perf_counter()
+            num_frames = self._predict_num_frames(
+                video_embeds,
+                audio_embeds,
+                frame_rate=frame_rate,
+                min_seconds=auto_duration_min_seconds,
+                max_seconds=auto_duration_max_seconds,
+            )
+            timings["duration_prediction_seconds"] = time.perf_counter() - duration_started
+            timings["predicted_duration_seconds"] = self.last_predicted_duration_seconds
+            timings["resolved_num_frames"] = num_frames
+        self.last_num_frames = num_frames
+        self.last_output_frame_rate = frame_rate
         if self.low_memory and encoded_prompt is None:
             release_started = time.perf_counter()
             self.prompt_encoder.free()
+            self.duration_head = None
             aggressive_cleanup()
             timings["prompt_release_seconds"] = time.perf_counter() - release_started
         sampling_load_started = time.perf_counter()
@@ -602,7 +934,39 @@ class LTX25DistilledPipeline:
         video_latent = self.video_patchifier.unpatchify(
             stage2_generated,
             (latent_f, full_h, full_w),
-        )[:, :, :requested_latent_f]
+        )
+        if temporal_upsample_rounds:
+            stage2_slot_tokens = stage2.video_latent[
+                :,
+                latent_f * full_h * full_w : latent_f * full_h * full_w
+                + generated_slot_rows,
+                :,
+            ]
+            carry_keyframes = self.video_patchifier.unpatchify(
+                stage2_slot_tokens,
+                (len(dfr_slot_frames), full_h, full_w),
+            )
+            video_latent, output_frames, output_fps = self._run_dfr_temporal_rounds(
+                video_latent=video_latent,
+                carry_frames=dfr_slot_frames,
+                carry_keyframes=carry_keyframes,
+                num_frames=num_frames,
+                requested_num_frames=requested_num_frames,
+                frame_rate=frame_rate,
+                rounds=temporal_upsample_rounds,
+                latent_h=full_h,
+                latent_w=full_w,
+                video_embeds=video_embeds,
+                audio_embeds=audio_embeds,
+                seed=seed,
+                check_interrupted=check_interrupted,
+                step_callback=step_callback,
+                timings=timings,
+            )
+            self.last_num_frames = output_frames
+            self.last_output_frame_rate = output_fps
+        else:
+            video_latent = video_latent[:, :, :requested_latent_f]
         stage2_audio_generated = stage2.audio_latent[:, :audio_tokens, :]
         output_audio_tokens = (
             dfr_audio_tokens if dfr_audio_tokens is not None else stage2_audio_generated
@@ -642,6 +1006,10 @@ class LTX25DistilledPipeline:
                 "latent_upscale_seconds",
                 "stage2_seconds",
             )
+        )
+        timings["sampling_total_seconds"] += sum(
+            float(round_report["seconds"])
+            for round_report in timings.get("temporal_rounds", [])
         )
         self.last_timings = timings
         if return_continuation:
@@ -803,7 +1171,7 @@ class LTX25DistilledPipeline:
             video_latent,
             audio_latent,
             output_path,
-            frame_rate=frame_rate,
+            frame_rate=self.last_output_frame_rate or frame_rate,
             low_memory=self.low_memory,
         )
         self.last_timings["decode_publish_seconds"] = time.perf_counter() - decode_started
