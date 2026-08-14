@@ -358,6 +358,20 @@ class H3TransformerCache:
                     raise
             try:
                 self._sampler.dit.set_attention_query_chunk_size(config.attention_query_chunk_size)
+                head_group_size = config.attention_head_group_size
+                row_group_size = config.ffn_row_group_size
+                head_setter = getattr(self._sampler.dit, "set_attention_head_chunk_size", None)
+                row_setter = getattr(self._sampler.dit, "set_ffn_row_chunk_size", None)
+                if head_group_size is not None and head_setter is None:
+                    raise RuntimeError(
+                        "The active H3 engine does not support attention-head chunking."
+                    )
+                if row_group_size is not None and row_setter is None:
+                    raise RuntimeError("The active H3 engine does not support FFN row chunking.")
+                if head_setter is not None:
+                    head_setter(head_group_size)
+                if row_setter is not None:
+                    row_setter(row_group_size)
                 initial_video_latents = None
                 initial_audio_latents = None
                 if refinement_source is not None:
@@ -458,9 +472,7 @@ class H3TransformerCache:
                     easycache_resolved_threshold=getattr(
                         result, "easycache_resolved_threshold", None
                     ),
-                    easycache_reuse_strategy=getattr(
-                        result, "easycache_reuse_strategy", None
-                    ),
+                    easycache_reuse_strategy=getattr(result, "easycache_reuse_strategy", None),
                     easycache_cache_bytes=getattr(result, "easycache_cache_bytes", 0),
                     blockcache_hits=getattr(result, "blockcache_hits", 0),
                     blockcache_resolved_threshold=getattr(
@@ -519,9 +531,7 @@ class H3TransformerCache:
                         "cache_hits": getattr(result, "prepared_state_cache_hits", 0),
                         "cache_builds": getattr(result, "prepared_state_cache_builds", 0),
                         "cache_bytes": getattr(result, "prepared_state_cache_bytes", 0),
-                        "build_seconds": getattr(
-                            result, "prepared_state_build_seconds", 0.0
-                        ),
+                        "build_seconds": getattr(result, "prepared_state_build_seconds", 0.0),
                         "key": getattr(result, "prepared_state_key", None),
                     },
                     seconds_per_evaluation=result.seconds_per_evaluation,

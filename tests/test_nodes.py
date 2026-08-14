@@ -18,6 +18,7 @@ from wee_todd_nodes.nodes import (
     WeeToddH3LastFrame,
     WeeToddH3LatentHiresFix,
     WeeToddH3LoRALoader,
+    WeeToddH3LowMemoryTuning,
     WeeToddH3QuantizedTransformerLoader,
     WeeToddH3ReferenceAudio,
     WeeToddH3ReferenceEncode,
@@ -34,6 +35,16 @@ from wee_todd_nodes.nodes import (
     _safe_output_target,
     _save_h3_preview_contact_sheet,
 )
+
+
+def test_h3_low_memory_tuning_is_composable():
+    from wee_todd_nodes.runtime import H3GenerationConfig
+
+    tuned = WeeToddH3LowMemoryTuning().apply(
+        H3GenerationConfig(memory_mode="low_memory_bf16"), "2", "128"
+    )[0]
+    assert tuned.attention_head_chunk_size == "2"
+    assert tuned.ffn_row_chunk_size == "128"
 
 
 def test_live_preview_contact_sheet_is_published_atomically(tmp_path, monkeypatch):
@@ -225,10 +236,12 @@ def test_hires_fix_resolves_target_and_preserves_audio_contract(monkeypatch):
 
 
 def test_expected_nodes_are_registered():
-    assert len(NODE_CLASS_MAPPINGS) == 56
+    assert len(NODE_CLASS_MAPPINGS) == 65
     assert "WeeToddH3ComponentLoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3QuantizedTransformerLoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3Preflight" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3TokenBudget" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3LowMemoryTuning" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3FirstFrame" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3LastFrame" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3FirstLastFrame" in NODE_CLASS_MAPPINGS
@@ -238,7 +251,12 @@ def test_expected_nodes_are_registered():
     assert "WeeToddH3ReferenceImage" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3ReferenceVideo" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3ReferenceAudio" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3TimelineVisualGuide" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3TimelineAudioGuide" in NODE_CLASS_MAPPINGS
     assert "WeeToddLTX25GenerateChained" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX25Keyframe" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX25GeneratedKeyframes" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX25LoRALoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3KeyframeEncode" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3TimedKeyframeEncode" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3ReferenceEncode" in NODE_CLASS_MAPPINGS
@@ -681,6 +699,12 @@ def test_reference_nodes_build_one_ordered_stack():
     assert [reference.kind for reference in references.references] == ["image", "video", "audio"]
 
 
+def test_reference_video_node_exposes_conservative_automatic_density():
+    choices, options = WeeToddH3ReferenceVideo.INPUT_TYPES()["optional"]["temporal_density"]
+    assert "automatic (conservative, experimental)" in choices
+    assert options["default"] == "all frames (recommended)"
+
+
 def test_keyframe_encode_stages_qwen_and_video_vae(monkeypatch):
     from wee_todd_nodes.conditioning import H3Conditioning
 
@@ -843,16 +867,21 @@ def test_reference_encode_stages_qwen_and_both_vaes(monkeypatch):
     conditioning, encoded_info = WeeToddH3ReferenceEncode().encode(
         SimpleNamespace(task="ref2va"), config, stack, "A reference test."
     )
+    info = json.loads(encoded_info)
 
     assert calls == [("text", 2), ("video_vae", 2), ("audio_vae", 2)]
     assert conditioning.condition_video_rows.shape == (32, 96)
     assert conditioning.condition_audio_rows.shape == (20, 32)
     assert conditioning.references == tuple(prepared)
-    assert json.loads(encoded_info)["staged_releases"] == {
+    assert info["staged_releases"] == {
         "text_encoder": ["released-for-text_encoder"],
         "video_vae": ["released-for-video_vae"],
         "audio_vae": ["released-for-audio_vae"],
     }
+    assert info["reference_feature_reuse"] == (
+        "encoded_once_and_reused_for_every_transformer_evaluation"
+    )
+    assert info["references"][0]["temporal_density_resolved"] == 1.0
 
 
 def test_trajectory_forecast_node_exposes_opt_in_bootstrap():
@@ -1077,7 +1106,7 @@ def test_generation_config_node_returns_validated_value():
     assert config.aspect_ratio == "16:9"
     assert config.memory_mode == "low_memory_bf16"
     assert config.attention_query_chunk_size == 1024
-    assert config.projection_backend == "mlx"
+    assert config.projection_backend == "auto"
     assert config.sampling_method == "euler"
     assert resolved == "1344 × 768 pixels — 16:9 — 768 px short edge"
 
@@ -1099,6 +1128,12 @@ def test_generation_config_exposes_clear_ratio_size_controls():
     assert slider["step"] == 32
     assert slider["display"] == "slider"
     assert inputs["optional"]["sampling_method"][0] == ["euler", "res_multistep"]
+    assert inputs["required"]["projection_backend"][0] == [
+        "auto",
+        "mlx",
+        "mpp_experimental",
+    ]
+    assert inputs["required"]["projection_backend"][1]["default"] == "auto"
 
 
 def test_manual_nonstandard_resolution_records_custom_aspect_ratio():

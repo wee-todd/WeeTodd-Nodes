@@ -30,6 +30,8 @@ CATEGORY_NAMES = {
     "WeeTodd/LTX 2.3/upscale": "LTX 2.3 — Upscaling",
     "WeeTodd/LTX 2.5": "LTX 2.5 — Core",
     "WeeTodd/LTX 2.5/loaders": "LTX 2.5 — Loaders",
+    "WeeTodd/LTX 2.5/conditioning": "LTX 2.5 — Conditioning",
+    "WeeTodd/LTX 2.5/optimization": "LTX 2.5 — Optimization",
 }
 
 RECOMMENDED = {
@@ -69,6 +71,8 @@ EXPERIMENTAL = {
     "WeeToddLTX25Generate",
     "WeeToddLTX25GenerateChained",
     "WeeToddLTX25VideoUpscale",
+    "WeeToddLTX25DFRDetailing",
+    "WeeToddLTX25DiffVAEOptimization",
 }
 CONVENIENCE = {
     "WeeToddH3ModelLoader",

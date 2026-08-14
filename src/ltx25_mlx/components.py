@@ -114,21 +114,63 @@ class LTX25LatentNormalizer:
 
 
 class LTX25VideoDecoder:
-    """Own the convolutional video-VAE decoder and streamed publication."""
+    """Own either official LTX 2.5 video-VAE decoder and streamed publication."""
 
-    def __init__(self, path: str | Path, *, verbose: bool = True) -> None:
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        verbose: bool = True,
+        diffvae_optimization: str = "combined",
+        diffvae_query_chunk_size: int = 512,
+        diffvae_context_width_chunks: int = 4,
+        diffvae_stage4_tile_width: int = 0,
+    ) -> None:
         self.path = Path(path).expanduser()
         self.verbose = verbose
         self._decoder = None
         self.last_decode_report: dict[str, object] = {}
+        self.diffvae_optimization = diffvae_optimization
+        self.diffvae_query_chunk_size = diffvae_query_chunk_size
+        self.diffvae_context_width_chunks = diffvae_context_width_chunks
+        self.diffvae_stage4_tile_width = diffvae_stage4_tile_width
 
     def load(self):
         if self._decoder is not None:
             return self._decoder
+        component_config = _metadata_config(self.path)
+        vae_config = component_config.get("vae", {})
+        decoder_config = vae_config.get("decoder", {}) if isinstance(vae_config, dict) else {}
+        decoder_name = str(decoder_config.get("_class_name", ""))
+        if "diffusion" in decoder_name.lower():
+            from .diffusion_vae import load_diffusion_video_decoder
+
+            self._decoder = load_diffusion_video_decoder(
+                self.path,
+                component_config,
+                query_chunk_size=self.diffvae_query_chunk_size,
+                attention_backend=(
+                    "metal_tiled"
+                    if self.diffvae_optimization == "metal_na3d_query_tiled_experimental"
+                    else (
+                        "metal"
+                        if self.diffvae_optimization == "metal_na3d_experimental"
+                        else "einsum"
+                    )
+                ),
+                deferred_stage4=self.diffvae_optimization == "deferred_stage4",
+                context_width_chunks=self.diffvae_context_width_chunks,
+                stage4_tile_width=(
+                    self.diffvae_stage4_tile_width
+                    if self.diffvae_optimization == "stage4_width_tiles"
+                    else 0
+                ),
+            )
+            _cleanup()
+            return self._decoder
         from ltx_core_mlx.model.video_vae.video_vae import VideoDecoder
         from ltx_core_mlx.utils.weights import load_split_safetensors
 
-        vae_config = _metadata_config(self.path).get("vae", {})
         decoder = VideoDecoder(
             causal=bool(vae_config.get("causal_decoder", False)),
             spatial_padding_mode=str(vae_config.get("spatial_padding_mode", "zeros")),
@@ -171,10 +213,34 @@ class LTX25VideoDecoder:
 
             from ltx_core_mlx.model.video_vae.video_vae import _compute_decode_tiling
 
-            tiling = _compute_decode_tiling(video_latent.shape, frame_rate=frame_rate)
+            is_diffusion = decoder.__class__.__name__ == "MLXDiffusionVideoDecoder"
+            tiling = (
+                None
+                if is_diffusion
+                else _compute_decode_tiling(video_latent.shape, frame_rate=frame_rate)
+            )
             temporal = getattr(tiling, "temporal_config", None)
             self.last_decode_report = {
                 "publication": "direct_ffmpeg_stream",
+                "decoder": "diffusion" if is_diffusion else "convolutional",
+                "diffvae_optimization": self.diffvae_optimization if is_diffusion else None,
+                "diffvae_attention_backend": (
+                    str(getattr(decoder, "attention_backend", "einsum"))
+                    if is_diffusion
+                    else None
+                ),
+                "diffvae_inference_steps": (
+                    int(decoder.config.default_num_inference_steps) if is_diffusion else None
+                ),
+                "diffvae_model_output_type": (
+                    str(decoder.config.model_output_type) if is_diffusion else None
+                ),
+                "query_chunk_size": (
+                    int(getattr(decoder, "query_chunk_size", 0)) if is_diffusion else None
+                ),
+                "stage4_tile_width": (
+                    int(getattr(decoder, "stage4_tile_width", 0)) if is_diffusion else None
+                ),
                 "decode_budget_gib": float(os.environ.get("LTX2_VAE_DECODE_BUDGET_GB", "8.0")),
                 "temporal_tiling": temporal is not None,
                 "tile_frames": (

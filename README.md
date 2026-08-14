@@ -6,7 +6,15 @@ WeeTodd keeps each model engine behind a separate ComfyUI adapter. H3 generation
 and audio as one synchronized latent contract. Weighted components load only when the graph runs
 and can unload between Qwen3-VL, transformer, video VAE, and audio VAE stages.
 
-- 42 composable nodes under `WeeTodd/H3`
+- 46 composable nodes under `WeeTodd/H3`
+
+Recent experimental controls include target-frame H3 image, clip, and audio guides; an H3 token
+and attention-workspace estimator; independent MLX attention-head and feed-forward row chunking;
+LTX 2.5 timed input keyframes; learned generated-keyframe slots; and lazy ordered LTX 2.5 LoRA
+stacks. Existing modifier and conditioning nodes preserve older Generation Config socket order.
+The H3 projection backend adds a backward-compatible `auto` choice; saved workflows that explicitly
+select `mlx` retain that selection. Add a modifier or conditioning node only when the feature is
+needed.
 
 ## Choose a workflow
 
@@ -43,6 +51,7 @@ Frames** when the graph needs numbered middle frames.
 | --- | --- | --- |
 | Balance | [LTX 2.3 two-stage](workflows/balance/t2v/ltx23_two_stage.json) | Standalone LTX 2.3 synchronized generation. |
 | Balance | [LTX 2.5 768×512](workflows/balance/t2v/ltx25_768x512_two_stage.json) | Recommended LTX 2.5 starting point with the official 8+3 schedule. |
+| Performance | [LTX 2.5 768×512 DFR + Diffusion VAE](workflows/performance/t2v/ltx25_768x512_dfr_diffusion_vae.json) | Experimental full-resolution detail generation and one-step pixel-diffusion decode. |
 | Performance | [LTX 2.5 1920×1088](workflows/performance/t2v/ltx25_1920x1088_two_stage.json) | High-resolution quality-first generation. |
 | Balance | [LTX 2.5 chained timeline](workflows/balance/continuation/ltx25_768p_15s_three_window_chain.json) | Experimental long-timeline continuation and selective regeneration. |
 | Balance | [LTX 2.5 video refine](workflows/balance/video-upscale/ltx25_any_video_pixel_spatial_2x.json) | Refine and upscale any source movie while preserving its audio. |
@@ -134,8 +143,10 @@ in standard ComfyUI folders.
 | `models/diffusion_models/` | `ltx-2.5-22b-distilled-transformer-bf16.safetensors` |
 | `models/text_encoders/` | `gemma4-12b-with-proj-ltx-2.5-bf16.safetensors` |
 | `models/vae/` | `ltx-2.5-video-vae-conv-bf16.safetensors` |
+| `models/vae/` | Optional detail decoder: `ltx-2.5-video-vae-bf16.safetensors` |
 | `models/vae/` | `ltx-2.5-audio-vae-bf16.safetensors` |
 | `models/latent_upscale_models/` | `ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors` |
+| `models/loras/LTX-2.5/` | Optional DFR: [`ltx-2.5-22b-ic-lora-pixel-spatial-upscaler-x2-1.0.safetensors`](https://huggingface.co/Lightricks/LTX-2.5-22b-IC-LoRA-Pixel-Spatial-Upscaler) |
 
 The video-refine workflow also requires the
 [pixel-spatial upscaler IC-LoRA](https://huggingface.co/Lightricks/LTX-2.5-22b-IC-LoRA-Pixel-Spatial-Upscaler)
@@ -169,9 +180,17 @@ work. Results apply to the stated workflow and hardware conditions.
 | H3 four-evaluation Turbo | Speed | Very high | Uses four real evaluations instead of the 19-evaluation dense schedule. | Changes the sampling trajectory. |
 | H3 staged Turbo | Speed/quality | Very high | Uses two base plus four Turbo evaluations. | Changes the sampling trajectory but retains base-model setup evaluations. |
 | H3 direct latent publication | Memory | High | Streams decoded frames to FFmpeg and avoids a persistent complete `IMAGE` tensor. | Does not change sampling. |
-| H3 reduced Ref2VA video density | Ref2VA speed | High | Half and quarter density reduced mean transformer time by 29.45% and 43.26% in the measured matrix. | Experimental; full density remains the default. |
+| H3 adaptive Ref2VA video density | Ref2VA speed | High | In a matched 640×384 run, automatic half-density reduced sampling time by 32.35% and the observed process peak by 1.08 GB. Automatic mode retains full Qwen inspection and selects persistent VAE-row density from adjacent-frame activity. | Experimental; full density followed source motion more closely and remains the default. Automatic decisions are reported in conditioning metadata. |
+| H3 head and FFN row chunking | Sampling memory | Unmeasured; bounded by construction | Independently limits SDPA head groups and packed-row SwiGLU intermediates through the Low-Memory Tuning node. | Same operations and ordering within each independent chunk; checkpoint parity tests are still required before claiming bit identity. |
+| H3 token and workspace budget | Preflight | Diagnostic | Reports target, conditioning, packed-token, attention-score, and bounded-workspace estimates before allocation. | Reporting only. |
 | LTX 2.5 Q8 paging | Memory and speed | Very high | 9.90 GB and 78.38 s versus 31.60 GB and 102.13 s for matched BF16 one-block streaming at 768×512. | Q8 changes the numerical trajectory. |
 | LTX 2.5 temporal VAE tiling | Decode memory | High for long clips | Activates from an explicit decode-memory budget and grows in value with duration. | Preserves the synchronized output contract. |
+| LTX 2.5 generated-keyframe slots | Motion allocation | Experimental | Adds evenly distributed learned interior slots during stage one without changing existing workflow schemas. | Changes the latent token sequence and output. |
+| LTX 2.5 Diffusion VAE | Decode quality | Experimental | On a matched fast-motion 512×512 latent, the reference decode took 66.41 s at an 8.41 GB MLX peak. | Runs the official one-step pixel-diffusion decoder and changes decoded pixels. Conv VAE remains the speed and low-memory default. |
+| LTX 2.5 Diffusion VAE layouts | Decode performance and compatibility | Experimental | `metal_na3d_experimental` reduced the matched decode to 14.79 s, or 4.49× faster, and reduced MLX peak from 8.41 to 5.41 GB. Output measured SSIM 0.98886 and PSNR 44.45 dB. | Use the Diffusion VAE Optimization node. The Metal result is approximate. Keep combined mode as the default. |
+| LTX 2.5 query-tiled Metal Diffusion VAE | Decode memory | High | A 65,536-row tile reduced matched 512×512 Metal peak from 5.41 to 4.24 GB. Decode time changed from 15.83 to 16.77 s, and the MP4 digest remained identical. | Select `metal_na3d_query_tiled_experimental` only when Diffusion VAE memory has priority. Fine tiles are substantially slower. |
+| LTX 2.5 Diffusion VAE width tiling | Decode memory | Experimental | A 32-cell stage-four stripe reduced 512×512 peak from 8.27 GB to 7.62 GB. | Decode slowed from 61.99 s to 100.13 s and output was not pixel-identical. Select `stage4_width_tiles` only when memory is the priority. |
+| LTX 2.5 DFR | Full-resolution detail | Experimental | Adds generated stage-one slots, stage-one latent reference conditioning, and a stage-two-only Pixel-Spatial IC-LoRA. | DFR generatively changes composition and motion. It preserves stage-one audio but is not a decoder-only enhancement. |
 
 ### Remaining optimization priorities
 
@@ -182,7 +201,7 @@ work. Results apply to the stated workflow and hardware conditions.
 | 3 | H3-specific W4A8 projection kernel | Very high checkpoint and resident-memory reduction | Low |
 | 4 | Adaptive full-block H3 paging | Very high BF16 peak-memory reduction | Medium |
 | 5 | LTX 2.5 visual-token routing parity | High long-duration speed potential | Low until the routing contract is verified |
-| 6 | LTX 2.5 pixel-diffusion final stage | Perceptual detail improvement | Medium |
+| 6 | H3-specific MLX attention tiles | High transformer speed potential | Medium; preserve multimodal prefix and exact output shape |
 
 ## Memory guidance
 
@@ -216,6 +235,7 @@ This table is generated from the registered node contracts. Run
 | H3 Model Preview Override | Attach a true-color TAE preview and optional collapse guard to H3 sampling. Core ML can keep preview decoding on the Apple Neural Engine; MLX remains the fallback. Place this node between the component loader and sampler. | H3 — Sampling and acceleration | Experimental |
 | H3 Quantized Transformer Loader | Select and validate a named mixed-precision H3 transformer without loading weights. Both q8 profiles are approximate and keep BlockCache disabled by default. | H3 — Loaders | Experimental |
 | H3 Component Preflight | Validate MiniMax H3 components and estimate staged memory from file headers. Set available memory to zero when unknown. | H3 — Loaders | Recommended |
+| H3 Token + Memory Budget | Estimate H3 text, condition, audio, and video rows plus dense-attention scale without loading a checkpoint. Add encoded reference rows for Ref2VA planning. | H3 — Loaders | Supported |
 | H3 First Frame | Use one image as the first-frame endpoint for an FL2VA generation. | H3 — Conditioning | Supported |
 | H3 Last Frame | Use one image as the last-frame endpoint for an FL2VA generation. | H3 — Conditioning | Supported |
 | H3 First + Last Frame | Use two images as the first-frame and last-frame endpoints for FL2VA. | H3 — Conditioning | Supported |
@@ -225,6 +245,8 @@ This table is generated from the registered node contracts. Run
 | H3 Reference Image | Append an image identity, subject, style, or scene reference. Reference order controls the prompt labels and packed rotary positions. A 100% pixel budget matches the output canvas area; lower values reduce persistent reference tokens and higher values retain more source detail. | H3 — Conditioning | Supported |
 | H3 Reference Video | Append a video motion and camera reference, with an optional synchronized soundtrack. Supply the source frame rate explicitly. The recommended default matches the output pixel area; native reference resolution is available but can be dramatically slower. | H3 — Conditioning | Experimental |
 | H3 Reference Audio | Append a standalone voice, sound, or music reference. Ref2VA also requires at least one image or video reference. | H3 — Conditioning | Supported |
+| H3 Timeline Visual Guide | Place one image or an aligned H3 clip on the Ref2VA target timeline. A clip must contain 5, 22, 39, ... frames after 24 fps alignment; optional audio starts at the same frame. | H3 — Conditioning | Supported |
+| H3 Timeline Audio Guide | Place an audio guide at an exact Ref2VA target frame. | H3 — Conditioning | Supported |
 | H3 Encode First / Last Frames | Encode FL2VA prompt vision rows and first/last-frame VAE rows in separate staged phases. Each weighted component unloads before the next phase. | H3 — Conditioning | Supported |
 | H3 Encode Timed Keyframes | Encode up to eight sparse FL2VA images at exact 24 fps timestamps, unloading Qwen3-VL before the video VAE stage. | H3 — Conditioning | Experimental |
 | H3 Encode References | Prepare ordered Ref2VA media, then stage Qwen3-VL, the video VAE, and the audio VAE. Each weighted component unloads before the next stage. | H3 — Conditioning | Experimental |
@@ -252,6 +274,7 @@ This table is generated from the registered node contracts. Run
 | H3 Direct Publish Chained Timeline (MLX) | Decode an H3 latent chain by VAE stage, remove duplicated joins, force exact 24 fps / 32 kHz duration, and atomically publish one MP4. | H3 — Output | Experimental |
 | H3 Model Loader (MLX) | Describe an MLX MiniMax H3 checkpoint. Weights load lazily at generation time. | H3 — Core and convenience | Legacy/convenience |
 | H3 Generation Config | Choose a clearly labeled aspect ratio and move the short-edge size slider, or use exact dimensions. The live canvas remains on H3's required 32-pixel grid. | H3 — Core and convenience | Recommended |
+| H3 Low-Memory Tuning (MLX) | Apply optional MLX attention-head and feed-forward row chunking without invalidating older Generation Config workflows. | H3 — Sampling and acceleration | Supported |
 | H3 Generate Video + Audio | Generate synchronized video and audio with MiniMax H3 through MLX. | H3 — Core and convenience | Legacy/convenience |
 | H3 Unload MLX Runtime | Release state held by the monolithic H3 runtime. | H3 — Core and convenience | Legacy/convenience |
 | LTX 2.3 Model Loader (MLX) | Select a local LTX 2.3 MLX bundle. No weights load in this node. | LTX 2.3 — Loaders | Supported |
@@ -262,8 +285,13 @@ This table is generated from the registered node contracts. Run
 | LTX 2.3 Upscale + Publish | Upscale decoded H3 or other ComfyUI video frames with the LTX latent upscaler and preserve the supplied audio. | LTX 2.3 — Upscaling | Experimental |
 | LTX 2.3 Unload MLX Runtime | Release the process-local LTX 2.3 pipeline. | LTX 2.3 — Core | Supported |
 | LTX 2.5 Component Loader (MLX) | Select LTX 2.5 split components without loading weights or downloading files. | LTX 2.5 — Loaders | Experimental |
+| LTX 2.5 LoRA Loader (MLX) | Attach a generic LTX 2.5 transformer LoRA. Multiple loader nodes may be chained; IC-LoRA control media still requires its matching conditioning workflow. | LTX 2.5 — Loaders | Supported |
 | LTX 2.5 Generation Config | Configure the official distilled 8+3-evaluation LTX 2.5 two-stage schedule. | LTX 2.5 — Core | Experimental |
+| LTX 2.5 Generated Keyframes | Apply LTX 2.5 generated interior keyframe slots as a composable config modifier. | LTX 2.5 — Conditioning | Supported |
+| LTX 2.5 Diffusion VAE Optimization | Select an MLX Diffusion VAE execution layout. It does not affect the convolutional VAE. | LTX 2.5 — Optimization | Experimental |
+| LTX 2.5 DFR Detail Refinement | Enable MLX Diffusion Fidelity Rendering: segment-grid generated keyframes, stage-one latent reference conditioning, stage-two-only Pixel-Spatial IC-LoRA, and untouched stage-one audio publication. | LTX 2.5 — Conditioning | Experimental |
 | LTX 2.5 Preflight | Validate LTX 2.5 component metadata and architecture requirements before allocation. | LTX 2.5 — Loaders | Experimental |
+| LTX 2.5 Timed Keyframe | Append a first, middle, or last image at an exact zero-based pixel-frame index. Nonzero frames use LTX 2.5's generated-keyframe token slots. | LTX 2.5 — Conditioning | Supported |
 | LTX 2.5 Generate Video + Audio | Generate synchronized LTX 2.5 video and audio through the MLX adapter. | LTX 2.5 — Core | Experimental |
 | LTX 2.5 Generate Chained Timeline | Generate two to four overlapping LTX 2.5 windows with timeline-aligned latent guides, causal-aware latent transitions, and one synchronized audio/video decode. | LTX 2.5 — Core | Experimental |
 | LTX 2.5 Video Upscale / Refine | Upscale decoded ComfyUI IMAGE+AUDIO from any movie through LTX 2.5 latent space, optionally adding video-only refinement while preserving the source audio. | LTX 2.5 — Core | Experimental |

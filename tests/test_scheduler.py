@@ -8,6 +8,17 @@ from minimax_h3_mlx.scheduler import (
 )
 
 
+def test_h3_video_and_audio_schedules_keep_independent_released_shifts():
+    video = MiniMaxH3Scheduler(shift=12.0)
+    audio = MiniMaxH3Scheduler(shift=3.0)
+    video.set_timesteps(8)
+    audio.set_timesteps(8)
+    assert len(video.timesteps) == len(audio.timesteps) == 7
+    assert video.timesteps.tolist() != audio.timesteps.tolist()
+    assert video.shift == 12.0
+    assert audio.shift == 3.0
+
+
 def test_res_multistep_first_update_matches_euler_and_interior_changes_path():
     euler = MiniMaxH3Scheduler(shift=3.0)
     residual = MiniMaxH3ResMultistepScheduler(shift=3.0)

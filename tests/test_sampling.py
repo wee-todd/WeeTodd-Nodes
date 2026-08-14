@@ -18,9 +18,17 @@ from wee_todd_nodes.sampling import H3Latents, H3TransformerCache, H3Transformer
 class FakeDiT:
     def __init__(self):
         self.query_chunk_size = None
+        self.head_chunk_size = None
+        self.ffn_row_chunk_size = None
 
     def set_attention_query_chunk_size(self, value):
         self.query_chunk_size = value
+
+    def set_attention_head_chunk_size(self, value):
+        self.head_chunk_size = value
+
+    def set_ffn_row_chunk_size(self, value):
+        self.ffn_row_chunk_size = value
 
 
 class FakeSampler:

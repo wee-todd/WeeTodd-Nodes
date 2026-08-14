@@ -18,7 +18,18 @@ from .gemma_pack import inspect_gemma4_pack
 
 LTX25_CONFIG_MODES = ("distilled",)
 LTX25_PROMPT_CONTEXTS = ("official_1024", "auto", "128", "256", "512", "1024")
-LTX25_FEED_FORWARD_BACKENDS = ("reference_fp32", "bf16_mpp_experimental")
+LTX25_FEED_FORWARD_BACKENDS = (
+    "reference_fp32",
+    "mlx_fused_experimental",
+    "bf16_mpp_experimental",
+)
+LTX25_DIFFVAE_OPTIMIZATIONS = (
+    "combined",
+    "metal_na3d_experimental",
+    "metal_na3d_query_tiled_experimental",
+    "deferred_stage4",
+    "stage4_width_tiles",
+)
 LTX25_GENERATION_PRESETS = (
     "Custom",
     "Official parity — 768×512, 5 s, reference FP32, 8+3 ancestral",
@@ -118,9 +129,11 @@ class LTX25ComponentSpec:
     audio_vae_path: str
     spatial_upscaler_path: str
     duration_head_path: str = ""
+    loras: tuple[tuple[str, float], ...] = ()
 
     def paths(self) -> dict[str, Path]:
         values = asdict(self)
+        values.pop("loras", None)
         return {name: Path(value).expanduser() for name, value in values.items() if value}
 
     def validate(self, mode: str = "distilled") -> dict[str, object]:
@@ -134,6 +147,12 @@ class LTX25ComponentSpec:
             "spatial_upscaler_path",
         }
         paths = self.paths()
+        for lora_path, strength in self.loras:
+            resolved = Path(lora_path).expanduser()
+            if not resolved.is_file() or resolved.suffix != ".safetensors":
+                raise FileNotFoundError(f"LTX 2.5 LoRA file not found: {resolved}")
+            if strength <= 0:
+                raise ValueError("LTX 2.5 LoRA strength must be positive.")
         missing = [
             name for name in sorted(required) if name not in paths or not paths[name].exists()
         ]
@@ -237,6 +256,14 @@ class LTX25GenerationConfig:
     low_ram_streaming: bool = False
     prompt_context: str = "official_1024"
     feed_forward_backend: str = "reference_fp32"
+    generated_keyframes: int = 0
+    dfr_enabled: bool = False
+    dfr_detailing_lora_path: str = ""
+    dfr_detailing_lora_strength: float = 1.0
+    diffvae_optimization: str = "combined"
+    diffvae_query_chunk_size: int = 512
+    diffvae_context_width_chunks: int = 4
+    diffvae_stage4_tile_width: int = 0
 
     @property
     def num_frames(self) -> int:
@@ -256,10 +283,22 @@ class LTX25GenerationConfig:
             raise ValueError(
                 f"Unsupported LTX 2.5 feed-forward backend: {self.feed_forward_backend!r}."
             )
+        if self.diffvae_optimization not in LTX25_DIFFVAE_OPTIMIZATIONS:
+            raise ValueError(
+                f"Unsupported LTX 2.5 Diffusion VAE optimization: {self.diffvae_optimization!r}."
+            )
+        if self.diffvae_query_chunk_size < 1:
+            raise ValueError("Diffusion VAE query chunk size must be positive.")
+        if self.diffvae_context_width_chunks < 1:
+            raise ValueError("Diffusion VAE context width chunks must be positive.")
+        if self.diffvae_stage4_tile_width < 0:
+            raise ValueError("Diffusion VAE stage-four tile width cannot be negative.")
+        if self.diffvae_optimization == "stage4_width_tiles" and self.diffvae_stage4_tile_width < 1:
+            raise ValueError("Stage-four width tiling requires a positive tile width.")
         if self.low_ram_streaming and self.feed_forward_backend != "reference_fp32":
             raise ValueError(
-                "LTX 2.5 BF16 MPP feed-forward mode is not compatible with low-RAM block "
-                "streaming. Select reference_fp32 or disable low_ram_streaming."
+                "Experimental LTX 2.5 feed-forward modes are not compatible with low-RAM "
+                "block streaming. Select reference_fp32 or disable low_ram_streaming."
             )
         temporal, spatial_h, spatial_w = scale_factors
         modulus_h = spatial_h * 2
@@ -274,6 +313,21 @@ class LTX25GenerationConfig:
             raise ValueError("LTX 2.5 dimensions must not exceed 1920 pixels.")
         if not 0.25 <= self.duration_seconds <= 30.0:
             raise ValueError("LTX 2.5 duration must be between 0.25 and 30 seconds.")
+        if not 0 <= self.generated_keyframes <= 8:
+            raise ValueError("LTX 2.5 generated_keyframes must be between zero and eight.")
+        if self.dfr_enabled:
+            if self.generated_keyframes:
+                raise ValueError("DFR derives its own segment-grid keyframes.")
+            detail_path = Path(self.dfr_detailing_lora_path).expanduser()
+            if not detail_path.is_file():
+                raise FileNotFoundError(f"LTX 2.5 DFR detailing LoRA not found: {detail_path}")
+            if self.dfr_detailing_lora_strength <= 0:
+                raise ValueError("LTX 2.5 DFR detailing LoRA strength must be positive.")
+            from .transformer import inspect_ltx25_ic_lora
+
+            detail = inspect_ltx25_ic_lora(detail_path)
+            if detail["reference_downscale_factor"] != 2:
+                raise ValueError("LTX 2.5 DFR requires a 2x Pixel-Spatial IC-LoRA.")
         if not 1.0 <= self.frame_rate <= 60.0:
             raise ValueError("LTX 2.5 frame rate must be between 1 and 60 fps.")
         if self.stage1_steps != 8 or self.stage2_steps != 3:
@@ -281,13 +335,8 @@ class LTX25GenerationConfig:
                 "The LTX 2.5 distilled path requires eight stage-one and three stage-two "
                 "transformer evaluations."
             )
-        if (
-            self.stage1_sampler != "euler_ancestral"
-            or self.stage2_sampler != "euler_ancestral"
-        ):
-            raise ValueError(
-                "LTX 2.5 distilled requires Euler ancestral sampling in both stages."
-            )
+        if self.stage1_sampler != "euler_ancestral" or self.stage2_sampler != "euler_ancestral":
+            raise ValueError("LTX 2.5 distilled requires Euler ancestral sampling in both stages.")
         if self.stage1_eta != 1.0 or self.stage1_s_noise != 1.0:
             raise ValueError("LTX 2.5 distilled stage one requires eta=1.0 and s_noise=1.0.")
         if self.ancestral_seed_offset != 10000:
@@ -396,6 +445,10 @@ class LTX25RuntimeCache:
             config.low_memory,
             config.low_ram_streaming,
             config.feed_forward_backend,
+            config.diffvae_optimization,
+            config.diffvae_query_chunk_size,
+            config.diffvae_context_width_chunks,
+            config.diffvae_stage4_tile_width,
         )
         with self._lock:
             if self._pipeline is None or self._key != key:
@@ -410,6 +463,11 @@ class LTX25RuntimeCache:
                     "low_memory": config.low_memory,
                     "low_ram_streaming": config.low_ram_streaming,
                     "feed_forward_backend": config.feed_forward_backend,
+                    "diffvae_optimization": config.diffvae_optimization,
+                    "diffvae_query_chunk_size": config.diffvae_query_chunk_size,
+                    "diffvae_context_width_chunks": config.diffvae_context_width_chunks,
+                    "diffvae_stage4_tile_width": config.diffvae_stage4_tile_width,
+                    "loras": spec.loras,
                 }
                 signature = inspect.signature(pipeline_class)
                 accepted = {
@@ -433,6 +491,7 @@ class LTX25RuntimeCache:
         output_path: str | Path,
         *,
         image_path: str | None = None,
+        image_inputs: list[dict[str, object]] | None = None,
         unload_after: bool = True,
         check_interrupted=None,
         step_callback=None,
@@ -452,6 +511,18 @@ class LTX25RuntimeCache:
             mx = None
         started = time.perf_counter()
         pipeline = self.get(spec, config)
+        images = None
+        if image_inputs:
+            from ltx_pipelines_mlx.utils.args import ImageConditioningInput
+
+            images = [
+                ImageConditioningInput(
+                    path=str(item["path"]),
+                    frame_idx=int(item["frame_index"]),
+                    strength=float(item["strength"]),
+                )
+                for item in image_inputs
+            ]
         kwargs: dict[str, object] = {
             "prompt": prompt,
             "output_path": str(output_path),
@@ -461,6 +532,7 @@ class LTX25RuntimeCache:
             "frame_rate": config.frame_rate,
             "seed": config.seed,
             "image": image_path,
+            "images": images,
             "stage1_steps": config.stage1_steps,
             "stage2_steps": config.stage2_steps,
             "stage1_sigmas": LTX25_DISTILLED_SIGMAS,
@@ -473,6 +545,13 @@ class LTX25RuntimeCache:
             "check_interrupted": check_interrupted,
             "step_callback": step_callback,
             "prompt_context": config.prompt_context,
+            "generated_keyframes": config.generated_keyframes,
+            "dfr_enabled": config.dfr_enabled,
+            "dfr_detailing_lora": (
+                (config.dfr_detailing_lora_path, config.dfr_detailing_lora_strength)
+                if config.dfr_enabled
+                else None
+            ),
         }
         signature = inspect.signature(pipeline.generate_and_save)
         accepts_kwargs = any(

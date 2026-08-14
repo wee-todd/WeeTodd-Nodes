@@ -286,9 +286,7 @@ class H3TimedKeyframeStack:
     def resolve(self, num_frames: int, fps: int = 24) -> tuple[tuple[int, ...], list[Any]]:
         resolved = self._resolved(num_frames, fps)
         frames = [item[0] for item in resolved]
-        images = [
-            comfy_image_to_pil(item[1].image, "H3 timed keyframe") for item in resolved
-        ]
+        images = [comfy_image_to_pil(item[1].image, "H3 timed keyframe") for item in resolved]
         return tuple(frames), images
 
     def metadata(self, num_frames: int | None = None, fps: int = 24) -> dict[str, object]:
@@ -321,6 +319,7 @@ class H3ReferenceInput:
     image_pixel_budget_percent: int = 100
     video_size_mode: str = "match output (recommended)"
     temporal_density: str = "all frames (recommended)"
+    target_frame: int | None = None
 
     def validate(self) -> None:
         if self.kind == "image":
@@ -350,6 +349,7 @@ class H3ReferenceInput:
                 raise ValueError(f"Unknown H3 reference-video size mode: {self.video_size_mode!r}.")
             if self.temporal_density not in {
                 "all frames (recommended)",
+                "automatic (conservative, experimental)",
                 "uniform 50% (experimental)",
                 "uniform 25% (experimental)",
             }:
@@ -372,7 +372,11 @@ class H3ReferenceInput:
 
     def metadata(self) -> dict[str, object]:
         self.validate()
-        payload: dict[str, object] = {"kind": self.kind, "has_audio": self.has_audio}
+        payload: dict[str, object] = {
+            "kind": self.kind,
+            "has_audio": self.has_audio,
+            "target_frame": self.target_frame,
+        }
         if self.kind == "image":
             payload["shape"] = list(_shape(self.media, "H3 reference image"))
             payload["image_pixel_budget_percent"] = self.image_pixel_budget_percent
@@ -421,9 +425,15 @@ class H3ReferenceStack:
             raise ValueError("Ref2VA requires at least one reference.")
         for reference in self.references:
             reference.validate()
-        if not any(reference.kind in {"image", "video"} for reference in self.references):
+        has_visual_reference = any(
+            reference.kind in {"image", "video"} for reference in self.references
+        )
+        all_references_are_timed = all(
+            reference.target_frame is not None for reference in self.references
+        )
+        if not has_visual_reference and not all_references_are_timed:
             raise ValueError(
-                "Ref2VA audio references require at least one image or video reference."
+                "Untimed Ref2VA audio references require at least one image or video reference."
             )
 
     def metadata(self) -> dict[str, object]:
@@ -460,15 +470,27 @@ class H3ReferenceStack:
             PreparedReference,
             reduce_reference_video_frames,
             resample_reference_frames,
+            resolve_reference_video_density,
             sample_reference_video_frames,
             trim_reference_num_frames,
         )
 
         self.validate_request()
         prepared = []
-        max_samples = round(target_num_frames / 24.0 * target_sample_rate)
         for index, reference in enumerate(self.references, start=1):
             item = PreparedReference(kind=reference.kind)
+            if reference.target_frame is not None:
+                resolved_frame = (
+                    reference.target_frame
+                    if reference.target_frame >= 0
+                    else target_num_frames + reference.target_frame
+                )
+                if not 0 <= resolved_frame < target_num_frames:
+                    raise ValueError(
+                        f"H3 timeline guide {index} frame {reference.target_frame} resolves "
+                        f"outside 0..{target_num_frames - 1}."
+                    )
+                item.target_frame = resolved_frame
             if reference.kind == "image":
                 image = comfy_image_to_pil(reference.media, f"H3 reference image {index}")
                 width, height = resolve_reference_image_canvas(
@@ -480,15 +502,19 @@ class H3ReferenceStack:
                 )
                 item.image = image.resize((width, height), Image.Resampling.LANCZOS)
             elif reference.kind == "video":
-                frames = _comfy_frames_to_uint8(
-                    reference.media, f"H3 reference video {index}"
-                )
+                frames = _comfy_frames_to_uint8(reference.media, f"H3 reference video {index}")
                 frames = resample_reference_frames(frames, float(reference.fps))
                 if frames.shape[0] < 5:
                     raise ValueError(
                         f"H3 reference video {index} has fewer than five frames at 24 fps."
                     )
-                frames = frames[:target_num_frames]
+                remaining_frames = target_num_frames - (item.target_frame or 0)
+                frames = frames[:remaining_frames]
+                if frames.shape[0] < 5:
+                    raise ValueError(
+                        f"H3 timeline video guide {index} has fewer than five frames before "
+                        "the end of the target window."
+                    )
                 # Use one aligned sequence for Qwen timestamps and the video
                 # VAE. Previously Qwen could inspect tail frames that the VAE
                 # silently discarded later.
@@ -512,27 +538,33 @@ class H3ReferenceStack:
                         ]
                     )
                 item.qwen_frames = frames
-                density = {
-                    "all frames (recommended)": 1.0,
-                    "uniform 50% (experimental)": 0.5,
-                    "uniform 25% (experimental)": 0.25,
+                density_policy = {
+                    "all frames (recommended)": "full",
+                    "automatic (conservative, experimental)": "automatic",
+                    "uniform 50% (experimental)": "half",
+                    "uniform 25% (experimental)": "quarter",
                 }[reference.temporal_density]
-                item.frames, item.source_num_latent_frames = (
-                    reduce_reference_video_frames(frames, density)
+                decision = resolve_reference_video_density(frames, density_policy)
+                item.frames, item.source_num_latent_frames = reduce_reference_video_frames(
+                    frames, decision.density
                 )
+                item.temporal_density_requested = density_policy
+                item.temporal_density_resolved = decision.density
+                item.temporal_activity_mean = decision.activity_mean
+                item.temporal_activity_p95 = decision.activity_p95
+                item.temporal_density_reason = decision.reason
                 _, item.block_timestamps = sample_reference_video_frames(frames)
             audio = reference.media if reference.kind == "audio" else reference.soundtrack
             if audio is not None:
-                waveform, sample_rate = _comfy_audio_to_numpy(
-                    audio, f"H3 reference audio {index}"
-                )
+                waveform, sample_rate = _comfy_audio_to_numpy(audio, f"H3 reference audio {index}")
                 # Truncate at the source rate, then resample once. This avoids
                 # filtering an unused tail and matches the reference pipeline.
-                source_max_samples = round(target_num_frames / 24.0 * sample_rate)
+                remaining_frames = target_num_frames - (item.target_frame or 0)
+                source_max_samples = round(remaining_frames / 24.0 * sample_rate)
                 waveform = waveform[:, :source_max_samples]
                 item.waveform = np.ascontiguousarray(
                     _resample_waveform(waveform, sample_rate, target_sample_rate)[
-                        :, :max_samples
+                        :, : round(remaining_frames / 24.0 * target_sample_rate)
                     ],
                     dtype=np.float32,
                 )

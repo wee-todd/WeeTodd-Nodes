@@ -5,7 +5,13 @@ import pytest
 from safetensors.numpy import save_file
 
 from ltx25_mlx.components import LTX25VideoDecoder
+from ltx25_mlx.dfr import choose_dfr_segment_length, resolve_dfr_canvas
 from ltx25_mlx.gemma_pack import gemma4_mlx_model_config, remap_gemma4_weight_key
+from ltx25_mlx.generated_keyframes import (
+    GeneratedKeyframeSlots,
+    evenly_spaced_keyframe_positions,
+    set_generated_keyframe_marker,
+)
 from ltx25_mlx.runtime import (
     LTX25_GENERATION_PRESETS,
     LTX25ComponentSpec,
@@ -25,10 +31,205 @@ from ltx25_mlx.upscale import (
     _host_video,
 )
 from wee_todd_nodes.ltx25_nodes import (
+    LTX25KeyframeStack,
+    WeeToddLTX25DFRDetailing,
+    WeeToddLTX25DiffVAEOptimization,
     WeeToddLTX25GenerateChained,
+    WeeToddLTX25GeneratedKeyframes,
     WeeToddLTX25GenerationConfig,
+    WeeToddLTX25Keyframe,
+    WeeToddLTX25LoRALoader,
     WeeToddLTX25VideoUpscale,
 )
+
+
+def test_ltx25_generated_keyframes_modifier_preserves_base_workflow_contract():
+    source = LTX25GenerationConfig()
+    updated = WeeToddLTX25GeneratedKeyframes().apply(source, 3)[0]
+    assert source.generated_keyframes == 0
+    assert updated.generated_keyframes == 3
+
+
+def test_ltx25_diffvae_modifier_preserves_base_node_schema():
+    source = LTX25GenerationConfig()
+    updated, raw = WeeToddLTX25DiffVAEOptimization().apply(source, "deferred_stage4", 512, 4, 32)
+    assert source.diffvae_optimization == "combined"
+    assert updated.diffvae_optimization == "deferred_stage4"
+    assert json.loads(raw)["applies_only_to"] == "Diffusion VAE checkpoints"
+
+
+def test_ltx25_diffvae_modifier_accepts_metal_na3d_experiment():
+    updated, raw = WeeToddLTX25DiffVAEOptimization().apply(
+        LTX25GenerationConfig(), "metal_na3d_experimental", 512, 4, 32
+    )
+    assert updated.diffvae_optimization == "metal_na3d_experimental"
+    assert json.loads(raw)["optimization"] == "metal_na3d_experimental"
+
+
+def test_ltx25_diffvae_modifier_accepts_query_tiled_metal_na3d_experiment():
+    updated, raw = WeeToddLTX25DiffVAEOptimization().apply(
+        LTX25GenerationConfig(), "metal_na3d_query_tiled_experimental", 65536, 4, 32
+    )
+    assert updated.diffvae_query_chunk_size == 65536
+    assert json.loads(raw)["optimization"] == "metal_na3d_query_tiled_experimental"
+
+
+@pytest.mark.parametrize(
+    ("optimization", "expected_backend"),
+    (
+        ("combined", "einsum"),
+        ("metal_na3d_experimental", "metal"),
+        ("metal_na3d_query_tiled_experimental", "metal_tiled"),
+    ),
+)
+def test_ltx25_video_decoder_maps_diffvae_attention_backend(
+    monkeypatch, tmp_path, optimization, expected_backend
+):
+    import ltx25_mlx.components as components
+    import ltx25_mlx.diffusion_vae as diffusion_vae
+
+    checkpoint = tmp_path / "diffusion-vae.safetensors"
+    checkpoint.touch()
+    metadata = {"vae": {"decoder": {"_class_name": "DiffusionDecoder"}}}
+    monkeypatch.setattr(components, "_metadata_config", lambda _path: metadata)
+    monkeypatch.setattr(components, "_cleanup", lambda: None)
+    calls = {}
+    sentinel = object()
+
+    def fake_loader(path, config, **kwargs):
+        calls.update(path=path, config=config, **kwargs)
+        return sentinel
+
+    monkeypatch.setattr(diffusion_vae, "load_diffusion_video_decoder", fake_loader)
+    decoder = LTX25VideoDecoder(checkpoint, diffvae_optimization=optimization)
+
+    assert decoder.load() is sentinel
+    assert calls["attention_backend"] == expected_backend
+
+
+def test_ltx25_lora_loader_builds_lazy_ordered_stack(tmp_path):
+    spec = _bundle(tmp_path)
+    adapter = tmp_path / "motion.safetensors"
+    save_file(
+        {
+            "transformer_blocks.0.attn1.to_q.lora_A.weight": np.zeros((2, 4), dtype=np.float32),
+            "transformer_blocks.0.attn1.to_q.lora_B.weight": np.zeros((4, 2), dtype=np.float32),
+        },
+        adapter,
+        metadata={"model_version": "2.5.0", "reference_downscale_factor": "1"},
+    )
+
+    attached, raw = WeeToddLTX25LoRALoader().attach(spec, str(adapter), 0.75)
+    assert spec.loras == ()
+    assert attached.loras == ((str(adapter), 0.75),)
+    assert json.loads(raw)["adapter_pairs"] == 1
+
+
+def test_ltx25_dfr_modifier_selects_stage2_pixel_spatial_lora(tmp_path):
+    adapter = tmp_path / "detail.safetensors"
+    save_file(
+        {
+            "transformer_blocks.0.attn1.to_q.lora_A.weight": np.zeros((2, 4), dtype=np.float32),
+            "transformer_blocks.0.attn1.to_q.lora_B.weight": np.zeros((4, 2), dtype=np.float32),
+        },
+        adapter,
+        metadata={
+            "model_version": "2.5.0",
+            "reference_downscale_factor": "2",
+            "reference_spatial_scale_factor": "2",
+        },
+    )
+    config, raw = WeeToddLTX25DFRDetailing().apply(
+        LTX25GenerationConfig(duration_seconds=2.0), str(adapter), 1.0
+    )
+    report = json.loads(raw)
+    assert config.dfr_enabled is True
+    assert config.generated_keyframes == 0
+    assert report["generated_keyframe_positions"] == [24, 48]
+    assert report["audio_source"] == "stage_1"
+
+
+def test_ltx25_timed_keyframes_are_composable_and_validate_window():
+    image = np.zeros((1, 64, 64, 3), dtype=np.float32)
+    node = WeeToddLTX25Keyframe()
+    stack, _ = node.append(image, 0, 1.0)
+    stack, info = node.append(image, 120, 0.7, stack)
+    assert isinstance(stack, LTX25KeyframeStack)
+    stack.validate(121)
+    assert json.loads(info)["keyframes"] == [
+        {"frame_index": 0, "strength": 1.0},
+        {"frame_index": 120, "strength": 0.7},
+    ]
+    with pytest.raises(ValueError, match="outside"):
+        stack.validate(120)
+
+
+def test_ltx25_generated_keyframes_use_even_interior_pixel_frames():
+    assert evenly_spaced_keyframe_positions(3, 121) == (30, 60, 90)
+    slots = GeneratedKeyframeSlots((30, 60, 90), spatial_dims=(16, 4, 6), frame_rate=24.0)
+    assert slots.token_count == 72
+
+
+def test_ltx25_dfr_canvas_matches_official_segment_policy():
+    assert choose_dfr_segment_length(48) == 24
+    assert choose_dfr_segment_length(96) == 32
+    assert resolve_dfr_canvas(49) == (49, 24, (24, 48))
+    assert resolve_dfr_canvas(41) == (49, 24, (24, 48))
+
+
+def test_ltx25_generated_keyframes_accept_spatially_upscaled_stage1_seeds():
+    import mlx.core as mx
+    from ltx_core_mlx.conditioning.types.latent_cond import LatentState
+    from ltx_core_mlx.utils.positions import compute_video_positions
+
+    initial = mx.arange(4 * 128, dtype=mx.float32).reshape(1, 128, 1, 2, 2)
+    state = LatentState(
+        latent=mx.zeros((1, 4, 128), dtype=mx.float32),
+        clean_latent=mx.zeros((1, 4, 128), dtype=mx.float32),
+        denoise_mask=mx.ones((1, 4, 1), dtype=mx.float32),
+        positions=compute_video_positions(1, 2, 2, frame_rate=24.0),
+    )
+    output = GeneratedKeyframeSlots(
+        (24,),
+        spatial_dims=(1, 2, 2),
+        frame_rate=24.0,
+        initial_keyframes=initial,
+    ).apply(state, (1, 2, 2))
+    mx.eval(output.latent)
+    assert output.latent.shape == (1, 8, 128)
+    expected = initial.transpose(0, 2, 3, 4, 1).reshape(1, 4, 128)
+    assert mx.array_equal(output.latent[:, 4:], expected)
+
+
+def test_ltx25_generated_keyframe_marker_resolves_streaming_wrapper():
+    import mlx.core as mx
+    import mlx.nn as nn
+
+    class Inner(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.patchify_proj = nn.Linear(2, 2, bias=False)
+            self.keyframes_abs_pos_embedding = mx.array([[3.0, 5.0]])
+
+    class Streaming(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.inner = Inner()
+
+        def __getattr__(self, name):
+            try:
+                return super().__getattr__(name)
+            except AttributeError:
+                return getattr(super().__getattr__("inner"), name)
+
+    model = Streaming()
+    model.inner.patchify_proj.weight = mx.eye(2)
+    set_generated_keyframe_marker(model, 1)
+    output = model.inner.patchify_proj(mx.zeros((1, 2, 2)))
+    assert mx.array_equal(output[:, 0], mx.zeros((1, 2)))
+    assert mx.array_equal(output[:, 1], mx.array([[3.0, 5.0]]))
+    set_generated_keyframe_marker(model, 0)
+    assert mx.array_equal(model.inner.patchify_proj(mx.zeros((1, 2, 2))), mx.zeros((1, 2, 2)))
 
 
 def _component(path, **metadata):

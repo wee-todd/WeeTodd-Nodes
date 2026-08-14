@@ -35,7 +35,9 @@ class H3GenerationConfig:
     aspect_ratio: str = "custom"
     memory_mode: str = "normal"
     attention_chunk_size: str = "automatic"
-    projection_backend: str = "mlx"
+    attention_head_chunk_size: str = "automatic"
+    ffn_row_chunk_size: str = "automatic"
+    projection_backend: str = "auto"
     sampling_method: str = "euler"
 
     def validate(self) -> None:
@@ -56,8 +58,12 @@ class H3GenerationConfig:
             raise ValueError("memory_mode must be 'normal' or 'low_memory_bf16'")
         if self.attention_chunk_size not in {"automatic", "512", "1024", "2048"}:
             raise ValueError("attention_chunk_size must be automatic, 512, 1024, or 2048")
-        if self.projection_backend not in {"mlx", "mpp_experimental"}:
-            raise ValueError("projection_backend must be mlx or mpp_experimental")
+        if self.attention_head_chunk_size not in {"automatic", "2", "4", "8", "disabled"}:
+            raise ValueError("attention_head_chunk_size must be automatic, 2, 4, 8, or disabled")
+        if self.ffn_row_chunk_size not in {"automatic", "128", "256", "512", "disabled"}:
+            raise ValueError("ffn_row_chunk_size must be automatic, 128, 256, 512, or disabled")
+        if self.projection_backend not in {"auto", "mlx", "mpp_experimental"}:
+            raise ValueError("projection_backend must be auto, mlx, or mpp_experimental")
         if self.sampling_method not in {"euler", "res_multistep"}:
             raise ValueError("sampling_method must be euler or res_multistep")
 
@@ -69,6 +75,22 @@ class H3GenerationConfig:
         if self.attention_chunk_size == "automatic":
             return 512
         return int(self.attention_chunk_size)
+
+    @property
+    def attention_head_group_size(self) -> int | None:
+        if self.memory_mode != "low_memory_bf16" or self.attention_head_chunk_size == "disabled":
+            return None
+        if self.attention_head_chunk_size == "automatic":
+            return 4
+        return int(self.attention_head_chunk_size)
+
+    @property
+    def ffn_row_group_size(self) -> int | None:
+        if self.memory_mode != "low_memory_bf16" or self.ffn_row_chunk_size == "disabled":
+            return None
+        if self.ffn_row_chunk_size == "automatic":
+            return 256
+        return int(self.ffn_row_chunk_size)
 
 
 class H3RuntimeCache:
@@ -84,7 +106,7 @@ class H3RuntimeCache:
         with self._lock:
             return self._pipeline is not None
 
-    def get(self, spec: H3ModelSpec, projection_backend: str = "mlx"):
+    def get(self, spec: H3ModelSpec, projection_backend: str = "auto"):
         spec.validate()
         with self._lock:
             if (

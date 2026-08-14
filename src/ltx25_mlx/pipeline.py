@@ -77,6 +77,11 @@ class LTX25DistilledPipeline:
         low_ram_streaming: bool = False,
         feed_forward_backend: str = "reference_fp32",
         feed_forward_stage_scope: str = "all",
+        diffvae_optimization: str = "combined",
+        diffvae_query_chunk_size: int = 512,
+        diffvae_context_width_chunks: int = 4,
+        diffvae_stage4_tile_width: int = 0,
+        loras: tuple[tuple[str, float], ...] = (),
         verbose: bool = True,
     ) -> None:
         del duration_head_path
@@ -85,6 +90,7 @@ class LTX25DistilledPipeline:
         self.low_memory = low_memory
         self.low_ram_streaming = low_ram_streaming
         self.feed_forward_backend = feed_forward_backend
+        self.loras = tuple(loras)
         if feed_forward_stage_scope not in {"all", "stage1", "stage2"}:
             raise ValueError("feed_forward_stage_scope must be all, stage1, or stage2")
         self.feed_forward_stage_scope = feed_forward_stage_scope
@@ -92,9 +98,17 @@ class LTX25DistilledPipeline:
         self.prompt_encoder = _PromptEncoder(text_encoder_path, transformer_path)
         self.image_conditioner = LTX25ImageConditioner(video_vae_path)
         self.latent_normalizer = LTX25LatentNormalizer(video_vae_path)
-        self.video_decoder_block = LTX25VideoDecoder(video_vae_path, verbose=verbose)
+        self.video_decoder_block = LTX25VideoDecoder(
+            video_vae_path,
+            verbose=verbose,
+            diffvae_optimization=diffvae_optimization,
+            diffvae_query_chunk_size=diffvae_query_chunk_size,
+            diffvae_context_width_chunks=diffvae_context_width_chunks,
+            diffvae_stage4_tile_width=diffvae_stage4_tile_width,
+        )
         self.audio_decoder_block = LTX25AudioDecoder(audio_vae_path)
         self.dit = None
+        self._loaded_loras = None
         self.upsampler = None
         self.last_timings: dict[str, object] = {}
         self.last_prompt_context: int | None = None
@@ -109,19 +123,24 @@ class LTX25DistilledPipeline:
         self.video_patchifier = VideoLatentPatchifier()
         self.audio_patchifier = AudioPatchifier()
 
-    def load(self) -> None:
+    def load(self, *, extra_loras: tuple[tuple[str, float], ...] = ()) -> None:
+        desired_loras = (*self.loras, *extra_loras)
+        if self.dit is not None and self._loaded_loras != desired_loras:
+            self._release_transformer()
         if self.dit is None:
             self.dit = load_ltx25_transformer(
                 self.transformer_path,
                 low_ram_streaming=self.low_ram_streaming,
                 feed_forward_backend=self.feed_forward_backend,
+                loras=desired_loras,
             )
+            self._loaded_loras = desired_loras
             self.feed_forward_report = getattr(self.dit, "feed_forward_backend_report", None)
             self.paged_transformer_report = getattr(self.dit, "paged_checkpoint_report", None)
         if self.upsampler is None:
             self.upsampler = load_ltx25_spatial_upsampler(self.spatial_upscaler_path)
 
-    def _release_sampling(self) -> None:
+    def _release_transformer(self) -> None:
         if self.dit is not None:
             streamer = getattr(self.dit, "_weetodd_paged_streamer", None)
             if streamer is not None:
@@ -133,6 +152,10 @@ class LTX25DistilledPipeline:
                 }
                 streamer.close()
         self.dit = None
+        self._loaded_loras = None
+
+    def _release_sampling(self) -> None:
+        self._release_transformer()
         self.upsampler = None
         self.image_conditioner.free()
         mx.clear_cache()
@@ -201,6 +224,9 @@ class LTX25DistilledPipeline:
         output_video_context_frames: int = 0,
         output_audio_context_tokens: int = 0,
         return_continuation: bool = False,
+        generated_keyframes: int = 0,
+        dfr_enabled: bool = False,
+        dfr_detailing_lora: tuple[str, float] | None = None,
         **_unused,
     ):
         """Generate synchronized latents using official 8+3 stage semantics."""
@@ -244,11 +270,23 @@ class LTX25DistilledPipeline:
         self.load()
         timings["sampling_component_load_seconds"] = time.perf_counter() - sampling_load_started
         assert self.dit is not None and self.upsampler is not None
+        requested_num_frames = num_frames
+        dfr_slot_frames: tuple[int, ...] = ()
+        if dfr_enabled:
+            from .dfr import resolve_dfr_canvas
+
+            num_frames, _segment, dfr_slot_frames = resolve_dfr_canvas(num_frames)
         height, width = snap_output_dimensions(height, width, two_stage=True)
         half_h, half_w = height // 2, width // 2
         latent_f, latent_h, latent_w = compute_video_latent_shape(num_frames, half_h, half_w)
+        requested_latent_f, _requested_h, _requested_w = compute_video_latent_shape(
+            requested_num_frames, half_h, half_w
+        )
         video_shape = (1, latent_f * latent_h * latent_w, 128)
         audio_tokens = compute_audio_token_count(num_frames, frame_rate=frame_rate)
+        requested_audio_tokens = compute_audio_token_count(
+            requested_num_frames, frame_rate=frame_rate
+        )
         audio_shape = (1, audio_tokens, 128)
         video_positions = compute_video_positions(
             latent_f, latent_h, latent_w, frame_rate=frame_rate
@@ -269,6 +307,27 @@ class LTX25DistilledPipeline:
                 video_encoder=encoder,
                 frame_rate=frame_rate,
             )
+        generated_slot_rows = 0
+        if generated_keyframes or dfr_slot_frames:
+            from .generated_keyframes import (
+                GeneratedKeyframeSlots,
+                evenly_spaced_keyframe_positions,
+                set_generated_keyframe_marker,
+            )
+
+            slot_frames = (
+                dfr_slot_frames
+                if dfr_slot_frames
+                else evenly_spaced_keyframe_positions(generated_keyframes, num_frames)
+            )
+            slots = GeneratedKeyframeSlots(
+                slot_frames,
+                spatial_dims=(latent_f, latent_h, latent_w),
+                frame_rate=frame_rate,
+            )
+            conditionings.append(slots)
+            generated_slot_rows = slots.token_count
+            set_generated_keyframe_marker(self.dit, generated_slot_rows)
         audio_conditionings = []
         if continuation is not None:
             low_prefix_tokens = continuation.video_latent_frames * latent_h * latent_w
@@ -317,34 +376,55 @@ class LTX25DistilledPipeline:
 
         set_mpp_feed_forward_enabled(self.dit, self.feed_forward_stage_scope in {"all", "stage1"})
         stage1_started = time.perf_counter()
-        stage1 = euler_ancestral_denoise_loop(
-            model,
-            video_state,
-            audio_state,
-            video_embeds,
-            audio_embeds,
-            sigmas=LTX25_DISTILLED_SIGMAS,
-            noise_seed=(seed + 10000 if ancestral_noise_seed is None else ancestral_noise_seed),
-            eta=1.0,
-            s_noise=1.0,
-            check_interrupted=check_interrupted,
-            step_callback=(
-                (lambda completed, _total: step_callback(completed, 11))
-                if step_callback is not None
-                else None
-            ),
-            evaluation_timing_callback=(
-                lambda index, elapsed: timings["stage1_evaluations"].append(
-                    {"evaluation": index, "seconds": elapsed}
-                )
-            ),
-        )
+        try:
+            stage1 = euler_ancestral_denoise_loop(
+                model,
+                video_state,
+                audio_state,
+                video_embeds,
+                audio_embeds,
+                sigmas=LTX25_DISTILLED_SIGMAS,
+                noise_seed=(seed + 10000 if ancestral_noise_seed is None else ancestral_noise_seed),
+                eta=1.0,
+                s_noise=1.0,
+                check_interrupted=check_interrupted,
+                step_callback=(
+                    (lambda completed, _total: step_callback(completed, 11))
+                    if step_callback is not None
+                    else None
+                ),
+                evaluation_timing_callback=(
+                    lambda index, elapsed: timings["stage1_evaluations"].append(
+                        {"evaluation": index, "seconds": elapsed}
+                    )
+                ),
+            )
+        finally:
+            if generated_slot_rows:
+                set_generated_keyframe_marker(self.dit, 0)
         mx.eval(stage1.video_latent, stage1.audio_latent)
         timings["stage1_seconds"] = time.perf_counter() - stage1_started
 
         upscale_started = time.perf_counter()
         generated = stage1.video_latent[:, : latent_f * latent_h * latent_w, :]
         stage1_audio_generated = stage1.audio_latent[:, :audio_tokens, :]
+        stage1_slot_tokens = (
+            mx.contiguous(
+                stage1.video_latent[
+                    :,
+                    latent_f * latent_h * latent_w : latent_f * latent_h * latent_w
+                    + generated_slot_rows,
+                    :,
+                ]
+            )
+            if dfr_enabled
+            else None
+        )
+        dfr_audio_tokens = (
+            mx.contiguous(stage1_audio_generated[:, :requested_audio_tokens, :])
+            if dfr_enabled
+            else None
+        )
         stage1_tail = None
         if output_video_context_frames:
             tail_tokens = output_video_context_frames * latent_h * latent_w
@@ -361,6 +441,20 @@ class LTX25DistilledPipeline:
             upscaled.transpose(0, 2, 3, 4, 1)
         ).transpose(0, 4, 1, 2, 3)
         mx.eval(upscaled)
+        upscaled_slot_keyframes = None
+        if stage1_slot_tokens is not None:
+            slot_latent = self.video_patchifier.unpatchify(
+                stage1_slot_tokens,
+                (len(dfr_slot_frames), latent_h, latent_w),
+            )
+            denormalized_slots = self.latent_normalizer.denormalize_latent(
+                slot_latent.transpose(0, 2, 3, 4, 1)
+            ).transpose(0, 4, 1, 2, 3)
+            upscaled_slot_keyframes = self.upsampler(denormalized_slots)
+            upscaled_slot_keyframes = self.latent_normalizer.normalize_latent(
+                upscaled_slot_keyframes.transpose(0, 2, 3, 4, 1)
+            ).transpose(0, 4, 1, 2, 3)
+            mx.eval(upscaled_slot_keyframes)
         timings["latent_upscale_seconds"] = time.perf_counter() - upscale_started
         full_h, full_w = latent_h * 2, latent_w * 2
 
@@ -374,6 +468,31 @@ class LTX25DistilledPipeline:
                 spatial_dims=(latent_f, full_h, full_w),
                 video_encoder=encoder,
                 frame_rate=frame_rate,
+            )
+        if dfr_enabled:
+            from ltx_core_mlx.conditioning.types.reference_video_cond import (
+                VideoConditionByReferenceLatent,
+            )
+
+            from .generated_keyframes import GeneratedKeyframeSlots
+
+            if upscaled_slot_keyframes is None:
+                raise RuntimeError("DFR stage one did not produce seeded keyframe slots.")
+            full_conditionings.append(
+                GeneratedKeyframeSlots(
+                    dfr_slot_frames,
+                    spatial_dims=(latent_f, full_h, full_w),
+                    frame_rate=frame_rate,
+                    initial_keyframes=upscaled_slot_keyframes,
+                )
+            )
+            full_conditionings.append(
+                VideoConditionByReferenceLatent(
+                    reference_latent=generated,
+                    reference_positions=video_positions,
+                    downscale_factor=2,
+                    strength=1.0,
+                )
             )
         audio_conditionings2 = []
         if continuation is not None:
@@ -439,42 +558,58 @@ class LTX25DistilledPipeline:
             video_tokens,
             conditionings,
             full_conditionings,
+            stage1_slot_tokens,
+            upscaled_slot_keyframes,
         )
         aggressive_cleanup()
         timings["stage_boundary_cleanup_seconds"] = time.perf_counter() - cleanup_started
+        if dfr_detailing_lora is not None:
+            self.load(extra_loras=(dfr_detailing_lora,))
+            model = X0Model(self.dit)
+        if dfr_enabled:
+            set_generated_keyframe_marker(self.dit, generated_slot_rows)
         set_mpp_feed_forward_enabled(self.dit, self.feed_forward_stage_scope in {"all", "stage2"})
         stage2_started = time.perf_counter()
-        stage2 = euler_ancestral_denoise_loop(
-            model,
-            video_state2,
-            audio_state2,
-            video_embeds,
-            audio_embeds,
-            sigmas=list(LTX25_STAGE2_SIGMAS),
-            noise_seed=seed + 2,
-            eta=1.0,
-            s_noise=1.0,
-            check_interrupted=check_interrupted,
-            step_callback=(
-                (lambda completed, _total: step_callback(8 + completed, 11))
-                if step_callback is not None
-                else None
-            ),
-            evaluation_timing_callback=(
-                lambda index, elapsed: timings["stage2_evaluations"].append(
-                    {"evaluation": index, "seconds": elapsed}
-                )
-            ),
-        )
+        try:
+            stage2 = euler_ancestral_denoise_loop(
+                model,
+                video_state2,
+                audio_state2,
+                video_embeds,
+                audio_embeds,
+                sigmas=list(LTX25_STAGE2_SIGMAS),
+                noise_seed=seed + 2,
+                eta=1.0,
+                s_noise=1.0,
+                check_interrupted=check_interrupted,
+                step_callback=(
+                    (lambda completed, _total: step_callback(8 + completed, 11))
+                    if step_callback is not None
+                    else None
+                ),
+                evaluation_timing_callback=(
+                    lambda index, elapsed: timings["stage2_evaluations"].append(
+                        {"evaluation": index, "seconds": elapsed}
+                    )
+                ),
+            )
+        finally:
+            if dfr_enabled:
+                set_generated_keyframe_marker(self.dit, 0)
         mx.eval(stage2.video_latent, stage2.audio_latent)
         timings["stage2_seconds"] = time.perf_counter() - stage2_started
         stage2_generated = stage2.video_latent[:, : latent_f * full_h * full_w, :]
         video_latent = self.video_patchifier.unpatchify(
             stage2_generated,
             (latent_f, full_h, full_w),
-        )
+        )[:, :, :requested_latent_f]
         stage2_audio_generated = stage2.audio_latent[:, :audio_tokens, :]
-        audio_latent = self.audio_patchifier.unpatchify(stage2_audio_generated)
+        output_audio_tokens = (
+            dfr_audio_tokens if dfr_audio_tokens is not None else stage2_audio_generated
+        )
+        audio_latent = self.audio_patchifier.unpatchify(
+            output_audio_tokens[:, :requested_audio_tokens, :]
+        )
         mx.eval(video_latent, audio_latent)
         next_continuation = None
         if return_continuation:

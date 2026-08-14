@@ -11,7 +11,7 @@ Two MLX-specific departures from the reference, both forced by the framework rat
   C_in)``, where torch uses ``(N, C, D, H, W)`` / ``(C_out, C_in, kD, kH, kW)``. The CNN runs
   channels-last internally and transposes only at the public encode/decode boundary, so the
   pipeline still sees the reference's ``(B, C, F, H, W)``.
-* **Reflect padding.** ``mx.pad`` has no reflect mode, so it is done by gather (:func:`reflect_pad`).
+* **Reflect padding.** ``mx.pad`` has no reflect mode. :func:`reflect_pad` uses a gather operation.
 
 The module tree reproduces the *original* checkpoint names (``encoder.down.{i}.block.{j}``,
 ``decoder.x_embedder``, ``attn.to_qkv``, ``ff.w1``), so the released weights load without renaming.
@@ -178,12 +178,18 @@ class TIsolatedGroupNorm(nn.GroupNorm):
 
 
 class ResnetBlock3d(nn.Module):
-    def __init__(self, in_channels: int, out_channels: int, num_groups: int = 32, eps: float = 1e-6):
+    def __init__(
+        self, in_channels: int, out_channels: int, num_groups: int = 32, eps: float = 1e-6
+    ):
         super().__init__()
         self.norm1 = TIsolatedGroupNorm(num_groups, in_channels, eps)
-        self.conv1 = CausalConv3d(in_channels, out_channels, 3, spatial_padding=1, temporal_padding=2)
+        self.conv1 = CausalConv3d(
+            in_channels, out_channels, 3, spatial_padding=1, temporal_padding=2
+        )
         self.norm2 = TIsolatedGroupNorm(num_groups, out_channels, eps)
-        self.conv2 = CausalConv3d(out_channels, out_channels, 3, spatial_padding=1, temporal_padding=2)
+        self.conv2 = CausalConv3d(
+            out_channels, out_channels, 3, spatial_padding=1, temporal_padding=2
+        )
         if in_channels != out_channels:
             self.nin_shortcut = CausalConv3d(in_channels, out_channels, 1)
 
@@ -201,7 +207,9 @@ class Downsample3d(nn.Module):
     reflect pad of 1 (the convolution carries no spatial padding), so the output is ``ceil(n / 2)``.
     """
 
-    def __init__(self, in_channels: int, out_channels: int, temporal_stride: int = 1, spatial_stride: int = 2):
+    def __init__(
+        self, in_channels: int, out_channels: int, temporal_stride: int = 1, spatial_stride: int = 2
+    ):
         super().__init__()
         self.spatial_stride = spatial_stride
         self.conv = CausalConv3d(
@@ -237,7 +245,9 @@ class DownBlock3d(nn.Module):
             for i in range(num_layers)
         ]
         if temporal_factor * spatial_factor > 1:
-            self.downsample = Downsample3d(out_channels, out_channels, temporal_factor, spatial_factor)
+            self.downsample = Downsample3d(
+                out_channels, out_channels, temporal_factor, spatial_factor
+            )
 
     def __call__(self, x: mx.array) -> mx.array:
         for resnet in self.block:
@@ -253,7 +263,9 @@ class Encoder3d(nn.Module):
     def __init__(self, config: VideoVAEConfig):
         super().__init__()
         ch = config.block_out_channels
-        self.conv_in = CausalConv3d(config.in_channels, ch[0], 3, spatial_padding=1, temporal_padding=2)
+        self.conv_in = CausalConv3d(
+            config.in_channels, ch[0], 3, spatial_padding=1, temporal_padding=2
+        )
         block_in = (ch[0],) + tuple(ch[:-1])
         self.down = [
             DownBlock3d(
@@ -282,16 +294,18 @@ class Encoder3d(nn.Module):
 class ViTRotaryPosEmbed:
     """3-axis rotary embedding for the ViT decoder.
 
-    Coordinates are length-normalized to ``[-1, 1)`` per axis and scaled by ``2*pi``; the ``(t, h, w)``
-    angle blocks are concatenated then duplicated, so the first ``rope_dim_ratio * head_dim``
-    channels of every head are rotated.
+    Coordinates are length-normalized to ``[-1, 1)`` per axis and scaled by ``2*pi``. The
+    ``(t, h, w)`` angle blocks are concatenated and duplicated. The operation rotates the first
+    ``rope_dim_ratio * head_dim`` channels of every head.
     """
 
     def __init__(self, dim: int, theta: float = 100.0, num_axes: int = 3):
         if dim % (2 * num_axes) != 0:
             raise ValueError(f"`dim` {dim} must be divisible by `2 * num_axes` {2 * num_axes}.")
         step = 2 * num_axes / dim
-        exponents = mx.array([i * step for i in range(int(math.ceil(1.0 / step)))], dtype=mx.float32)
+        exponents = mx.array(
+            [i * step for i in range(int(math.ceil(1.0 / step)))], dtype=mx.float32
+        )
         self.inv_freq = 1.0 / (theta**exponents)
 
     def __call__(self, position_ids: mx.array) -> tuple[mx.array, mx.array]:
@@ -436,11 +450,15 @@ class ViTDecoder3d(nn.Module):
         tokens = self.x_embedder(x.reshape(b, d * h * w, c))
         num_patches = tokens.shape[1]
 
-        registers = mx.broadcast_to(self.register_tokens, (b, self.num_register_tokens, tokens.shape[-1]))
+        registers = mx.broadcast_to(
+            self.register_tokens, (b, self.num_register_tokens, tokens.shape[-1])
+        )
         cls_token = mx.zeros((b, 1, tokens.shape[-1]), dtype=tokens.dtype)
         tokens = mx.concatenate([tokens, registers.astype(tokens.dtype), cls_token], axis=1)
 
-        grids = [2.0 * ((mx.arange(size, dtype=mx.float32) + 0.5) / size) - 1.0 for size in (d, h, w)]
+        grids = [
+            2.0 * ((mx.arange(size, dtype=mx.float32) + 0.5) / size) - 1.0 for size in (d, h, w)
+        ]
         tt = mx.broadcast_to(grids[0].reshape(d, 1, 1), (d, h, w))
         hh = mx.broadcast_to(grids[1].reshape(1, h, 1), (d, h, w))
         ww = mx.broadcast_to(grids[2].reshape(1, 1, w), (d, h, w))
@@ -542,9 +560,13 @@ class VideoVAE(nn.Module):
                 if j > 0:
                     tile = self._blend(row[j - 1], tile, width_overlaps[j - 1], axis=w_axis)
                 if i < len(tiles) - 1:
-                    tile = mx.take(tile, mx.arange(tile.shape[h_axis] - height_overlaps[i]), axis=h_axis)
+                    tile = mx.take(
+                        tile, mx.arange(tile.shape[h_axis] - height_overlaps[i]), axis=h_axis
+                    )
                 if j < len(row) - 1:
-                    tile = mx.take(tile, mx.arange(tile.shape[w_axis] - width_overlaps[j]), axis=w_axis)
+                    tile = mx.take(
+                        tile, mx.arange(tile.shape[w_axis] - width_overlaps[j]), axis=w_axis
+                    )
                 out_row.append(tile)
             rows.append(mx.concatenate(out_row, axis=w_axis))
         return mx.concatenate(rows, axis=h_axis)
@@ -556,19 +578,25 @@ class VideoVAE(nn.Module):
         if not self.use_tiling:
             return self.quant_conv(self.encoder(x))
         h, w = x.shape[2], x.shape[3]
-        y_idx, y_len, y_ov = self._split_tiles(h, self.tile_sample_min_height, self.tile_sample_min_overlap_height)
-        x_idx, x_len, x_ov = self._split_tiles(w, self.tile_sample_min_width, self.tile_sample_min_overlap_width)
+        y_idx, y_len, y_ov = self._split_tiles(
+            h, self.tile_sample_min_height, self.tile_sample_min_overlap_height
+        )
+        x_idx, x_len, x_ov = self._split_tiles(
+            w, self.tile_sample_min_width, self.tile_sample_min_overlap_width
+        )
 
         rows = []
-        for i_pos, i_len in zip(y_idx, y_len):
+        for i_pos, i_len in zip(y_idx, y_len, strict=False):
             row = []
-            for j_pos, j_len in zip(x_idx, x_len):
+            for j_pos, j_len in zip(x_idx, x_len, strict=False):
                 tile = x[:, :, i_pos : i_pos + i_len, j_pos : j_pos + j_len, :]
                 row.append(self.quant_conv(self.encoder(tile)))
             rows.append(row)
 
         ratio = self.config.spatial_compression_ratio
-        return self._stitch_tiles(rows, [o // ratio for o in y_ov], [o // ratio for o in x_ov], 2, 3)
+        return self._stitch_tiles(
+            rows, [o // ratio for o in y_ov], [o // ratio for o in x_ov], 2, 3
+        )
 
     def _decode_tiles(self, tiles: list[mx.array]) -> list[mx.array]:
         """Push every tile through the ViT decoder, batching same-shaped tiles into one call.
@@ -606,8 +634,12 @@ class VideoVAE(nn.Module):
             return self.decoder(self.post_quant_conv(z))
         ratio = self.config.spatial_compression_ratio
         h, w = z.shape[2] * ratio, z.shape[3] * ratio
-        y_idx, y_len, y_ov = self._split_tiles(h, self.tile_sample_min_height, self.tile_sample_min_overlap_height)
-        x_idx, x_len, x_ov = self._split_tiles(w, self.tile_sample_min_width, self.tile_sample_min_overlap_width)
+        y_idx, y_len, y_ov = self._split_tiles(
+            h, self.tile_sample_min_height, self.tile_sample_min_overlap_height
+        )
+        x_idx, x_len, x_ov = self._split_tiles(
+            w, self.tile_sample_min_width, self.tile_sample_min_overlap_width
+        )
 
         tiles = [
             z[
@@ -617,8 +649,8 @@ class VideoVAE(nn.Module):
                 j_pos // ratio : j_pos // ratio + j_len // ratio,
                 :,
             ]
-            for i_pos, i_len in zip(y_idx, y_len)
-            for j_pos, j_len in zip(x_idx, x_len)
+            for i_pos, i_len in zip(y_idx, y_len, strict=False)
+            for j_pos, j_len in zip(x_idx, x_len, strict=False)
         ]
         decoded = self._decode_tiles(tiles)
         width = len(x_idx)

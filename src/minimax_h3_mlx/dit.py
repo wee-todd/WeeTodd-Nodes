@@ -177,13 +177,35 @@ class Attention(nn.Module):
         self.k_norm = nn.RMSNorm(config.attention_head_dim, eps=config.qk_norm_eps)
         self.out_proj = nn.Linear(config.inner_dim, config.hidden_size, bias=False)
         self.query_chunk_size: int | None = None
+        self.head_chunk_size: int | None = None
+
+    def _attend(self, q, k, v, mask):
+        """Run SDPA with optional independent head groups.
+
+        Attention heads do not interact until the output projection.  Splitting that axis bounds
+        the SDPA workspace without changing the mathematical operation or the packed sequence.
+        """
+        chunk = self.head_chunk_size
+        if chunk is None or q.shape[1] <= chunk:
+            return mx.fast.scaled_dot_product_attention(q, k, v, scale=self.scale, mask=mask)
+        pieces = []
+        for start in range(0, q.shape[1], chunk):
+            stop = min(start + chunk, q.shape[1])
+            piece = mx.fast.scaled_dot_product_attention(
+                q[:, start:stop],
+                k[:, start:stop],
+                v[:, start:stop],
+                scale=self.scale,
+                mask=mask,
+            )
+            mx.eval(piece)
+            pieces.append(piece)
+        return mx.concatenate(pieces, axis=1)
 
     def _normal(self, x, rotary, mask):
         """Original inference path, kept free of diagnostic callables and synchronization."""
         batch, sequence, _ = x.shape
-        qkv = self.qkv_proj(x).reshape(
-            batch, sequence, self.heads, 3, self.head_dim
-        )
+        qkv = self.qkv_proj(x).reshape(batch, sequence, self.heads, 3, self.head_dim)
         q, k, v = qkv[:, :, :, 0], qkv[:, :, :, 1], qkv[:, :, :, 2]
         q = self.q_norm(q).transpose(0, 2, 1, 3)
         k = self.k_norm(k).transpose(0, 2, 1, 3)
@@ -193,9 +215,7 @@ class Attention(nn.Module):
             k = apply_rotary(k, *rotary)
         chunk = self.query_chunk_size
         if chunk is None or q.shape[-2] <= chunk:
-            out = mx.fast.scaled_dot_product_attention(
-                q, k, v, scale=self.scale, mask=mask
-            )
+            out = self._attend(q, k, v, mask)
         else:
             pieces = []
             for start in range(0, q.shape[-2], chunk):
@@ -203,23 +223,17 @@ class Attention(nn.Module):
                 chunk_mask = mask
                 if mask is not None and mask.shape[-2] == q.shape[-2]:
                     chunk_mask = mask[..., start:stop, :]
-                piece = mx.fast.scaled_dot_product_attention(
-                    q[..., start:stop, :], k, v, scale=self.scale, mask=chunk_mask
-                )
+                piece = self._attend(q[..., start:stop, :], k, v, chunk_mask)
                 mx.eval(piece)
                 pieces.append(piece)
             out = mx.concatenate(pieces, axis=-2)
-        out = out.transpose(0, 2, 1, 3).reshape(
-            batch, sequence, self.heads * self.head_dim
-        )
+        out = out.transpose(0, 2, 1, 3).reshape(batch, sequence, self.heads * self.head_dim)
         return self.out_proj(out.astype(x.dtype))
 
     def selected_queries(self, x, query_indices, rotary, mask):
         """Attend selected queries to full-sequence K/V for terminal-block research."""
         batch, sequence, _ = x.shape
-        qkv = self.qkv_proj(x).reshape(
-            batch, sequence, self.heads, 3, self.head_dim
-        )
+        qkv = self.qkv_proj(x).reshape(batch, sequence, self.heads, 3, self.head_dim)
         q = mx.take(qkv[:, :, :, 0], query_indices, axis=1)
         k = qkv[:, :, :, 1]
         v = qkv[:, :, :, 2]
@@ -305,9 +319,7 @@ class Attention(nn.Module):
             out = _diagnostic_run(
                 diagnostics,
                 f"{prefix}.sdpa",
-                lambda: mx.fast.scaled_dot_product_attention(
-                    q, k, v, scale=self.scale, mask=mask
-                ),
+                lambda: mx.fast.scaled_dot_product_attention(q, k, v, scale=self.scale, mask=mask),
                 block=block_index,
                 metadata={"query_rows": int(q.shape[-2]), "key_rows": int(k.shape[-2])},
             )
@@ -343,6 +355,7 @@ class FeedForward(nn.Module):
         self.fc1 = nn.Linear(config.hidden_size, 2 * config.ffn_hidden_size, bias=False)
         self.fc2 = nn.Linear(config.ffn_hidden_size, config.hidden_size, bias=False)
         self._ffn = config.ffn_hidden_size
+        self.row_chunk_size: int | None = None
 
     def __call__(
         self,
@@ -352,9 +365,20 @@ class FeedForward(nn.Module):
         module_prefix: str = "blocks",
     ) -> mx.array:
         if diagnostics is None:
-            fused = self.fc1(x)
-            gate, value = fused[..., : self._ffn], fused[..., self._ffn :]
-            return self.fc2(nn.silu(gate) * value)
+            chunk = self.row_chunk_size
+            if chunk is None or x.shape[-2] <= chunk:
+                fused = self.fc1(x)
+                gate, value = fused[..., : self._ffn], fused[..., self._ffn :]
+                return self.fc2(nn.silu(gate) * value)
+            pieces = []
+            for start in range(0, x.shape[-2], chunk):
+                stop = min(start + chunk, x.shape[-2])
+                fused = self.fc1(x[..., start:stop, :])
+                gate, value = fused[..., : self._ffn], fused[..., self._ffn :]
+                piece = self.fc2(nn.silu(gate) * value)
+                mx.eval(piece)
+                pieces.append(piece)
+            return mx.concatenate(pieces, axis=-2)
         prefix = f"{module_prefix}.{block_index}.mlp"
         fused = _diagnostic_run(
             diagnostics,
@@ -538,8 +562,7 @@ class TransformerBlock(nn.Module):
         h = _diagnostic_run(
             diagnostics,
             f"blocks.{block_index}.norm1_adaln",
-            lambda: self.norm1(x) * (1.0 + scale_msa[adaln_indices])
-            + shift_msa[adaln_indices],
+            lambda: self.norm1(x) * (1.0 + scale_msa[adaln_indices]) + shift_msa[adaln_indices],
             block=block_index,
             capture_as="normalized_block_input",
         )
@@ -560,8 +583,7 @@ class TransformerBlock(nn.Module):
         h = _diagnostic_run(
             diagnostics,
             f"blocks.{block_index}.norm2_adaln",
-            lambda: self.norm2(x) * (1.0 + scale_mlp[adaln_indices])
-            + shift_mlp[adaln_indices],
+            lambda: self.norm2(x) * (1.0 + scale_mlp[adaln_indices]) + shift_mlp[adaln_indices],
             block=block_index,
             capture_as="mlp_input",
         )
@@ -652,6 +674,24 @@ class MiniMaxH3DiT(nn.Module):
         if paged is not None:
             paged.query_chunk_size = chunk_size
 
+    def set_attention_head_chunk_size(self, chunk_size: int | None) -> None:
+        """Bound SDPA workspace by processing independent attention-head groups."""
+        if chunk_size is not None and chunk_size < 1:
+            raise ValueError("attention head chunk size must be positive")
+        for block in self.token_refiner.blocks:
+            block.attn.head_chunk_size = chunk_size
+        for block in self.blocks:
+            block.attn.head_chunk_size = chunk_size
+
+    def set_ffn_row_chunk_size(self, chunk_size: int | None) -> None:
+        """Bound the SwiGLU intermediate by processing independent packed rows."""
+        if chunk_size is not None and chunk_size < 1:
+            raise ValueError("FFN row chunk size must be positive")
+        for block in self.token_refiner.blocks:
+            block.mlp.row_chunk_size = chunk_size
+        for block in self.blocks:
+            block.mlp.row_chunk_size = chunk_size
+
     def embed_timesteps(self, timesteps: mx.array) -> mx.array:
         """Return original MLP embeddings or linearly interpolated pruned AdaLN coordinates."""
         if self.config.adaln_curve_grid is None:
@@ -707,30 +747,25 @@ class MiniMaxH3DiT(nn.Module):
         video_embeds = _diagnostic_run(
             diagnostics,
             "input.video_projection",
-            lambda: self.video_patch_proj(
-                video_latents.astype(param_dtype(self.video_patch_proj))
-            ),
+            lambda: self.video_patch_proj(video_latents.astype(param_dtype(self.video_patch_proj))),
             metadata={"rows": int(video_latents.shape[1])},
         )
         audio_embeds = _diagnostic_run(
             diagnostics,
             "input.audio_projection",
-            lambda: self.audio_patch_proj(
-                audio_latents.astype(param_dtype(self.audio_patch_proj))
-            ),
+            lambda: self.audio_patch_proj(audio_latents.astype(param_dtype(self.audio_patch_proj))),
             metadata={"rows": int(audio_latents.shape[1])},
         )
         text = _diagnostic_run(
             diagnostics,
             "input.text_projection",
-            lambda: self.condition_proj(
-                text_embeds.astype(param_dtype(self.condition_proj))
-            ),
+            lambda: self.condition_proj(text_embeds.astype(param_dtype(self.condition_proj))),
             metadata={"rows": int(text_embeds.shape[1])},
         )
         text = self.token_refiner(text, diagnostics=diagnostics)
 
         B = text.shape[0]
+
         def scatter_inputs():
             packed = mx.zeros((B, seq_len, text.shape[-1]), dtype=text.dtype)
             packed[:, text_indices] = text
@@ -899,9 +934,7 @@ class MiniMaxH3DiT(nn.Module):
         if terminal_target_only:
             target_video_indices = video_indices[terminal_video_row_start:]
             target_audio_indices = audio_indices[terminal_audio_row_start:]
-            terminal_query_indices = mx.concatenate(
-                (target_video_indices, target_audio_indices)
-            )
+            terminal_query_indices = mx.concatenate((target_video_indices, target_audio_indices))
         if paged is not None:
             if blockcache is not None and hasattr(blockcache, "segment_start"):
                 raise ValueError(
@@ -965,10 +998,7 @@ class MiniMaxH3DiT(nn.Module):
                         x = reused
                         i = blockcache.segment_end(segment_index) + 1
                         continue
-                if (
-                    current_segment is not None
-                    and i == blockcache.segment_end(current_segment)
-                ):
+                if current_segment is not None and i == blockcache.segment_end(current_segment):
                     blockcache.update_segment(
                         current_segment,
                         before_anchor,
@@ -1146,17 +1176,13 @@ class MiniMaxH3DiT(nn.Module):
         video_out = _diagnostic_run(
             diagnostics,
             "output.video_projection",
-            lambda: self.final_layer.video_out(
-                x.astype(param_dtype(self.final_layer.video_out))
-            ),
+            lambda: self.final_layer.video_out(x.astype(param_dtype(self.final_layer.video_out))),
             metadata={"sequence_rows": int(x.shape[1])},
         )
         audio_out = _diagnostic_run(
             diagnostics,
             "output.audio_projection",
-            lambda: self.final_layer.audio_out(
-                x.astype(param_dtype(self.final_layer.audio_out))
-            ),
+            lambda: self.final_layer.audio_out(x.astype(param_dtype(self.final_layer.audio_out))),
             metadata={"sequence_rows": int(x.shape[1])},
         )
         video_result = video_out[:, video_indices]
@@ -1241,10 +1267,6 @@ class MiniMaxH3DiT(nn.Module):
         """Run current exact output modulation and heads over compact target features."""
         video = self.final_layer.norm_out(video_hidden, temb, video_timestep_indices)
         audio = self.final_layer.norm_out(audio_hidden, temb, audio_timestep_indices)
-        video = self.final_layer.video_out(
-            video.astype(param_dtype(self.final_layer.video_out))
-        )
-        audio = self.final_layer.audio_out(
-            audio.astype(param_dtype(self.final_layer.audio_out))
-        )
+        video = self.final_layer.video_out(video.astype(param_dtype(self.final_layer.video_out)))
+        audio = self.final_layer.audio_out(audio.astype(param_dtype(self.final_layer.audio_out)))
         return video, audio

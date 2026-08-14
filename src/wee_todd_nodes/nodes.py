@@ -27,7 +27,12 @@ from .decoding import (
     H3VideoVAESpec,
 )
 from .direct_publishing import publish_latent_chain_direct, publish_latents_direct
-from .preflight import H3ComponentSetSpec, H3PreflightRequest, preflight_components
+from .preflight import (
+    H3ComponentSetSpec,
+    H3PreflightRequest,
+    estimate_h3_token_budget,
+    preflight_components,
+)
 from .preview import PREVIEW_BACKENDS, PREVIEW_GUARD_MODES, H3PreviewConfig
 from .publishing import publish_synchronized_media
 from .residency import prepare_low_memory_stage
@@ -127,8 +132,7 @@ def _frames_from_manifest(frame_manifest: str, num_frames: int, image_loader=Non
                 raise ValueError(f"H3 Frames middle entry {index} needs an integer frame number.")
             if not 2 <= frame_number < num_frames:
                 raise ValueError(
-                    f"H3 Frames middle entry {index} must be between frame 2 and "
-                    f"{num_frames - 1}."
+                    f"H3 Frames middle entry {index} must be between frame 2 and {num_frames - 1}."
                 )
         resolved.append((frame_number, image_name.strip()))
 
@@ -915,6 +919,48 @@ class WeeToddH3Preflight:
         return components, json.dumps(payload, indent=2, sort_keys=True)
 
 
+class WeeToddH3TokenBudget:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "config": ("WEETODD_H3_CONFIG",),
+                "prompt_tokens": ("INT", {"default": 512, "min": 1, "max": 32768}),
+                "condition_video_rows": (
+                    "INT",
+                    {"default": 0, "min": 0, "max": 1000000, "advanced": True},
+                ),
+                "condition_audio_rows": (
+                    "INT",
+                    {"default": 0, "min": 0, "max": 1000000, "advanced": True},
+                ),
+            }
+        }
+
+    RETURN_TYPES = ("INT", "STRING")
+    RETURN_NAMES = ("packed_rows", "token_report")
+    FUNCTION = "estimate"
+    CATEGORY = "WeeTodd/H3/loaders"
+    DESCRIPTION = (
+        "Estimate H3 text, condition, audio, and video rows plus dense-attention scale without "
+        "loading a checkpoint. Add encoded reference rows for Ref2VA planning."
+    )
+
+    def estimate(self, config, prompt_tokens, condition_video_rows, condition_audio_rows):
+        report = estimate_h3_token_budget(
+            H3PreflightRequest(
+                duration_seconds=config.duration_seconds,
+                steps=config.steps,
+                width=config.width,
+                height=config.height,
+                prompt_tokens=prompt_tokens,
+            ),
+            condition_video_rows=condition_video_rows,
+            condition_audio_rows=condition_audio_rows,
+        )
+        return int(report["packed_rows"]), json.dumps(report, indent=2, sort_keys=True)
+
+
 class WeeToddH3FirstFrame:
     @classmethod
     def INPUT_TYPES(cls):
@@ -1197,16 +1243,18 @@ class WeeToddH3ReferenceVideo:
                 "temporal_density": (
                     [
                         "all frames (recommended)",
+                        "automatic (conservative, experimental)",
                         "uniform 50% (experimental)",
                         "uniform 25% (experimental)",
                     ],
                     {
                         "default": "all frames (recommended)",
                         "tooltip": (
-                            "Experimental uniform sampling reduces persistent reference-video "
-                            "tokens while retaining Qwen inspection of the full clip and rotary "
-                            "timestamps across the original duration. Reduced density can change "
-                            "motion or identity fidelity."
+                            "Automatic mode scans adjacent-frame activity and conservatively "
+                            "selects full, half, or quarter persistent video-VAE density. Qwen "
+                            "still inspects the full clip at 2 fps, and rotary timestamps retain "
+                            "the original duration. Reduced density can change motion or identity "
+                            "fidelity."
                         ),
                     },
                 ),
@@ -1266,6 +1314,87 @@ class WeeToddH3ReferenceAudio:
 
     def append(self, audio, previous_references=None):
         return _append_reference(previous_references, H3ReferenceInput("audio", audio))
+
+
+class WeeToddH3TimelineVisualGuide:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image_or_clip": ("IMAGE",),
+                "target_frame": (
+                    "INT",
+                    {
+                        "default": 0,
+                        "min": -100000,
+                        "max": 100000,
+                        "tooltip": "Zero-based target frame; negative values count from the end.",
+                    },
+                ),
+                "fps": ("FLOAT", {"default": 24.0, "min": 0.01, "max": 240.0}),
+            },
+            "optional": {
+                "soundtrack": ("AUDIO",),
+                "previous_references": ("WEETODD_H3_REFERENCES",),
+            },
+        }
+
+    RETURN_TYPES = ("WEETODD_H3_REFERENCES", "STRING")
+    RETURN_NAMES = ("references", "guide_info")
+    FUNCTION = "append"
+    CATEGORY = "WeeTodd/H3/conditioning"
+    DESCRIPTION = (
+        "Place one image or an aligned H3 clip on the Ref2VA target timeline. A clip must contain "
+        "5, 22, 39, ... frames after 24 fps alignment; optional audio starts at the same frame."
+    )
+
+    def append(self, image_or_clip, target_frame, fps, soundtrack=None, previous_references=None):
+        frame_count = int(image_or_clip.shape[0])
+        kind = "image" if frame_count == 1 else "video"
+        if kind == "video" and frame_count < 5:
+            raise ValueError("An H3 timeline clip must contain at least five source frames.")
+        return _append_reference(
+            previous_references,
+            H3ReferenceInput(
+                kind,
+                image_or_clip,
+                fps=(fps if kind == "video" else None),
+                soundtrack=soundtrack,
+                target_frame=target_frame,
+            ),
+        )
+
+
+class WeeToddH3TimelineAudioGuide:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "audio": ("AUDIO",),
+                "target_frame": (
+                    "INT",
+                    {
+                        "default": 0,
+                        "min": -100000,
+                        "max": 100000,
+                        "tooltip": "Zero-based target frame; negative values count from the end.",
+                    },
+                ),
+            },
+            "optional": {"previous_references": ("WEETODD_H3_REFERENCES",)},
+        }
+
+    RETURN_TYPES = ("WEETODD_H3_REFERENCES", "STRING")
+    RETURN_NAMES = ("references", "guide_info")
+    FUNCTION = "append"
+    CATEGORY = "WeeTodd/H3/conditioning"
+    DESCRIPTION = "Place an audio guide at an exact Ref2VA target frame."
+
+    def append(self, audio, target_frame, previous_references=None):
+        return _append_reference(
+            previous_references,
+            H3ReferenceInput("audio", audio, target_frame=target_frame),
+        )
 
 
 class WeeToddH3KeyframeEncode:
@@ -1578,6 +1707,27 @@ class WeeToddH3ReferenceEncode:
                     "latent_height": reference.latent_height,
                     "latent_width": reference.latent_width,
                     "audio_latents": reference.num_audio_latents,
+                    **(
+                        {
+                            "temporal_density_policy": getattr(
+                                reference, "temporal_density_requested", "full"
+                            ),
+                            "temporal_density_resolved": getattr(
+                                reference, "temporal_density_resolved", 1.0
+                            ),
+                            "temporal_activity_mean": getattr(
+                                reference, "temporal_activity_mean", None
+                            ),
+                            "temporal_activity_p95": getattr(
+                                reference, "temporal_activity_p95", None
+                            ),
+                            "temporal_density_reason": getattr(
+                                reference, "temporal_density_reason", None
+                            ),
+                        }
+                        if reference.kind == "video"
+                        else {}
+                    ),
                 }
                 for metadata, reference in zip(
                     references.metadata()["references"], prepared, strict=True
@@ -1587,6 +1737,9 @@ class WeeToddH3ReferenceEncode:
             "encoder_resident": TEXT_ENCODER_RUNTIME.loaded,
             "video_vae_resident": VIDEO_VAE_RUNTIME.loaded,
             "audio_vae_resident": AUDIO_VAE_RUNTIME.loaded,
+            "reference_feature_reuse": (
+                "encoded_once_and_reused_for_every_transformer_evaluation"
+            ),
         }
         return conditioning, json.dumps(info, indent=2, sort_keys=True)
 
@@ -1949,9 +2102,7 @@ class WeeToddH3Sample:
             "transformer_evaluations": latents.transformer_evaluations,
             "easycache_skipped_steps": latents.easycache_skipped_steps,
             "easycache_resolved_threshold": latents.easycache_resolved_threshold,
-            "easycache_reuse_strategy": getattr(
-                latents, "easycache_reuse_strategy", None
-            ),
+            "easycache_reuse_strategy": getattr(latents, "easycache_reuse_strategy", None),
             "easycache_cache_bytes": getattr(latents, "easycache_cache_bytes", 0),
             "easycache": asdict(easycache) if easycache is not None else None,
             "blockcache_hits": getattr(latents, "blockcache_hits", 0),
@@ -3510,13 +3661,14 @@ class WeeToddH3GenerationConfig:
                     },
                 ),
                 "projection_backend": (
-                    ["mlx", "mpp_experimental"],
+                    ["auto", "mlx", "mpp_experimental"],
                     {
-                        "default": "mlx",
+                        "default": "auto",
                         "advanced": True,
                         "tooltip": (
-                            "Experimental Metal Performance Primitives acceleration for eligible "
-                            "BF16 transformer projections. Unsupported projections use MLX."
+                            "Auto uses bitwise-verified Metal Performance Primitives acceleration "
+                            "for eligible BF16 transformer projections. Unsupported or rejected "
+                            "projections use standard MLX."
                         ),
                     },
                 ),
@@ -3572,7 +3724,7 @@ class WeeToddH3GenerationConfig:
         drop_adaln,
         memory_mode="normal",
         attention_chunk_size="automatic",
-        projection_backend="mlx",
+        projection_backend="auto",
         short_edge=None,
         sampling_method="euler",
     ):
@@ -3610,6 +3762,54 @@ class WeeToddH3GenerationConfig:
                 f"{width} × {height} pixels — {normalized_ratio} — {short_edge_label}",
             )
         return config, f"{width} × {height} pixels — custom"
+
+
+class WeeToddH3LowMemoryTuning:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "config": ("WEETODD_H3_CONFIG",),
+                "attention_head_chunk_size": (
+                    ["automatic", "2", "4", "8", "disabled"],
+                    {
+                        "default": "automatic",
+                        "tooltip": (
+                            "Chunk independent attention heads to bound the SDPA workspace. "
+                            "Automatic selects four heads in low-memory BF16 mode."
+                        ),
+                    },
+                ),
+                "ffn_row_chunk_size": (
+                    ["automatic", "128", "256", "512", "disabled"],
+                    {
+                        "default": "automatic",
+                        "tooltip": (
+                            "Chunk packed rows to bound the SwiGLU intermediate. Automatic "
+                            "selects 256 rows in low-memory BF16 mode."
+                        ),
+                    },
+                ),
+            }
+        }
+
+    RETURN_TYPES = ("WEETODD_H3_CONFIG",)
+    RETURN_NAMES = ("config",)
+    FUNCTION = "apply"
+    CATEGORY = "WeeTodd/H3/sampling"
+    DESCRIPTION = (
+        "Apply optional MLX attention-head and feed-forward row chunking without invalidating "
+        "older Generation Config workflows."
+    )
+
+    def apply(self, config, attention_head_chunk_size, ffn_row_chunk_size):
+        tuned = replace(
+            config,
+            attention_head_chunk_size=attention_head_chunk_size,
+            ffn_row_chunk_size=ffn_row_chunk_size,
+        )
+        tuned.validate()
+        return (tuned,)
 
 
 class WeeToddH3Generate:
@@ -3699,6 +3899,7 @@ NODE_CLASS_MAPPINGS = {
     "WeeToddH3PreviewOverride": WeeToddH3PreviewOverride,
     "WeeToddH3QuantizedTransformerLoader": WeeToddH3QuantizedTransformerLoader,
     "WeeToddH3Preflight": WeeToddH3Preflight,
+    "WeeToddH3TokenBudget": WeeToddH3TokenBudget,
     "WeeToddH3FirstFrame": WeeToddH3FirstFrame,
     "WeeToddH3LastFrame": WeeToddH3LastFrame,
     "WeeToddH3FirstLastFrame": WeeToddH3FirstLastFrame,
@@ -3708,6 +3909,8 @@ NODE_CLASS_MAPPINGS = {
     "WeeToddH3ReferenceImage": WeeToddH3ReferenceImage,
     "WeeToddH3ReferenceVideo": WeeToddH3ReferenceVideo,
     "WeeToddH3ReferenceAudio": WeeToddH3ReferenceAudio,
+    "WeeToddH3TimelineVisualGuide": WeeToddH3TimelineVisualGuide,
+    "WeeToddH3TimelineAudioGuide": WeeToddH3TimelineAudioGuide,
     "WeeToddH3KeyframeEncode": WeeToddH3KeyframeEncode,
     "WeeToddH3TimedKeyframeEncode": WeeToddH3TimedKeyframeEncode,
     "WeeToddH3ReferenceEncode": WeeToddH3ReferenceEncode,
@@ -3735,6 +3938,7 @@ NODE_CLASS_MAPPINGS = {
     "WeeToddH3DirectPublishChain": WeeToddH3DirectPublishChain,
     "WeeToddH3ModelLoader": WeeToddH3ModelLoader,
     "WeeToddH3GenerationConfig": WeeToddH3GenerationConfig,
+    "WeeToddH3LowMemoryTuning": WeeToddH3LowMemoryTuning,
     "WeeToddH3Generate": WeeToddH3Generate,
     "WeeToddH3Unload": WeeToddH3Unload,
 }
@@ -3743,6 +3947,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "WeeToddH3PreviewOverride": "WeeTodd H3 Model Preview Override",
     "WeeToddH3QuantizedTransformerLoader": "WeeTodd H3 Quantized Transformer Loader",
     "WeeToddH3Preflight": "WeeTodd H3 Component Preflight",
+    "WeeToddH3TokenBudget": "WeeTodd H3 Token + Memory Budget",
     "WeeToddH3FirstFrame": "WeeTodd H3 First Frame",
     "WeeToddH3LastFrame": "WeeTodd H3 Last Frame",
     "WeeToddH3FirstLastFrame": "WeeTodd H3 First + Last Frame",
@@ -3752,6 +3957,8 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "WeeToddH3ReferenceImage": "WeeTodd H3 Reference Image",
     "WeeToddH3ReferenceVideo": "WeeTodd H3 Reference Video",
     "WeeToddH3ReferenceAudio": "WeeTodd H3 Reference Audio",
+    "WeeToddH3TimelineVisualGuide": "WeeTodd H3 Timeline Visual Guide",
+    "WeeToddH3TimelineAudioGuide": "WeeTodd H3 Timeline Audio Guide",
     "WeeToddH3KeyframeEncode": "WeeTodd H3 Encode First / Last Frames",
     "WeeToddH3TimedKeyframeEncode": "WeeTodd H3 Encode Timed Keyframes",
     "WeeToddH3ReferenceEncode": "WeeTodd H3 Encode References",
@@ -3779,6 +3986,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "WeeToddH3DirectPublishChain": "WeeTodd H3 Direct Publish Chained Timeline (MLX)",
     "WeeToddH3ModelLoader": "WeeTodd H3 Model Loader (MLX)",
     "WeeToddH3GenerationConfig": "WeeTodd H3 Generation Config",
+    "WeeToddH3LowMemoryTuning": "WeeTodd H3 Low-Memory Tuning (MLX)",
     "WeeToddH3Generate": "WeeTodd H3 Generate Video + Audio",
     "WeeToddH3Unload": "WeeTodd H3 Unload MLX Runtime",
 }

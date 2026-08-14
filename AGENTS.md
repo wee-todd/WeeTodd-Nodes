@@ -14,6 +14,10 @@ through MLX.
 
 - Keep node imports lightweight; load MLX weights only when a graph executes.
 - Keep the H3 and LTX 2.3 engines isolated behind separate ComfyUI adapters.
+- Before changing an LTX 2.5 loader, sampler, VAE, conditioning contract, or optimization default,
+  compare current Lightricks LTX-2 releases, LTX-2.5 checkpoint files, and native ComfyUI changes
+  against the baseline in `docs/reference/LTX25_MLX_INTEGRATION.md`. Update the baseline and OKF log
+  when upstream changes. Do not transfer CUDA performance claims to MLX without measurement.
 - Preserve synchronized audio and video as a single H3 generation contract.
 - Keep model state process-local and explicitly unloadable.
 - Default weighted stages to staged unloading: Qwen3-VL, transformer, video VAE, then audio VAE.

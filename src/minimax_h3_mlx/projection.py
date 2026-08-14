@@ -94,6 +94,7 @@ class ProjectionBackendReport:
 
 _DEFAULT_TILE = MPPTile()
 _FC2_TILE = MPPTile(64, 128, 8)
+_AUTO_VERIFIED_ARCHITECTURES = frozenset({"applegpu_g15d"})
 
 
 def mpp_capability() -> tuple[bool, str | None]:
@@ -107,6 +108,18 @@ def mpp_capability() -> tuple[bool, str | None]:
         return False, "MPP projections require macOS 26 or newer"
     if not hasattr(mx.fast, "metal_kernel"):
         return False, "the installed MLX version has no custom Metal kernel API"
+    return True, None
+
+
+def mpp_auto_capability(
+    device_info: dict[str, object] | None = None,
+) -> tuple[bool, str | None]:
+    """Return whether ``auto`` may select MPP from measured complete-generation evidence."""
+    info = mx.device_info() if device_info is None else device_info
+    architecture = str(info.get("architecture", "")).lower()
+    if architecture not in _AUTO_VERIFIED_ARCHITECTURES:
+        label = architecture or "unknown"
+        return False, f"MPP auto selection is not validated for Apple GPU architecture {label}"
     return True, None
 
 
@@ -248,18 +261,38 @@ def _eligible_linear(layer) -> bool:
 
 
 def configure_projection_backend(dit, requested: str) -> ProjectionBackendReport:
-    """Apply an explicit projection backend to the 50-block H3 transformer stack."""
-    if requested not in {"mlx", "mpp_experimental"}:
-        raise ValueError("projection backend must be mlx or mpp_experimental")
+    """Apply the requested projection backend to the 50-block H3 transformer stack.
+
+    ``auto`` selects the verified Metal Performance Primitives path when the runtime supports it.
+    Each real projection shape still runs the process-local bitwise verification gate on its first
+    use. Unsupported dtypes, quantized layers, biases, kernel failures, and numerical mismatches
+    retain the standard MLX implementation.
+    """
+    if requested not in {"auto", "mlx", "mpp_experimental"}:
+        raise ValueError("projection backend must be auto, mlx, or mpp_experimental")
     if requested == "mlx":
         return ProjectionBackendReport("mlx", "mlx", 0, 0)
     supported, reason = mpp_capability()
     if not supported:
         return ProjectionBackendReport(requested, "mlx", 0, 0, reason)
+    if requested == "auto":
+        supported, reason = mpp_auto_capability()
+        if not supported:
+            return ProjectionBackendReport(requested, "mlx", 0, 0, reason)
+
+    blocks = getattr(dit, "blocks", None)
+    if blocks is None:
+        return ProjectionBackendReport(
+            requested,
+            "mlx",
+            0,
+            0,
+            "the transformer exposes no resident core block stack",
+        )
 
     wrapped = 0
     skipped = 0
-    for block in dit.blocks:
+    for block in blocks:
         for owner, name in (
             (block.attn, "qkv_proj"),
             (block.attn, "out_proj"),

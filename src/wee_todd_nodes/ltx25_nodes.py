@@ -5,10 +5,11 @@ from __future__ import annotations
 import json
 import os
 import secrets
-from dataclasses import asdict
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 from ltx25_mlx.runtime import (
+    LTX25_DIFFVAE_OPTIMIZATIONS,
     LTX25_GENERATION_PRESETS,
     RUNTIME,
     LTX25ComponentSpec,
@@ -31,6 +32,82 @@ from .ltx_nodes import (
     _safe_target,
     _software_versions,
 )
+
+
+@dataclass(frozen=True)
+class LTX25Keyframe:
+    image: object
+    frame_index: int
+    strength: float = 1.0
+
+
+@dataclass(frozen=True)
+class LTX25KeyframeStack:
+    keyframes: tuple[LTX25Keyframe, ...] = ()
+
+    def append(self, value: LTX25Keyframe) -> LTX25KeyframeStack:
+        if not 0.0 <= value.strength <= 1.0:
+            raise ValueError("LTX 2.5 keyframe strength must be between zero and one.")
+        shape = getattr(value.image, "shape", None)
+        if shape is None or len(shape) != 4 or int(shape[0]) < 1 or int(shape[-1]) < 3:
+            raise ValueError("LTX 2.5 keyframe must be a ComfyUI IMAGE batch.")
+        result = LTX25KeyframeStack((*self.keyframes, value))
+        if len(result.keyframes) > 8:
+            raise ValueError("LTX 2.5 supports at most eight explicit keyframes per window.")
+        if len({item.frame_index for item in result.keyframes}) != len(result.keyframes):
+            raise ValueError("Two LTX 2.5 keyframes cannot target the same frame.")
+        return result
+
+    def validate(self, num_frames: int) -> None:
+        if not self.keyframes:
+            raise ValueError("LTX 2.5 keyframe conditioning requires at least one image.")
+        for item in self.keyframes:
+            if not 0 <= item.frame_index < num_frames:
+                raise ValueError(
+                    f"LTX 2.5 keyframe {item.frame_index} is outside 0..{num_frames - 1}."
+                )
+
+    def metadata(self) -> dict[str, object]:
+        return {
+            "keyframes": [
+                {"frame_index": item.frame_index, "strength": item.strength}
+                for item in sorted(self.keyframes, key=lambda value: value.frame_index)
+            ]
+        }
+
+
+class WeeToddLTX25Keyframe:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image": ("IMAGE",),
+                "frame_index": (
+                    "INT",
+                    {"default": 0, "min": 0, "max": 100000, "step": 1},
+                ),
+                "strength": (
+                    "FLOAT",
+                    {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.05},
+                ),
+            },
+            "optional": {"previous_keyframes": ("WEETODD_LTX25_KEYFRAMES",)},
+        }
+
+    RETURN_TYPES = ("WEETODD_LTX25_KEYFRAMES", "STRING")
+    RETURN_NAMES = ("keyframes", "keyframe_info")
+    FUNCTION = "append"
+    CATEGORY = "WeeTodd/LTX 2.5/conditioning"
+    DESCRIPTION = (
+        "Append a first, middle, or last image at an exact zero-based pixel-frame index. "
+        "Nonzero frames use LTX 2.5's generated-keyframe token slots."
+    )
+
+    def append(self, image, frame_index, strength, previous_keyframes=None):
+        stack = (previous_keyframes or LTX25KeyframeStack()).append(
+            LTX25Keyframe(image, int(frame_index), float(strength))
+        )
+        return stack, json.dumps(stack.metadata(), indent=2, sort_keys=True)
 
 
 def _register_ltx25_model_folders() -> None:
@@ -108,8 +185,9 @@ class WeeToddLTX25ComponentLoader:
                     {
                         "default": "ltx-2.5-video-vae-conv-bf16.safetensors",
                         "tooltip": (
-                            "The convolutional VAE is the first MLX target. The diffusion VAE "
-                            "needs an efficient MLX neighborhood-attention implementation."
+                            "Choose the lower-cost convolutional VAE or the official one-step "
+                            "Diffusion VAE. The MLX Diffusion VAE uses bounded neighborhood "
+                            "attention. Use the separate optimization node to select its layout."
                         ),
                     },
                 ),
@@ -167,6 +245,46 @@ class WeeToddLTX25ComponentLoader:
         )
 
 
+class WeeToddLTX25LoRALoader:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "model": ("WEETODD_LTX25_MODEL",),
+                "lora": ("STRING", {"default": ""}),
+                "strength": (
+                    "FLOAT",
+                    {"default": 1.0, "min": 0.01, "max": 2.0, "step": 0.05},
+                ),
+            }
+        }
+
+    RETURN_TYPES = ("WEETODD_LTX25_MODEL", "STRING")
+    RETURN_NAMES = ("model", "lora_info")
+    FUNCTION = "attach"
+    CATEGORY = "WeeTodd/LTX 2.5/loaders"
+    DESCRIPTION = (
+        "Attach a generic LTX 2.5 transformer LoRA. Multiple loader nodes may be chained; "
+        "IC-LoRA control media still requires its matching conditioning workflow."
+    )
+
+    def attach(self, model, lora, strength):
+        resolved = _resolve_component(lora, ("loras", "ltx25"))
+        from ltx25_mlx.transformer import inspect_ltx25_ic_lora
+
+        report = inspect_ltx25_ic_lora(resolved)
+        attached = replace(
+            model,
+            loras=(*model.loras, (str(resolved), float(strength))),
+        )
+        report["path"] = str(report["path"])
+        return attached, json.dumps(
+            {**report, "strength": float(strength), "stack_size": len(attached.loras)},
+            indent=2,
+            sort_keys=True,
+        )
+
+
 class WeeToddLTX25GenerationConfig:
     @classmethod
     def INPUT_TYPES(cls):
@@ -207,12 +325,17 @@ class WeeToddLTX25GenerationConfig:
                     },
                 ),
                 "feed_forward_backend": (
-                    ["reference_fp32", "bf16_mpp_experimental"],
+                    [
+                        "reference_fp32",
+                        "mlx_fused_experimental",
+                        "bf16_mpp_experimental",
+                    ],
                     {
                         "default": "reference_fp32",
                         "tooltip": (
-                            "bf16_mpp_experimental casts video feed-forward inputs to BF16 and "
-                            "uses Metal Performance Primitives. It is faster but approximate."
+                            "mlx_fused_experimental compiles exact RMS-AdaLN, audiovisual FF, "
+                            "gate, and residual graphs. bf16_mpp_experimental casts video FF "
+                            "inputs to BF16 and is faster but approximate."
                         ),
                     },
                 ),
@@ -273,6 +396,173 @@ class WeeToddLTX25GenerationConfig:
         return config, json.dumps(info, indent=2, sort_keys=True)
 
 
+class WeeToddLTX25GeneratedKeyframes:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "config": ("WEETODD_LTX25_CONFIG",),
+                "generated_keyframes": (
+                    "INT",
+                    {
+                        "default": 0,
+                        "min": 0,
+                        "max": 8,
+                        "step": 1,
+                        "tooltip": (
+                            "Append learned interior keyframe slots during stage one. Higher "
+                            "values can help difficult motion but add attention cost."
+                        ),
+                    },
+                ),
+            }
+        }
+
+    RETURN_TYPES = ("WEETODD_LTX25_CONFIG",)
+    RETURN_NAMES = ("config",)
+    FUNCTION = "apply"
+    CATEGORY = "WeeTodd/LTX 2.5/conditioning"
+    DESCRIPTION = "Apply LTX 2.5 generated interior keyframe slots as a composable config modifier."
+
+    def apply(self, config, generated_keyframes):
+        updated = replace(config, generated_keyframes=int(generated_keyframes))
+        updated.validate()
+        return (updated,)
+
+
+class WeeToddLTX25DiffVAEOptimization:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "config": ("WEETODD_LTX25_CONFIG",),
+                "optimization": (
+                    list(LTX25_DIFFVAE_OPTIMIZATIONS),
+                    {
+                        "default": "combined",
+                        "tooltip": (
+                            "Combined preserves the reference MLX path. Metal NA3D is an "
+                            "approximate experimental kernel measured 4.49x faster at 512px with "
+                            "a 3.00 GB peak reduction against the reference decoder. Query-tiled "
+                            "Metal saves more memory but is slower; use a 65536-row query tile. "
+                            "Deferred stage four is exact. Width tiles trade substantial decode "
+                            "time for a modest peak reduction."
+                        ),
+                    },
+                ),
+                "query_chunk_size": (
+                    "INT",
+                    {"default": 512, "min": 32, "max": 262144, "step": 32},
+                ),
+                "context_width_chunks": (
+                    "INT",
+                    {"default": 4, "min": 1, "max": 32, "step": 1},
+                ),
+                "stage4_tile_width": (
+                    "INT",
+                    {"default": 32, "min": 1, "max": 512, "step": 1},
+                ),
+            }
+        }
+
+    RETURN_TYPES = ("WEETODD_LTX25_CONFIG", "STRING")
+    RETURN_NAMES = ("config", "diffvae_info")
+    FUNCTION = "apply"
+    CATEGORY = "WeeTodd/LTX 2.5/optimization"
+    DESCRIPTION = (
+        "Select an MLX Diffusion VAE execution layout. It does not affect the convolutional VAE."
+    )
+
+    def apply(
+        self,
+        config,
+        optimization,
+        query_chunk_size,
+        context_width_chunks,
+        stage4_tile_width,
+    ):
+        updated = replace(
+            config,
+            diffvae_optimization=str(optimization),
+            diffvae_query_chunk_size=int(query_chunk_size),
+            diffvae_context_width_chunks=int(context_width_chunks),
+            diffvae_stage4_tile_width=int(stage4_tile_width),
+        )
+        updated.validate()
+        details = {
+            "optimization": updated.diffvae_optimization,
+            "query_chunk_size": updated.diffvae_query_chunk_size,
+            "context_width_chunks": updated.diffvae_context_width_chunks,
+            "stage4_tile_width": updated.diffvae_stage4_tile_width,
+            "applies_only_to": "Diffusion VAE checkpoints",
+        }
+        return updated, json.dumps(details, indent=2, sort_keys=True)
+
+
+class WeeToddLTX25DFRDetailing:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "config": ("WEETODD_LTX25_CONFIG",),
+                "detailing_lora": (
+                    "STRING",
+                    {
+                        "default": (
+                            "LTX-2.5/ltx-2.5-22b-ic-lora-pixel-spatial-upscaler-x2-1.0.safetensors"
+                        ),
+                        "tooltip": (
+                            "Official 2x Pixel-Spatial IC-LoRA. DFR applies it only during "
+                            "the full-resolution stage-two detailing pass."
+                        ),
+                    },
+                ),
+                "strength": (
+                    "FLOAT",
+                    {"default": 1.0, "min": 0.05, "max": 2.0, "step": 0.05},
+                ),
+            }
+        }
+
+    RETURN_TYPES = ("WEETODD_LTX25_CONFIG", "STRING")
+    RETURN_NAMES = ("config", "dfr_info")
+    FUNCTION = "apply"
+    CATEGORY = "WeeTodd/LTX 2.5/conditioning"
+    DESCRIPTION = (
+        "Enable MLX Diffusion Fidelity Rendering: segment-grid generated keyframes, "
+        "stage-one latent reference conditioning, stage-two-only Pixel-Spatial IC-LoRA, "
+        "and untouched stage-one audio publication."
+    )
+
+    def apply(self, config, detailing_lora, strength):
+        resolved = _resolve_component(detailing_lora, ("loras", "ltx25"))
+        updated = replace(
+            config,
+            generated_keyframes=0,
+            dfr_enabled=True,
+            dfr_detailing_lora_path=str(resolved),
+            dfr_detailing_lora_strength=float(strength),
+        )
+        updated.validate()
+        from ltx25_mlx.dfr import resolve_dfr_canvas
+
+        padded, segment, positions = resolve_dfr_canvas(updated.num_frames)
+        return updated, json.dumps(
+            {
+                "enabled": True,
+                "detailing_lora": str(resolved),
+                "strength": float(strength),
+                "requested_frames": updated.num_frames,
+                "internal_canvas_frames": padded,
+                "segment_frames": segment,
+                "generated_keyframe_positions": positions,
+                "audio_source": "stage_1",
+            },
+            indent=2,
+            sort_keys=True,
+        )
+
+
 class WeeToddLTX25Preflight:
     @classmethod
     def INPUT_TYPES(cls):
@@ -314,7 +604,10 @@ class WeeToddLTX25Generate:
                 "filename_prefix": ("STRING", {"default": "WeeTodd/LTX25"}),
                 "unload_after_generate": ("BOOLEAN", {"default": True}),
             },
-            "optional": {"first_frame": ("IMAGE",)},
+            "optional": {
+                "first_frame": ("IMAGE",),
+                "keyframes": ("WEETODD_LTX25_KEYFRAMES",),
+            },
         }
 
     RETURN_TYPES = ("STRING", "STRING")
@@ -332,6 +625,7 @@ class WeeToddLTX25Generate:
         filename_prefix,
         unload_after_generate,
         first_frame=None,
+        keyframes=None,
     ):
         import numpy as np
         from PIL import Image
@@ -345,6 +639,7 @@ class WeeToddLTX25Generate:
         metadata_path = final.with_suffix(".json")
         partial_metadata = final.with_name(f".{final.stem}.metadata.partial.json")
         image_path = None
+        keyframe_paths = []
         try:
             if first_frame is not None:
                 frame = first_frame[0]
@@ -359,12 +654,45 @@ class WeeToddLTX25Generate:
                     raise ValueError("LTX 2.5 first frame must be an RGB ComfyUI IMAGE.")
                 image_path = final.with_name(f".{final.stem}.input.partial.png")
                 Image.fromarray((np.clip(frame, 0.0, 1.0) * 255).astype(np.uint8)).save(image_path)
+            image_inputs = []
+            if keyframes is not None:
+                keyframes.validate(config.num_frames)
+                if first_frame is not None and any(
+                    item.frame_index == 0 for item in keyframes.keyframes
+                ):
+                    raise ValueError(
+                        "Use either first_frame or a frame-zero LTX 2.5 keyframe, not both."
+                    )
+                for index, item in enumerate(
+                    sorted(keyframes.keyframes, key=lambda value: value.frame_index)
+                ):
+                    frame = item.image[0]
+                    detach = getattr(frame, "detach", None)
+                    if detach is not None:
+                        frame = detach()
+                    cpu = getattr(frame, "cpu", None)
+                    if cpu is not None:
+                        frame = cpu()
+                    frame = np.asarray(frame, dtype=np.float32)
+                    keyframe_path = final.with_name(f".{final.stem}.keyframe-{index}.partial.png")
+                    Image.fromarray((np.clip(frame, 0.0, 1.0) * 255).astype(np.uint8)).save(
+                        keyframe_path
+                    )
+                    keyframe_paths.append(keyframe_path)
+                    image_inputs.append(
+                        {
+                            "path": str(keyframe_path),
+                            "frame_index": item.frame_index,
+                            "strength": item.strength,
+                        }
+                    )
             info = RUNTIME.generate_to_file(
                 model,
                 config,
                 prompt,
                 partial,
                 image_path=str(image_path) if image_path is not None else None,
+                image_inputs=image_inputs,
                 unload_after=unload_after_generate,
                 check_interrupted=_check_interrupted(),
                 step_callback=_comfy_progress(config.stage1_steps + config.stage2_steps),
@@ -390,6 +718,8 @@ class WeeToddLTX25Generate:
         finally:
             if image_path is not None:
                 image_path.unlink(missing_ok=True)
+            for keyframe_path in keyframe_paths:
+                keyframe_path.unlink(missing_ok=True)
 
 
 class WeeToddLTX25GenerateChained:
@@ -781,8 +1111,13 @@ class WeeToddLTX25Unload:
 
 NODE_CLASS_MAPPINGS = {
     "WeeToddLTX25ComponentLoader": WeeToddLTX25ComponentLoader,
+    "WeeToddLTX25LoRALoader": WeeToddLTX25LoRALoader,
     "WeeToddLTX25GenerationConfig": WeeToddLTX25GenerationConfig,
+    "WeeToddLTX25GeneratedKeyframes": WeeToddLTX25GeneratedKeyframes,
+    "WeeToddLTX25DiffVAEOptimization": WeeToddLTX25DiffVAEOptimization,
+    "WeeToddLTX25DFRDetailing": WeeToddLTX25DFRDetailing,
     "WeeToddLTX25Preflight": WeeToddLTX25Preflight,
+    "WeeToddLTX25Keyframe": WeeToddLTX25Keyframe,
     "WeeToddLTX25Generate": WeeToddLTX25Generate,
     "WeeToddLTX25GenerateChained": WeeToddLTX25GenerateChained,
     "WeeToddLTX25VideoUpscale": WeeToddLTX25VideoUpscale,
@@ -791,8 +1126,13 @@ NODE_CLASS_MAPPINGS = {
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "WeeToddLTX25ComponentLoader": "WeeTodd LTX 2.5 Component Loader (MLX)",
+    "WeeToddLTX25LoRALoader": "WeeTodd LTX 2.5 LoRA Loader (MLX)",
     "WeeToddLTX25GenerationConfig": "WeeTodd LTX 2.5 Generation Config",
+    "WeeToddLTX25GeneratedKeyframes": "WeeTodd LTX 2.5 Generated Keyframes",
+    "WeeToddLTX25DiffVAEOptimization": "WeeTodd LTX 2.5 Diffusion VAE Optimization",
+    "WeeToddLTX25DFRDetailing": "WeeTodd LTX 2.5 DFR Detail Refinement",
     "WeeToddLTX25Preflight": "WeeTodd LTX 2.5 Preflight",
+    "WeeToddLTX25Keyframe": "WeeTodd LTX 2.5 Timed Keyframe",
     "WeeToddLTX25Generate": "WeeTodd LTX 2.5 Generate Video + Audio",
     "WeeToddLTX25GenerateChained": "WeeTodd LTX 2.5 Generate Chained Timeline",
     "WeeToddLTX25VideoUpscale": "WeeTodd LTX 2.5 Video Upscale / Refine",

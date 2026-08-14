@@ -1,3 +1,4 @@
+import copy
 from types import SimpleNamespace
 
 import mlx.core as mx
@@ -51,6 +52,78 @@ def test_reference_backend_does_not_modify_video_ff():
     report = configure_feed_forward_backend(model, "reference_fp32")
     assert report.approximate is False
     assert feed_forward.proj_in is original
+
+
+def test_compiled_rms_adaln_feed_forward_matches_complete_block_exactly():
+    from ltx_core_mlx.model.transformer.transformer import BasicAVTransformerBlock
+
+    mx.random.seed(20260814)
+    reference = BasicAVTransformerBlock(
+        video_dim=8,
+        audio_dim=4,
+        video_num_heads=1,
+        audio_num_heads=1,
+        video_head_dim=8,
+        audio_head_dim=4,
+        av_cross_num_heads=1,
+        av_cross_head_dim=4,
+        ff_mult=2,
+    )
+    mx.eval(reference.parameters())
+    candidate = copy.deepcopy(reference)
+    model = SimpleNamespace(transformer_blocks=[candidate])
+    report = configure_feed_forward_backend(model, "mlx_fused_experimental")
+    assert report.approximate is False
+    assert report.wrapped_projections == 2
+
+    args = (
+        mx.random.normal((1, 5, 8)),
+        mx.random.normal((1, 3, 4)),
+        mx.random.normal((1, 72)),
+        mx.random.normal((1, 36)),
+        mx.random.normal((1, 16)),
+        mx.random.normal((1, 8)),
+        mx.random.normal((1, 32)),
+        mx.random.normal((1, 16)),
+        mx.random.normal((1, 8)),
+        mx.random.normal((1, 4)),
+    )
+    expected = reference(*args)
+    actual = candidate(*args)
+    mx.eval(*expected, *actual)
+    assert mx.array_equal(actual[0], expected[0])
+    assert mx.array_equal(actual[1], expected[1])
+    assert feed_forward_runtime_status()["fused_calls"] == 2
+
+
+def test_compiled_backend_can_bypass_and_reenable_without_reloading():
+    from ltx_core_mlx.model.transformer.transformer import BasicAVTransformerBlock
+
+    block = BasicAVTransformerBlock(
+        video_dim=8,
+        audio_dim=4,
+        video_num_heads=1,
+        audio_num_heads=1,
+        video_head_dim=8,
+        audio_head_dim=4,
+        av_cross_num_heads=1,
+        av_cross_head_dim=4,
+        ff_mult=2,
+    )
+    original_video_ff = block.ff
+    original_audio_ff = block.audio_ff
+    model = SimpleNamespace(transformer_blocks=[block])
+    configure_feed_forward_backend(model, "mlx_fused_experimental")
+
+    assert set_mpp_feed_forward_enabled(model, True) == 2
+    assert block.ff is not original_video_ff
+    assert block.audio_ff is not original_audio_ff
+    assert set_mpp_feed_forward_enabled(model, False) == 2
+    assert block.ff is original_video_ff
+    assert block.audio_ff is original_audio_ff
+    assert set_mpp_feed_forward_enabled(model, True) == 2
+    assert block.ff is not original_video_ff
+    assert block.audio_ff is not original_audio_ff
 
 
 def test_experimental_backend_can_bypass_and_reenable_without_reloading(monkeypatch):

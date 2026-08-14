@@ -61,9 +61,7 @@ def test_timed_keyframes_reject_duplicate_or_out_of_window_frames():
     import numpy as np
 
     image = np.zeros((1, 32, 32, 3), dtype=np.float32)
-    duplicate = H3TimedKeyframeStack(
-        (H3TimedKeyframe(image, 1.0), H3TimedKeyframe(image, 1.01))
-    )
+    duplicate = H3TimedKeyframeStack((H3TimedKeyframe(image, 1.0), H3TimedKeyframe(image, 1.01)))
     with pytest.raises(ValueError, match="same 24 fps frame"):
         duplicate.resolve(107)
     with pytest.raises(ValueError, match="outside"):
@@ -99,6 +97,12 @@ def test_reference_stack_rejects_audio_only_at_request_boundary():
         stack.validate_request()
 
 
+def test_timeline_audio_guide_can_be_the_only_reference():
+    stack = H3ReferenceStack().append(H3ReferenceInput("audio", _audio(), target_frame=-1))
+    stack.validate_request()
+    assert stack.metadata()["references"][0]["target_frame"] == -1
+
+
 def test_reference_video_validates_frames_fps_and_soundtrack():
     with pytest.raises(ValueError, match="at least five frames"):
         H3ReferenceInput("video", _tensor(4, 384, 640, 3), fps=24.0).validate()
@@ -118,6 +122,12 @@ def test_reference_video_validates_frames_fps_and_soundtrack():
             fps=24.0,
             temporal_density="random",
         ).validate()
+    H3ReferenceInput(
+        "video",
+        _tensor(22, 384, 640, 3),
+        fps=24.0,
+        temporal_density="automatic (conservative, experimental)",
+    ).validate()
 
 
 def test_reference_image_pixel_budget_scales_area_and_preserves_aspect():
@@ -137,9 +147,10 @@ def test_reference_video_canvas_never_enlarges_small_source():
 
 
 def test_reference_video_canvas_defaults_to_output_area():
-    assert resolve_reference_video_canvas(
-        1344, 768, 640, 384, "match output (recommended)"
-    ) == (384, 640)
+    assert resolve_reference_video_canvas(1344, 768, 640, 384, "match output (recommended)") == (
+        384,
+        640,
+    )
 
 
 def test_reference_image_pixel_budget_is_bounded():

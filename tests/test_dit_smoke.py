@@ -116,6 +116,22 @@ def test_query_chunked_attention_matches_dense_within_bf16_precision():
     assert all(block.attn.query_chunk_size == 4 for block in dit.blocks)
 
 
+def test_head_and_ffn_chunking_match_dense_within_bf16_precision():
+    dit, _, args = _forward_fixture()
+    dense_v, dense_a = dit(*args)
+    mx.eval(dense_v, dense_a)
+
+    dit.set_attention_head_chunk_size(2)
+    dit.set_ffn_row_chunk_size(4)
+    chunked_v, chunked_a = dit(*args)
+    mx.eval(chunked_v, chunked_a)
+
+    np.testing.assert_allclose(np.asarray(chunked_v), np.asarray(dense_v), rtol=2e-2, atol=2e-2)
+    np.testing.assert_allclose(np.asarray(chunked_a), np.asarray(dense_a), rtol=2e-2, atol=2e-2)
+    assert all(block.attn.head_chunk_size == 2 for block in dit.blocks)
+    assert all(block.mlp.row_chunk_size == 4 for block in dit.blocks)
+
+
 def test_modulation_cache_matches_live_projection():
     """The precomputed AdaLN table must reproduce the live projection bit-for-bit in float32."""
     dit, _, args = _forward_fixture()
@@ -375,9 +391,7 @@ def test_continuation_hidden_state_becomes_target_dependent_after_block_zero(tmp
     )
 
     captures = {
-        (item["block"], item["evaluation_index"]): mx.load(str(tmp_path / item["path"]))[
-            "tensor_0"
-        ]
+        (item["block"], item["evaluation_index"]): mx.load(str(tmp_path / item["path"]))["tensor_0"]
         for item in session.captures
     }
     # Three text rows, seven video-context rows, then 74 audio-context rows.
@@ -589,9 +603,7 @@ def test_h3_easycache_core_residual_reuses_blocks_with_fresh_output_heads():
 
 
 def test_h3_easycache_core_residual_is_applied_to_current_packed_input():
-    state = H3EasyCacheState(
-        H3EasyCacheConfig(reuse_strategy="core_residual_fresh_heads")
-    )
+    state = H3EasyCacheState(H3EasyCacheConfig(reuse_strategy="core_residual_fresh_heads"))
     before = mx.arange(24, dtype=mx.float32).reshape(1, 3, 8)
     after = before * 2
     current = mx.full(before.shape, 10.0)

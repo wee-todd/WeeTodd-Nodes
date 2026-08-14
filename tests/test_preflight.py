@@ -8,9 +8,31 @@ import pytest
 from wee_todd_nodes.preflight import (
     H3ComponentSetSpec,
     H3PreflightRequest,
+    estimate_h3_token_budget,
     preflight_components,
     read_safetensors_header,
 )
+
+
+def test_token_budget_reports_target_and_condition_rows_without_weights():
+    report = estimate_h3_token_budget(
+        H3PreflightRequest(
+            duration_seconds=5.0,
+            steps=8,
+            width=640,
+            height=384,
+            prompt_tokens=64,
+        ),
+        condition_video_rows=120,
+        condition_audio_rows=80,
+    )
+    assert report["pixel_frames"] == 124
+    assert report["video_latent_frames"] == 37
+    assert report["audio_latent_frames"] == 207
+    assert report["target_video_rows"] == 37 * 20 * 12
+    assert report["target_audio_rows"] == 207 * 2
+    assert report["packed_rows"] == 64 + 120 + 80 + 37 * 20 * 12 + 207 * 2
+    assert report["attention_score_elements_per_head"] == report["packed_rows"] ** 2
 
 
 def _json(path: Path, value: dict) -> None:

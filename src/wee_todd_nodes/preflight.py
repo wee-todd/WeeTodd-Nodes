@@ -100,8 +100,7 @@ def validate_task_partition(
     if task not in tasks:
         raise ValueError(f"Checkpoint does not support task {task!r}; supported tasks: {tasks}.")
     raise ValueError(
-        f"Checkpoint partition must be {expected_partition!r} for task {task!r}, "
-        f"got {partition!r}."
+        f"Checkpoint partition must be {expected_partition!r} for task {task!r}, got {partition!r}."
     )
 
 
@@ -566,9 +565,7 @@ def _component_resolution_error(
         selection = (
             f"No {name} override is selected. The native partition fallback is invalid: {path}."
         )
-    guidance = (
-        f"Select {expected}, or install a native {name} component at the fallback path."
-    )
+    guidance = f"Select {expected}, or install a native {name} component at the fallback path."
     if name == "transformer" and override is None:
         guidance += (
             " The logical component name 'transformer' does not require renaming a shared "
@@ -582,6 +579,44 @@ def _aligned_frames(duration_seconds: float) -> int:
     while frames % 17 != 5:
         frames += 1
     return frames
+
+
+def estimate_h3_token_budget(
+    request: H3PreflightRequest,
+    *,
+    condition_video_rows: int = 0,
+    condition_audio_rows: int = 0,
+) -> dict[str, int | float]:
+    """Estimate packed H3 rows and dense-attention scale without reading model files."""
+    request.validate()
+    if condition_video_rows < 0 or condition_audio_rows < 0:
+        raise ValueError("Condition row counts must be zero or positive.")
+    frames = _aligned_frames(request.duration_seconds)
+    video_latent_frames = (frames - 5) // 17 * 5 + 2
+    audio_latent_frames = round(frames / 24 * 40)
+    target_video_rows = video_latent_frames * (request.height // 32) * (request.width // 32)
+    target_audio_rows = audio_latent_frames * 2
+    packed_rows = (
+        request.prompt_tokens
+        + condition_video_rows
+        + condition_audio_rows
+        + target_video_rows
+        + target_audio_rows
+    )
+    return {
+        "pixel_frames": frames,
+        "video_latent_frames": video_latent_frames,
+        "audio_latent_frames": audio_latent_frames,
+        "prompt_rows": request.prompt_tokens,
+        "condition_video_rows": condition_video_rows,
+        "condition_audio_rows": condition_audio_rows,
+        "target_video_rows": target_video_rows,
+        "target_audio_rows": target_audio_rows,
+        "packed_rows": packed_rows,
+        "attention_score_elements_per_head": packed_rows * packed_rows,
+        "bf16_attention_score_bytes_per_head": packed_rows * packed_rows * 2,
+        "packed_workspace_bytes_estimate": packed_rows * 5376 * 2 * 8,
+    }
 
 
 def preflight_components(
@@ -633,9 +668,7 @@ def preflight_components(
                 )
             )
         except (FileNotFoundError, ValueError) as exc:
-            raise type(exc)(
-                _component_resolution_error(spec, name, paths[name], exc)
-            ) from exc
+            raise type(exc)(_component_resolution_error(spec, name, paths[name], exc)) from exc
     components = tuple(component_reports)
     by_name = {component.name: component for component in components}
     if spec.task in {"fl2va", "ref2va"} and by_name["text_encoder"].paging_format:
@@ -644,12 +677,13 @@ def preflight_components(
             "resident Qwen3-VL text encoder with vision weights."
         )
 
-    frames = _aligned_frames(request.duration_seconds)
-    video_latent_frames = (frames - 5) // 17 * 5 + 2
-    audio_latent_frames = round(frames / 24 * 40)
-    video_rows = video_latent_frames * (request.height // 32) * (request.width // 32)
-    audio_rows = audio_latent_frames * 2
-    packed_rows = request.prompt_tokens + video_rows + audio_rows
+    budget = estimate_h3_token_budget(request)
+    frames = int(budget["pixel_frames"])
+    video_latent_frames = int(budget["video_latent_frames"])
+    audio_latent_frames = int(budget["audio_latent_frames"])
+    video_rows = int(budget["target_video_rows"])
+    audio_rows = int(budget["target_audio_rows"])
+    packed_rows = int(budget["packed_rows"])
 
     distinct_timesteps = 2 * (request.steps - 1) + 1
     adaln_cache_bytes = 50 * 6 * distinct_timesteps * 3 * 5376 * 2
