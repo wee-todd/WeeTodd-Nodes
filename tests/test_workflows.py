@@ -267,6 +267,25 @@ def test_ltx25_high_quality_workflow_uses_verified_preset_and_prompt():
     assert "clean synchronized speech" in prompt
 
 
+@pytest.mark.parametrize(
+    "filename",
+    (
+        "ltx25_768x512_dfr_diffusion_vae.json",
+        "ltx25_768x512_dfr_temporal_48fps.json",
+    ),
+)
+def test_ltx25_prebaked_dfr_workflows_enable_required_page_streaming(filename):
+    workflow = json.loads((ROOT / "workflows/performance/t2v" / filename).read_text())
+    nodes = _execution_node_map(workflow)
+    loader = next(node for node in nodes.values() if node["type"] == "WeeToddLTX25ComponentLoader")
+    config = next(node for node in nodes.values() if node["type"] == "WeeToddLTX25GenerationConfig")
+    detailing = next(node for node in nodes.values() if node["type"] == "WeeToddLTX25DFRDetailing")
+
+    assert loader["widgets_values"][0].endswith("-q8-paged")
+    assert config["widgets_values"][7] is True
+    assert detailing["widgets_values"][2].endswith("-q8-paged")
+
+
 def test_ltx25_any_video_upscale_workflow_uses_native_movie_components():
     workflow = json.loads(
         (ROOT / "workflows/balance/video-upscale/ltx25_any_video_pixel_spatial_2x.json").read_text()
