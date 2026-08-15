@@ -270,12 +270,14 @@ def test_ltx25_high_quality_workflow_uses_verified_preset_and_prompt():
 @pytest.mark.parametrize(
     "filename",
     (
+        "../../balance/t2v/ltx25_768x512_dfr_conv_vae.json",
         "ltx25_768x512_dfr_diffusion_vae.json",
+        "ltx25_768x512_dfr_diffusion_vae_metal_tiled.json",
         "ltx25_768x512_dfr_temporal_48fps.json",
     ),
 )
 def test_ltx25_prebaked_dfr_workflows_enable_required_page_streaming(filename):
-    workflow = json.loads((ROOT / "workflows/performance/t2v" / filename).read_text())
+    workflow = json.loads((ROOT / "workflows/performance/t2v" / filename).resolve().read_text())
     nodes = _execution_node_map(workflow)
     loader = next(node for node in nodes.values() if node["type"] == "WeeToddLTX25ComponentLoader")
     config = next(node for node in nodes.values() if node["type"] == "WeeToddLTX25GenerationConfig")
@@ -284,6 +286,26 @@ def test_ltx25_prebaked_dfr_workflows_enable_required_page_streaming(filename):
     assert loader["widgets_values"][0].endswith("-q8-paged")
     assert config["widgets_values"][7] is True
     assert detailing["widgets_values"][2].endswith("-q8-paged")
+
+
+def test_ltx25_accelerated_dfr_workflow_uses_measured_metal_query_tile():
+    workflow = json.loads(
+        (
+            ROOT
+            / "workflows/performance/t2v/ltx25_768x512_dfr_diffusion_vae_metal_tiled.json"
+        ).read_text()
+    )
+    optimization = next(
+        node
+        for node in _execution_node_map(workflow).values()
+        if node["type"] == "WeeToddLTX25DiffVAEOptimization"
+    )
+    assert optimization["widgets_values"] == [
+        "metal_na3d_query_tiled_experimental",
+        65536,
+        4,
+        32,
+    ]
 
 
 def test_ltx25_any_video_upscale_workflow_uses_native_movie_components():

@@ -1,0 +1,363 @@
+{
+  "last_node_id": 7,
+  "last_link_id": 6,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "WeeToddLTX25ComponentLoader",
+      "pos": [
+        40,
+        100
+      ],
+      "size": [
+        500,
+        310
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "model",
+          "type": "WEETODD_LTX25_MODEL",
+          "links": [
+            1
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddLTX25ComponentLoader"
+      },
+      "widgets_values": [
+        "ltx-2.5-22b-dev-distilled450-q8-paged",
+        "gemma4-12b-with-proj-ltx-2.5-q8-paged",
+        "ltx-2.5-video-vae-bf16.safetensors",
+        "ltx-2.5-audio-vae-bf16.safetensors",
+        "ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors",
+        ""
+      ]
+    },
+    {
+      "id": 2,
+      "type": "WeeToddLTX25GenerationConfig",
+      "pos": [
+        40,
+        460
+      ],
+      "size": [
+        400,
+        300
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "config",
+          "type": "WEETODD_LTX25_CONFIG",
+          "links": [
+            2
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "resolved_settings",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddLTX25GenerationConfig"
+      },
+      "widgets_values": [
+        "Official parity — 768×512, 5 s, reference FP32, 8 ancestral + 3 deterministic",
+        768,
+        512,
+        5,
+        24,
+        584293325,
+        true,
+        true,
+        "official_1024",
+        "reference_fp32"
+      ]
+    },
+    {
+      "id": 3,
+      "type": "WeeToddLTX25DFRDetailing",
+      "pos": [
+        500,
+        470
+      ],
+      "size": [
+        520,
+        210
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "config",
+          "type": "WEETODD_LTX25_CONFIG",
+          "link": 2
+        }
+      ],
+      "outputs": [
+        {
+          "name": "config",
+          "type": "WEETODD_LTX25_CONFIG",
+          "links": [
+            6
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "dfr_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddLTX25DFRDetailing"
+      },
+      "widgets_values": [
+        "LTX-2.5/ltx-2.5-22b-ic-lora-pixel-spatial-upscaler-x2-1.0.safetensors",
+        1,
+        "ltx-2.5-22b-dev-distilled450-detail2x-q8-paged"
+      ]
+    },
+    {
+      "id": 4,
+      "type": "WeeToddLTX25Preflight",
+      "pos": [
+        1080,
+        120
+      ],
+      "size": [
+        380,
+        190
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "WEETODD_LTX25_MODEL",
+          "link": 1
+        },
+        {
+          "name": "config",
+          "type": "WEETODD_LTX25_CONFIG",
+          "link": 3
+        }
+      ],
+      "outputs": [
+        {
+          "name": "model",
+          "type": "WEETODD_LTX25_MODEL",
+          "links": [
+            4
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "preflight_report",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddLTX25Preflight"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 5,
+      "type": "WeeToddLTX25Generate",
+      "pos": [
+        1530,
+        120
+      ],
+      "size": [
+        520,
+        440
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "WEETODD_LTX25_MODEL",
+          "link": 4
+        },
+        {
+          "name": "config",
+          "type": "WEETODD_LTX25_CONFIG",
+          "link": 5
+        },
+        {
+          "name": "first_frame",
+          "type": "IMAGE",
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "name": "video_path",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 0
+        },
+        {
+          "name": "generation_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddLTX25Generate"
+      },
+      "widgets_values": [
+        "Live-action cinematic medium-wide continuous shot inside a quiet neighborhood bakery at dawn, lit by warm amber oven light and cool blue window light across worn wood counters and flour-dusted surfaces. A gray-haired man in a dark green apron slides a metal tray of bread toward the glowing oven while a small orange cat watches from a nearby stool. One loaf slowly swells into a comically perfect dome; the baker stops, narrows his eyes, leans closer, and steadies the tray with both hands. He tilts his head toward the loaf and says in a dry, quiet voice, “Well, you are ambitious.” The camera makes one restrained push toward the baker, ending in a medium close-up that keeps his puzzled face, the domed loaf, and the attentive cat clearly visible without a cut. Warm oven crackle, soft metal tray scrapes, faint cloth movement, distant morning birds, and clean synchronized speech occupy one continuous acoustic space; no music.",
+        "WeeTodd/LTX25_DFR_diffvae_metal_tiled",
+        true
+      ]
+    },
+    {
+      "id": 6,
+      "type": "MarkdownNote",
+      "pos": [
+        40,
+        -540
+      ],
+      "size": [
+        980,
+        560
+      ],
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "title": "Setup and model downloads",
+      "properties": {},
+      "widgets_values": [
+        "## LTX 2.5 accelerated DFR Diffusion VAE — experimental\n\n1. Accept the LTX 2.5 license and download the split components.\n2. Build the two exact prebaked Q8 DFR page sets from the original development-model Q8 pages.\n3. Put the Diffusion VAE in `ComfyUI/models/vae/`.\n4. Put the Pixel-Spatial IC-LoRA in `ComfyUI/models/loras/LTX-2.5/`.\n5. Run Preflight before generation.\n6. Queue the workflow after Preflight succeeds.\n\nThis workflow keeps exact prebaked DFR sampling and uses the approximate query-tiled Metal neighborhood-attention decoder with a 65,536-row query tile. In a matched 768×512 five-second validation, decode fell from 966.45 to 74.72 seconds and complete-process peak fell from 164.58 to 14.01 GB. The result measured SSIM 0.98763 and PSNR 46.72 dB against the exact Diffusion VAE output. Audio remained identical. Use the practical Conv-VAE workflow when speed and memory matter more than Diffusion VAE detail.\n\n### Downloads\n\n- [LTX 2.5 development transformer, distilled LoRA, and components](https://huggingface.co/Lightricks/LTX-2.5)\n- [Pixel-Spatial IC-LoRA](https://huggingface.co/Lightricks/LTX-2.5-22b-IC-LoRA-Pixel-Spatial-Upscaler)"
+      ],
+      "color": "#243447",
+      "bgcolor": "#15202b"
+    },
+    {
+      "id": 7,
+      "type": "WeeToddLTX25DiffVAEOptimization",
+      "pos": [
+        1040,
+        470
+      ],
+      "size": [
+        520,
+        220
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "config",
+          "type": "WEETODD_LTX25_CONFIG",
+          "link": 6
+        }
+      ],
+      "outputs": [
+        {
+          "name": "config",
+          "type": "WEETODD_LTX25_CONFIG",
+          "links": [
+            3,
+            5
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "diffvae_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddLTX25DiffVAEOptimization"
+      },
+      "widgets_values": [
+        "metal_na3d_query_tiled_experimental",
+        65536,
+        4,
+        32
+      ]
+    }
+  ],
+  "links": [
+    [
+      1,
+      1,
+      0,
+      4,
+      0,
+      "WEETODD_LTX25_MODEL"
+    ],
+    [
+      2,
+      2,
+      0,
+      3,
+      0,
+      "WEETODD_LTX25_CONFIG"
+    ],
+    [
+      3,
+      7,
+      0,
+      4,
+      1,
+      "WEETODD_LTX25_CONFIG"
+    ],
+    [
+      4,
+      4,
+      0,
+      5,
+      0,
+      "WEETODD_LTX25_MODEL"
+    ],
+    [
+      5,
+      7,
+      0,
+      5,
+      1,
+      "WEETODD_LTX25_CONFIG"
+    ],
+    [
+      6,
+      3,
+      0,
+      7,
+      0,
+      "WEETODD_LTX25_CONFIG"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {},
+  "version": 0.4
+}
