@@ -46,6 +46,12 @@ def _parser() -> argparse.ArgumentParser:
         default="combined",
     )
     parser.add_argument("--diffvae-query-chunk-size", type=int, default=512)
+    parser.add_argument(
+        "--decode-mode",
+        choices=("both", "conv", "diffusion"),
+        default="both",
+        help="Decode only the requested VAE path when reusing a latent.",
+    )
     return parser
 
 
@@ -59,6 +65,18 @@ def _require_paths(args: argparse.Namespace) -> None:
         ):
             raise FileNotFoundError(f"Missing --{name.replace('_', '-')}: {value}")
     args.output_prefix.parent.mkdir(parents=True, exist_ok=True)
+
+
+def _decode_targets(mode: str, conv_vae: Path, diffusion_vae: Path) -> tuple[tuple[str, Path], ...]:
+    targets = {
+        "both": (("conv", conv_vae), ("diffusion", diffusion_vae)),
+        "conv": (("conv", conv_vae),),
+        "diffusion": (("diffusion", diffusion_vae),),
+    }
+    try:
+        return targets[mode]
+    except KeyError as error:
+        raise ValueError(f"Unknown decode mode: {mode}") from error
 
 
 def main() -> int:
@@ -144,7 +162,8 @@ def main() -> int:
         audio_seconds = 0.0
 
     decode_reports: dict[str, dict[str, float | int]] = {}
-    for name, vae_path in (("conv", args.conv_vae), ("diffusion", args.diffusion_vae)):
+    decode_targets = _decode_targets(args.decode_mode, args.conv_vae, args.diffusion_vae)
+    for name, vae_path in decode_targets:
         decoder = LTX25VideoDecoder(
             vae_path,
             verbose=True,
@@ -170,6 +189,12 @@ def main() -> int:
         mx.clear_cache()
 
     outputs["audio"].unlink(missing_ok=True)
+    reported_outputs = {name: str(outputs[name]) for name, _ in decode_targets}
+    reported_outputs["report"] = str(outputs["report"])
+    if args.reuse_latent is None:
+        reported_outputs["latent"] = str(outputs["latent"])
+    else:
+        reported_outputs["reused_latent"] = str(args.reuse_latent)
     report = {
         "prompt": prompt,
         "seed": args.seed,
@@ -183,9 +208,10 @@ def main() -> int:
         "dfr_enabled": args.dfr_detailing_lora is not None,
         "diffvae_optimization": args.diffvae_optimization,
         "diffvae_query_chunk_size": args.diffvae_query_chunk_size,
+        "decode_mode": args.decode_mode,
         "decode": decode_reports,
         "total_seconds": time.perf_counter() - total_started,
-        "outputs": {name: str(path) for name, path in outputs.items() if name != "audio"},
+        "outputs": reported_outputs,
     }
     outputs["report"].write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(report, indent=2))
