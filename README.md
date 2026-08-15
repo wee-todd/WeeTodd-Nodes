@@ -55,7 +55,7 @@ Frames** when the graph needs numbered middle frames.
 | --- | --- | --- |
 | Balance | [LTX 2.3 two-stage](workflows/balance/t2v/ltx23_two_stage.json) | Standalone LTX 2.3 synchronized generation. |
 | Balance | [LTX 2.5 768×512](workflows/balance/t2v/ltx25_768x512_two_stage.json) | Recommended LTX 2.5 starting point with the official 8+3 schedule. |
-| Performance | [LTX 2.5 768×512 DFR + Diffusion VAE](workflows/performance/t2v/ltx25_768x512_dfr_diffusion_vae.json) | Experimental full-resolution detail generation and one-step pixel-diffusion decode. |
+| Performance | [LTX 2.5 768×512 DFR + Diffusion VAE](workflows/performance/t2v/ltx25_768x512_dfr_diffusion_vae.json) | Experimental full-resolution detail generation with exact prebaked Q8 adapters and one-step pixel-diffusion decode. |
 | Performance | [LTX 2.5 768×512 DFR temporal 48 fps](workflows/performance/t2v/ltx25_768x512_dfr_temporal_48fps.json) | Diagnostic-only learned temporal refinement with untouched stage-one audio; current MLX visual parity is not production-ready. |
 | Performance | [LTX 2.5 1920×1088](workflows/performance/t2v/ltx25_1920x1088_two_stage.json) | High-resolution quality-first generation. |
 | Balance | [LTX 2.5 chained timeline](workflows/balance/continuation/ltx25_768p_15s_three_window_chain.json) | Experimental long-timeline continuation and selective regeneration. |
@@ -156,6 +156,8 @@ in standard ComfyUI folders.
 | `models/model_patches/LTX-2.5/` | Optional automatic duration: `ltx-2.5-duration-head-bf16.safetensors` |
 | `models/loras/LTX-2.5/` | Optional DFR: [`ltx-2.5-22b-ic-lora-pixel-spatial-upscaler-x2-1.0.safetensors`](https://huggingface.co/Lightricks/LTX-2.5-22b-IC-LoRA-Pixel-Spatial-Upscaler) |
 | `models/loras/` | Official DFR: `ltx-2.5-22b-distilled-lora-450-bf16.safetensors` |
+| `models/diffusion_models/` | Derived DFR stage one: `ltx-2.5-22b-dev-distilled450-q8-paged/` |
+| `models/diffusion_models/` | Derived DFR stage two: `ltx-2.5-22b-dev-distilled450-detail2x-q8-paged/` |
 
 The video-refine workflow also requires the
 [pixel-spatial upscaler IC-LoRA](https://huggingface.co/Lightricks/LTX-2.5-22b-IC-LoRA-Pixel-Spatial-Upscaler)
@@ -164,6 +166,29 @@ under `models/loras/LTX-2.5/`.
 Use `scripts/convert_ltx25_paged_q8.py` to create directly loadable Q8 pages. Keep the licensed BF16
 source files and checkpoint terms. Generated page directories are model artifacts and must not be
 committed.
+
+For the optimized DFR workflow, build both adapter page sets from the same original development
+transformer Q8 pages. The first command bakes the rank-450 adapter for stage one. The second command
+bakes the rank-450 and Pixel-Spatial adapters together for stage two.
+
+```bash
+"$COMFYUI_ROOT/.venv/bin/python" \
+  "$COMFYUI_ROOT/custom_nodes/WeeTodd-Nodes/scripts/fuse_ltx25_paged_lora.py" \
+  "$COMFYUI_ROOT/models/diffusion_models/ltx-2.5-22b-dev-transformer-q8-paged" \
+  "$COMFYUI_ROOT/models/loras/ltx-2.5-22b-distilled-lora-450-bf16.safetensors" \
+  "$COMFYUI_ROOT/models/diffusion_models/ltx-2.5-22b-dev-distilled450-q8-paged"
+
+"$COMFYUI_ROOT/.venv/bin/python" \
+  "$COMFYUI_ROOT/custom_nodes/WeeTodd-Nodes/scripts/fuse_ltx25_paged_lora.py" \
+  "$COMFYUI_ROOT/models/diffusion_models/ltx-2.5-22b-dev-transformer-q8-paged" \
+  "$COMFYUI_ROOT/models/loras/ltx-2.5-22b-distilled-lora-450-bf16.safetensors" \
+  "$COMFYUI_ROOT/models/diffusion_models/ltx-2.5-22b-dev-distilled450-detail2x-q8-paged" \
+  --extra-lora \
+  "$COMFYUI_ROOT/models/loras/LTX-2.5/ltx-2.5-22b-ic-lora-pixel-spatial-upscaler-x2-1.0.safetensors"
+```
+
+Do not build stage two from the stage-one pages. Sequential requantization changes video output.
+Preflight verifies the stage-one adapter, stage-two adapter, and selected Pixel-Spatial adapter.
 
 ## Live H3 previews
 
@@ -200,7 +225,7 @@ work. Results apply to the stated workflow and hardware conditions.
 | LTX 2.5 query-tiled Metal Diffusion VAE | Decode memory | High | A 65,536-row tile reduced matched 512×512 Metal peak from 5.41 to 4.24 GB. Decode time changed from 15.83 to 16.77 s, and the MP4 digest remained identical. | Select `metal_na3d_query_tiled_experimental` only when Diffusion VAE memory has priority. Fine tiles are substantially slower. |
 | LTX 2.5 automatic duration | Usability | Low runtime cost | A real Q8 prompt probe spent 0.027 s in the MLX duration head after prompt encoding. | Opt-in modifier; manual duration remains authoritative unless connected. Raw predicted seconds and resolved `8k+1` frames are recorded. |
 | LTX 2.5 Diffusion VAE width tiling | Decode memory | Experimental | A 32-cell stage-four stripe reduced 512×512 peak from 8.27 GB to 7.62 GB. | Decode slowed from 61.99 s to 100.13 s and output was not pixel-identical. Select `stage4_width_tiles` only when memory is the priority. |
-| LTX 2.5 DFR | Full-resolution detail | Experimental | The official development-transformer plus rank-450 distilled-LoRA stack completed a 256×256, two-second, 11-evaluation probe in 100.36 s. MLX peak was 17.66 GB and complete-process peak was 16.36 GB. | Applies every block and non-block LoRA target, uses deterministic Euler in both spatial stages, and adds a stage-two-only Pixel-Spatial IC-LoRA. DFR changes composition and motion but preserves stage-one audio. |
+| LTX 2.5 DFR | Full-resolution detail | Experimental | Exact prebaked Q8 pages completed the matched 256×256, two-second, 11-evaluation probe in 19.41 s versus 89.91 s with live Q8 LoRA fusion. Complete-process peak was 9.49 GB versus 15.65 GB. | Decoded video and PCM audio hashes matched the live-Q8 control. Separate stage-one and stage-two page sets avoid repeated fusion and sequential requantization. DFR changes composition and motion but preserves stage-one audio. |
 | LTX 2.5 DFR temporal refinement | Motion smoothness | Not production-ready | After correcting stage two to deterministic Euler, a 768×512 Q8-paged I2V probe produced 97 frames at 48 fps in 127.97 s and peaked at 9.65 GB. A matched control took 63.58 s and peaked at 9.46 GB. | Streams, audio preservation, first-frame landing, and evaluation counts pass. Both Q8 and BF16 temporal probes develop matching mid-clip color corruption, so quantization is not the cause. Keep this path diagnostic-only. |
 
 ### Remaining optimization priorities
@@ -302,7 +327,7 @@ This table is generated from the registered node contracts. Run
 | LTX 2.5 Automatic Duration | Predict one-shot duration from the prompt with the official LTX 2.5 duration head. The manual duration remains unchanged when this modifier is not connected. | LTX 2.5 — Core | Supported |
 | LTX 2.5 Generated Keyframes | Apply LTX 2.5 generated interior keyframe slots as a composable config modifier. | LTX 2.5 — Conditioning | Supported |
 | LTX 2.5 Diffusion VAE Optimization | Select an MLX Diffusion VAE execution layout. It does not affect the convolutional VAE. | LTX 2.5 — Optimization | Experimental |
-| LTX 2.5 DFR Detail Refinement | Enable MLX Diffusion Fidelity Rendering: segment-grid generated keyframes, stage-one latent reference conditioning, stage-two-only Pixel-Spatial IC-LoRA, and untouched stage-one audio publication. | LTX 2.5 — Conditioning | Experimental |
+| LTX 2.5 DFR Detail Refinement | Enable MLX Diffusion Fidelity Rendering: segment-grid generated keyframes, stage-one latent reference conditioning, stage-two-only Pixel-Spatial IC-LoRA, optional exact prebaked Q8 adapter pages, and untouched stage-one audio publication. | LTX 2.5 — Conditioning | Experimental |
 | LTX 2.5 DFR Temporal Refinement | Experimentally add one or two learned x2 temporal DFR rounds. Each round preserves stage-one audio, doubles playback frame rate, reapplies one-shot image anchors, and adds four transformer evaluations per temporal tile. Current MLX visual parity is not yet production-validated. | LTX 2.5 — Conditioning | Experimental |
 | LTX 2.5 Preflight | Validate LTX 2.5 component metadata and architecture requirements before allocation. | LTX 2.5 — Loaders | Experimental |
 | LTX 2.5 Timed Keyframe | Append a first, middle, or last image at an exact zero-based pixel-frame index. Nonzero frames use LTX 2.5's generated-keyframe token slots. | LTX 2.5 — Conditioning | Supported |

@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import gc
+import hashlib
 import inspect
 import json
 import time
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
+from functools import lru_cache
 from pathlib import Path
 from threading import RLock
 from typing import Any
@@ -39,6 +41,17 @@ LTX25_DISTILLED_SIGMAS = (1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725,
 LTX25_STAGE2_SIGMAS = (0.909375, 0.725, 0.421875, 0.0)
 
 
+@lru_cache(maxsize=16)
+def _checkpoint_sha256(path: str, size: int, mtime_ns: int) -> str:
+    """Hash a stable checkpoint identity once per process."""
+    del size, mtime_ns
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(8 * 1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def resolve_ltx25_dfr_recipe(
     config: LTX25GenerationConfig, component_report: dict[str, object]
 ) -> str:
@@ -61,7 +74,61 @@ def resolve_ltx25_dfr_recipe(
                 and component.get("lora_alpha") == 450
             ):
                 return "official_dev_distilled_lora"
+    baked_loras = component_report.get("transformer_baked_loras", ())
+    if isinstance(baked_loras, list):
+        for adapter in baked_loras:
+            if not isinstance(adapter, dict):
+                continue
+            if (
+                adapter.get("adapter_role") == "transformer_lora"
+                and adapter.get("lora_rank") == 450
+                and adapter.get("lora_alpha") == 450
+            ):
+                return "official_dev_distilled_lora"
     return "fused_distilled_experimental"
+
+
+def validate_ltx25_dfr_prebaked_pair(
+    config: LTX25GenerationConfig, component_report: dict[str, object]
+) -> None:
+    """Require stage-one and stage-two pages to contain the same base adapter."""
+    if not config.dfr_prebaked_transformer_path:
+        return
+    from .paged_checkpoint import LTX25PagedManifest
+
+    stage1 = component_report.get("transformer_baked_loras", ())
+    stage2 = LTX25PagedManifest.load(config.dfr_prebaked_transformer_path).metadata.get(
+        "weetodd_baked_loras", ()
+    )
+    stage1_hashes = {
+        item.get("sha256")
+        for item in stage1
+        if isinstance(item, dict) and item.get("adapter_role") == "transformer_lora"
+    }
+    stage2_hashes = {
+        item.get("sha256")
+        for item in stage2
+        if isinstance(item, dict) and item.get("adapter_role") == "transformer_lora"
+    }
+    if not stage1_hashes or stage1_hashes.isdisjoint(stage2_hashes):
+        raise ValueError(
+            "The DFR stage-one and stage-two paged transformers must contain the same "
+            "base transformer LoRA. Rebuild both page sets from the original Q8 base."
+        )
+    detail_path = Path(config.dfr_detailing_lora_path)
+    detail_stat = detail_path.stat()
+    detail_hashes = {
+        item.get("sha256")
+        for item in stage2
+        if isinstance(item, dict) and item.get("adapter_role") == "ic_lora"
+    }
+    if _checkpoint_sha256(
+        str(detail_path.resolve()), detail_stat.st_size, detail_stat.st_mtime_ns
+    ) not in detail_hashes:
+        raise ValueError(
+            "The DFR stage-two paged transformer does not contain the selected "
+            "Pixel-Spatial IC-LoRA. Rebuild the stage-two pages with that adapter."
+        )
 
 
 def _metadata(path: Path) -> dict[str, object]:
@@ -281,6 +348,7 @@ class LTX25ComponentSpec:
             "video_scale_factors": list(scale_factors),
             "video_decoder": _decoder_kind(video_vae_meta),
             "transformer_architecture": architecture,
+            "transformer_baked_loras": transformer_meta.get("weetodd_baked_loras", []),
             "components": inventory,
             "checkpoint_bytes": total,
         }
@@ -314,6 +382,7 @@ class LTX25GenerationConfig:
     dfr_enabled: bool = False
     dfr_detailing_lora_path: str = ""
     dfr_detailing_lora_strength: float = 1.0
+    dfr_prebaked_transformer_path: str = ""
     dfr_temporal_upsampler_path: str = ""
     dfr_temporal_rounds: int = 0
     diffvae_optimization: str = "combined"
@@ -391,6 +460,21 @@ class LTX25GenerationConfig:
             detail = inspect_ltx25_ic_lora(detail_path)
             if detail["reference_downscale_factor"] != 2:
                 raise ValueError("LTX 2.5 DFR requires a 2x Pixel-Spatial IC-LoRA.")
+            if self.dfr_prebaked_transformer_path:
+                from .paged_checkpoint import LTX25PagedManifest
+
+                prebaked = LTX25PagedManifest.load(self.dfr_prebaked_transformer_path)
+                baked = prebaked.metadata.get("weetodd_baked_loras", [])
+                roles = {
+                    item.get("adapter_role")
+                    for item in baked
+                    if isinstance(item, dict)
+                }
+                if "transformer_lora" not in roles or "ic_lora" not in roles:
+                    raise ValueError(
+                        "The DFR prebaked transformer must contain the base transformer "
+                        "LoRA and Pixel-Spatial IC-LoRA."
+                    )
         if self.dfr_temporal_rounds not in {0, 1, 2}:
             raise ValueError("LTX 2.5 DFR temporal rounds must be zero, one, or two.")
         if self.dfr_temporal_rounds:
@@ -525,6 +609,7 @@ class LTX25RuntimeCache:
         report = spec.validate(config.pipeline_mode)
         scales = tuple(int(value) for value in report["video_scale_factors"])
         config.validate(scale_factors=scales)
+        validate_ltx25_dfr_prebaked_pair(config, report)
         key = (
             spec,
             config.low_memory,
@@ -536,6 +621,7 @@ class LTX25RuntimeCache:
             config.diffvae_stage4_tile_width,
             config.dfr_temporal_upsampler_path,
             config.dfr_temporal_rounds,
+            config.dfr_prebaked_transformer_path,
         )
         with self._lock:
             if self._pipeline is None or self._key != key:
@@ -555,6 +641,7 @@ class LTX25RuntimeCache:
                     "diffvae_context_width_chunks": config.diffvae_context_width_chunks,
                     "diffvae_stage4_tile_width": config.diffvae_stage4_tile_width,
                     "temporal_upsampler_path": config.dfr_temporal_upsampler_path,
+                    "dfr_stage2_transformer_path": config.dfr_prebaked_transformer_path,
                     "loras": spec.loras,
                 }
                 signature = inspect.signature(pipeline_class)

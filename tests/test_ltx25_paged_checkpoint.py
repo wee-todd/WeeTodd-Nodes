@@ -9,7 +9,9 @@ from ltx25_mlx.paged_checkpoint import (
     PAGED_TRANSFORMER_FORMAT,
     LTX25PagedManifest,
     convert_to_paged_q8,
+    fuse_paged_transformer_loras,
 )
+from ltx25_mlx.runtime import LTX25GenerationConfig, validate_ltx25_dfr_prebaked_pair
 from ltx25_mlx.transformer import transformer_metadata
 
 
@@ -79,6 +81,119 @@ def test_streamed_q8_converter_refuses_overwrite(tmp_path):
     destination.mkdir()
     with pytest.raises(FileExistsError):
         convert_to_paged_q8(source, destination, kind="gemma")
+
+
+def test_paged_lora_fusion_bakes_block_and_non_block_targets(tmp_path):
+    source = tmp_path / "source.safetensors"
+    block_key = "model.diffusion_model.transformer_blocks.0.attn1.to_q.weight"
+    fixed_key = "model.diffusion_model.adaln_single.emb.timestep_embedder.linear_1.weight"
+    connector_key = "model.diffusion_model.video_embeddings_connector.0.weight"
+    mx.save_safetensors(
+        str(source),
+        {
+            block_key: mx.zeros((64, 64), dtype=mx.bfloat16),
+            fixed_key: mx.zeros((64, 64), dtype=mx.bfloat16),
+            connector_key: mx.ones((3, 3), dtype=mx.bfloat16),
+        },
+        metadata={"model_version": "2.5.0", "config": json.dumps({"transformer": {}})},
+    )
+    paged = convert_to_paged_q8(source, tmp_path / "paged", kind="transformer")
+    adapter = tmp_path / "adapter.safetensors"
+    mx.save_safetensors(
+        str(adapter),
+        {
+            "diffusion_model.transformer_blocks.0.attn1.to_q.lora_A.weight": mx.ones(
+                (2, 64), dtype=mx.bfloat16
+            ),
+            "diffusion_model.transformer_blocks.0.attn1.to_q.lora_B.weight": mx.ones(
+                (64, 2), dtype=mx.bfloat16
+            ),
+            "diffusion_model.adaln_single.emb.timestep_embedder.linear_1.lora_A.weight": mx.ones(
+                (2, 64), dtype=mx.bfloat16
+            ),
+            "diffusion_model.adaln_single.emb.timestep_embedder.linear_1.lora_B.weight": mx.ones(
+                (64, 2), dtype=mx.bfloat16
+            ),
+        },
+        metadata={"model_version": "2.5.0", "lora_rank": "2", "lora_alpha": "2"},
+    )
+    fused = fuse_paged_transformer_loras(
+        paged.root, tmp_path / "fused", ((adapter, 0.5),)
+    )
+    assert LTX25PagedManifest.load(fused.root, verify_hashes=True) == fused
+    assert fused.metadata["weetodd_baked_loras"][0]["lora_rank"] == 2
+    fixed = mx.load(str(fused.fixed_path))
+    layer = mx.load(str(fused.layer_paths[0]))
+    assert mx.any(fixed[fixed_key] != 0).item()
+    assert mx.array_equal(fixed[connector_key], mx.ones((3, 3), dtype=mx.bfloat16))
+    module = block_key.removesuffix(".weight")
+    restored = mx.dequantize(
+        layer[block_key],
+        layer[f"{module}.scales"],
+        layer[f"{module}.biases"],
+        group_size=64,
+        bits=8,
+        mode="affine",
+    )
+    assert mx.any(restored != 0).item()
+    with pytest.raises(ValueError, match="original Q8 pages"):
+        fuse_paged_transformer_loras(
+            fused.root, tmp_path / "sequential", ((adapter, 0.5),)
+        )
+
+
+def test_dfr_prebaked_pair_validates_adapter_provenance(tmp_path):
+    source = tmp_path / "source.safetensors"
+    block_key = "model.diffusion_model.transformer_blocks.0.attn1.to_q.weight"
+    mx.save_safetensors(
+        str(source),
+        {block_key: mx.zeros((64, 64), dtype=mx.bfloat16)},
+        metadata={"model_version": "2.5.0", "config": json.dumps({"transformer": {}})},
+    )
+    paged = convert_to_paged_q8(source, tmp_path / "paged", kind="transformer")
+
+    base = tmp_path / "base.safetensors"
+    detail = tmp_path / "detail.safetensors"
+    adapter_values = {
+        "diffusion_model.transformer_blocks.0.attn1.to_q.lora_A.weight": mx.ones(
+            (2, 64), dtype=mx.bfloat16
+        ),
+        "diffusion_model.transformer_blocks.0.attn1.to_q.lora_B.weight": mx.ones(
+            (64, 2), dtype=mx.bfloat16
+        ),
+    }
+    mx.save_safetensors(
+        str(base),
+        adapter_values,
+        metadata={"model_version": "2.5.0", "lora_rank": "450", "lora_alpha": "450"},
+    )
+    mx.save_safetensors(
+        str(detail),
+        adapter_values,
+        metadata={"model_version": "2.5.0", "reference_downscale_factor": "2"},
+    )
+    combined = fuse_paged_transformer_loras(
+        paged.root, tmp_path / "combined", ((base, 1.0), (detail, 1.0))
+    )
+    baked = combined.metadata["weetodd_baked_loras"]
+    config = LTX25GenerationConfig(
+        dfr_prebaked_transformer_path=str(combined.root),
+        dfr_detailing_lora_path=str(detail),
+    )
+    validate_ltx25_dfr_prebaked_pair(
+        config,
+        {"transformer_baked_loras": [baked[0]]},
+    )
+    changed_detail = tmp_path / "changed-detail.safetensors"
+    changed_detail.write_bytes(detail.read_bytes() + b"changed")
+    with pytest.raises(ValueError, match="selected Pixel-Spatial"):
+        validate_ltx25_dfr_prebaked_pair(
+            LTX25GenerationConfig(
+                dfr_prebaked_transformer_path=str(combined.root),
+                dfr_detailing_lora_path=str(changed_detail),
+            ),
+            {"transformer_baked_loras": [baked[0]]},
+        )
 
 
 def test_ltx25_page_prefetch_is_bounded_and_reports_metrics(tmp_path):

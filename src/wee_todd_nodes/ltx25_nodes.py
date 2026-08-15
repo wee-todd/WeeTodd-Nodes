@@ -16,6 +16,7 @@ from ltx25_mlx.runtime import (
     LTX25GenerationConfig,
     apply_ltx25_generation_preset,
     backend_capability,
+    validate_ltx25_dfr_prebaked_pair,
 )
 from ltx25_mlx.upscale_contracts import (
     LTX25_INPUT_SIZE_POLICIES,
@@ -206,7 +207,7 @@ class WeeToddLTX25ComponentLoader:
                         "tooltip": "Optional. Explicit duration is used when this is empty.",
                     },
                 ),
-            }
+            },
         }
 
     RETURN_TYPES = ("WEETODD_LTX25_MODEL",)
@@ -566,7 +567,19 @@ class WeeToddLTX25DFRDetailing:
                     "FLOAT",
                     {"default": 1.0, "min": 0.05, "max": 2.0, "step": 0.05},
                 ),
-            }
+            },
+            "optional": {
+                "prebaked_stage2_transformer": (
+                    "STRING",
+                    {
+                        "default": "",
+                        "tooltip": (
+                            "Optional paged Q8 transformer with the base and Pixel-Spatial "
+                            "LoRAs already baked together. Leave empty for live fusion."
+                        ),
+                    },
+                )
+            },
         }
 
     RETURN_TYPES = ("WEETODD_LTX25_CONFIG", "STRING")
@@ -576,17 +589,23 @@ class WeeToddLTX25DFRDetailing:
     DESCRIPTION = (
         "Enable MLX Diffusion Fidelity Rendering: segment-grid generated keyframes, "
         "stage-one latent reference conditioning, stage-two-only Pixel-Spatial IC-LoRA, "
-        "and untouched stage-one audio publication."
+        "optional exact prebaked Q8 adapter pages, and untouched stage-one audio publication."
     )
 
-    def apply(self, config, detailing_lora, strength):
+    def apply(self, config, detailing_lora, strength, prebaked_stage2_transformer=""):
         resolved = _resolve_component(detailing_lora, ("loras", "ltx25"))
+        prebaked = (
+            _resolve_component(prebaked_stage2_transformer, ("diffusion_models", "ltx25"))
+            if prebaked_stage2_transformer.strip()
+            else None
+        )
         updated = replace(
             config,
             generated_keyframes=0,
             dfr_enabled=True,
             dfr_detailing_lora_path=str(resolved),
             dfr_detailing_lora_strength=float(strength),
+            dfr_prebaked_transformer_path=str(prebaked) if prebaked is not None else "",
         )
         updated.validate()
         from ltx25_mlx.dfr import resolve_dfr_canvas
@@ -597,6 +616,9 @@ class WeeToddLTX25DFRDetailing:
                 "enabled": True,
                 "detailing_lora": str(resolved),
                 "strength": float(strength),
+                "prebaked_stage2_transformer": (
+                    str(prebaked) if prebaked is not None else None
+                ),
                 "requested_frames": updated.num_frames,
                 "internal_canvas_frames": padded,
                 "segment_frames": segment,
@@ -685,6 +707,7 @@ class WeeToddLTX25Preflight:
         report = model.validate(config.pipeline_mode)
         scale_factors = tuple(int(value) for value in report["video_scale_factors"])
         config.validate(scale_factors=scale_factors)
+        validate_ltx25_dfr_prebaked_pair(config, report)
         result = {
             "component_contract_ok": True,
             "mlx_backend": backend_capability(),
@@ -735,6 +758,7 @@ class WeeToddLTX25Generate:
 
         report = model.validate(config.pipeline_mode)
         config.validate(scale_factors=tuple(int(value) for value in report["video_scale_factors"]))
+        validate_ltx25_dfr_prebaked_pair(config, report)
         released = _release_h3_stages()
         final = _safe_target(filename_prefix, config.seed)
         final.parent.mkdir(parents=True, exist_ok=True)

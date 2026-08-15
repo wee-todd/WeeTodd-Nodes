@@ -74,6 +74,7 @@ class LTX25DistilledPipeline:
         spatial_upscaler_path: str,
         duration_head_path: str = "",
         temporal_upsampler_path: str = "",
+        dfr_stage2_transformer_path: str = "",
         low_memory: bool = True,
         low_ram_streaming: bool = False,
         feed_forward_backend: str = "reference_fp32",
@@ -90,6 +91,9 @@ class LTX25DistilledPipeline:
         self.spatial_upscaler_path = Path(spatial_upscaler_path)
         self.temporal_upsampler_path = (
             Path(temporal_upsampler_path) if temporal_upsampler_path else None
+        )
+        self.dfr_stage2_transformer_path = (
+            Path(dfr_stage2_transformer_path) if dfr_stage2_transformer_path else None
         )
         self.low_memory = low_memory
         self.low_ram_streaming = low_ram_streaming
@@ -113,6 +117,7 @@ class LTX25DistilledPipeline:
         self.audio_decoder_block = LTX25AudioDecoder(audio_vae_path)
         self.dit = None
         self._loaded_loras = None
+        self._loaded_transformer_path: Path | None = None
         self.upsampler = None
         self.temporal_upsampler = None
         self.duration_head = None
@@ -141,18 +146,24 @@ class LTX25DistilledPipeline:
         self,
         *,
         extra_loras: tuple[tuple[str, float], ...] = (),
+        transformer_path: Path | None = None,
     ) -> None:
+        desired_path = transformer_path or self.transformer_path
         desired_loras = (*self.loras, *extra_loras)
-        if self.dit is not None and self._loaded_loras != desired_loras:
+        if self.dit is not None and (
+            self._loaded_loras != desired_loras
+            or self._loaded_transformer_path != desired_path
+        ):
             self._release_transformer()
         if self.dit is None:
             self.dit = load_ltx25_transformer(
-                self.transformer_path,
+                desired_path,
                 low_ram_streaming=self.low_ram_streaming,
                 feed_forward_backend=self.feed_forward_backend,
                 loras=desired_loras,
             )
             self._loaded_loras = desired_loras
+            self._loaded_transformer_path = desired_path
             self.feed_forward_report = getattr(self.dit, "feed_forward_backend_report", None)
             self.paged_transformer_report = getattr(self.dit, "paged_checkpoint_report", None)
 
@@ -169,6 +180,7 @@ class LTX25DistilledPipeline:
                 streamer.close()
         self.dit = None
         self._loaded_loras = None
+        self._loaded_transformer_path = None
 
     def _release_sampling(self) -> None:
         self._release_transformer()
@@ -964,7 +976,12 @@ class LTX25DistilledPipeline:
         aggressive_cleanup()
         timings["stage_boundary_cleanup_seconds"] = time.perf_counter() - cleanup_started
         if dfr_detailing_lora is not None:
-            self.load(extra_loras=(dfr_detailing_lora,))
+            if self.dfr_stage2_transformer_path is not None:
+                self._load_transformer(
+                    transformer_path=self.dfr_stage2_transformer_path,
+                )
+            else:
+                self.load(extra_loras=(dfr_detailing_lora,))
             model = X0Model(self.dit)
         if dfr_enabled:
             set_generated_keyframe_marker(self.dit, stage2_generated_slot_rows)
