@@ -234,7 +234,7 @@ work. Results apply to the stated workflow and hardware conditions.
 
 | Rank | Candidate | Potential gain | Confidence |
 | ---: | --- | --- | --- |
-| 1 | Fused H3 QKV, Q/K normalization, rotary, SDPA, and output projection | High speed and data-movement reduction | Medium |
+| 1 | Cross-boundary H3 projection and head-major attention-output fusion | Medium-to-high speed and data-movement reduction | Low; preparation-only fusion averaged about 0.5% end-to-end and was rejected |
 | 2 | Ref2VA reference-feature reuse and adaptive temporal packing | High Ref2VA speed and memory reduction | Medium |
 | 3 | H3-specific W4A8 projection kernel | Very high checkpoint and resident-memory reduction | Low |
 | 4 | Adaptive full-block H3 paging | Very high BF16 peak-memory reduction | Medium |
