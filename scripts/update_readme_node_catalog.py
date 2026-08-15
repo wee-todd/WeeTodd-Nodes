@@ -66,7 +66,9 @@ EXPERIMENTAL = {
     "WeeToddLTX23UpscalerLoader",
     "WeeToddLTX23UpscalePublish",
     "WeeToddLTX25ComponentLoader",
+    "WeeToddLTX25GuidedModelLoader",
     "WeeToddLTX25GenerationConfig",
+    "WeeToddLTX25QualityMode",
     "WeeToddLTX25Preflight",
     "WeeToddLTX25Generate",
     "WeeToddLTX25GenerateChained",
@@ -74,6 +76,7 @@ EXPERIMENTAL = {
     "WeeToddLTX25DFRDetailing",
     "WeeToddLTX25DFRTemporalRefinement",
     "WeeToddLTX25DiffVAEOptimization",
+    "WeeToddLTX25MediaConditioning",
 }
 CONVENIENCE = {
     "WeeToddH3ModelLoader",

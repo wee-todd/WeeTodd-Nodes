@@ -9,6 +9,7 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 from ltx25_mlx.runtime import (
+    LTX25_DEFAULT_NEGATIVE_PROMPT,
     LTX25_DIFFVAE_OPTIMIZATIONS,
     LTX25_GENERATION_PRESETS,
     RUNTIME,
@@ -77,6 +78,140 @@ class LTX25KeyframeStack:
         }
 
 
+LTX25_MEDIA_ROLES = (
+    "image_keyframe",
+    "video_reference",
+    "audio_reference",
+    "inpaint_mask",
+)
+
+
+@dataclass(frozen=True)
+class LTX25MediaConditioningItem:
+    role: str
+    start_frame: int
+    end_frame: int
+    strength: float
+    images: object | None = None
+    audio: object | None = None
+    mask: object | None = None
+
+
+@dataclass(frozen=True)
+class LTX25MediaConditioningStack:
+    items: tuple[LTX25MediaConditioningItem, ...] = ()
+
+    def append(self, item: LTX25MediaConditioningItem) -> LTX25MediaConditioningStack:
+        if item.role not in LTX25_MEDIA_ROLES:
+            raise ValueError(f"Unsupported LTX 2.5 media role: {item.role!r}.")
+        if not 0.0 <= item.strength <= 1.0:
+            raise ValueError("LTX 2.5 media strength must be between zero and one.")
+        if item.start_frame < 0 or item.end_frame < item.start_frame:
+            raise ValueError("LTX 2.5 media frame range is invalid.")
+        if item.role == "image_keyframe":
+            shape = getattr(item.images, "shape", None)
+            if shape is None or len(shape) != 4 or int(shape[0]) != 1:
+                raise ValueError("An image keyframe requires exactly one ComfyUI IMAGE.")
+            if item.end_frame != item.start_frame:
+                raise ValueError("An image keyframe targets one exact frame.")
+        elif item.role == "video_reference":
+            shape = getattr(item.images, "shape", None)
+            if shape is None or len(shape) != 4 or int(shape[0]) < 1:
+                raise ValueError("A video reference requires a ComfyUI IMAGE frame batch.")
+        elif item.role == "audio_reference":
+            if item.audio is None:
+                raise ValueError("An audio reference requires a ComfyUI AUDIO input.")
+        elif item.mask is None:
+            raise ValueError("An inpaint mask requires a ComfyUI MASK input.")
+        if len(self.items) >= 20:
+            raise ValueError("LTX 2.5 media conditioning supports at most twenty items.")
+        return LTX25MediaConditioningStack((*self.items, item))
+
+    def validate_for_generation(self, num_frames: int) -> None:
+        for item in self.items:
+            if item.end_frame >= num_frames:
+                raise ValueError(
+                    f"LTX 2.5 media range {item.start_frame}..{item.end_frame} is outside "
+                    f"0..{num_frames - 1}."
+                )
+            if item.role != "image_keyframe":
+                raise ValueError(
+                    f"LTX 2.5 {item.role} is represented by the shared media contract but "
+                    "requires its IC-LoRA or audio pipeline, which is not enabled by the "
+                    "current Generate node yet."
+                )
+
+    def metadata(self) -> dict[str, object]:
+        return {
+            "items": [
+                {
+                    "role": item.role,
+                    "start_frame": item.start_frame,
+                    "end_frame": item.end_frame,
+                    "strength": item.strength,
+                }
+                for item in self.items
+            ]
+        }
+
+
+class WeeToddLTX25MediaConditioning:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "role": (list(LTX25_MEDIA_ROLES), {"default": "image_keyframe"}),
+                "start_frame": ("INT", {"default": 0, "min": 0, "max": 100000}),
+                "end_frame": ("INT", {"default": 0, "min": 0, "max": 100000}),
+                "strength": (
+                    "FLOAT",
+                    {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.05},
+                ),
+            },
+            "optional": {
+                "images": ("IMAGE",),
+                "audio": ("AUDIO",),
+                "mask": ("MASK",),
+                "previous_conditioning": ("WEETODD_LTX25_MEDIA_CONDITIONING",),
+            },
+        }
+
+    RETURN_TYPES = ("WEETODD_LTX25_MEDIA_CONDITIONING", "STRING")
+    RETURN_NAMES = ("conditioning", "conditioning_info")
+    FUNCTION = "append"
+    CATEGORY = "WeeTodd/LTX 2.5/conditioning"
+    DESCRIPTION = (
+        "Build a shared LTX 2.5 image, video, audio, or mask conditioning stack. "
+        "Image keyframes execute now; other roles fail before model loading until their "
+        "matching IC-LoRA or audio pipeline is connected."
+    )
+
+    def append(
+        self,
+        role,
+        start_frame,
+        end_frame,
+        strength,
+        images=None,
+        audio=None,
+        mask=None,
+        previous_conditioning=None,
+    ):
+        stack = previous_conditioning or LTX25MediaConditioningStack()
+        updated = stack.append(
+            LTX25MediaConditioningItem(
+                role=str(role),
+                start_frame=int(start_frame),
+                end_frame=int(end_frame),
+                strength=float(strength),
+                images=images,
+                audio=audio,
+                mask=mask,
+            )
+        )
+        return updated, json.dumps(updated.metadata(), indent=2, sort_keys=True)
+
+
 class WeeToddLTX25Keyframe:
     @classmethod
     def INPUT_TYPES(cls):
@@ -101,7 +236,7 @@ class WeeToddLTX25Keyframe:
     CATEGORY = "WeeTodd/LTX 2.5/conditioning"
     DESCRIPTION = (
         "Append a first, middle, or last image at an exact zero-based pixel-frame index. "
-        "Nonzero frames use LTX 2.5's generated-keyframe token slots."
+        "The image is encoded as reference conditioning; generated keyframe slots are separate."
     )
 
     def append(self, image, frame_index, strength, previous_keyframes=None):
@@ -287,6 +422,65 @@ class WeeToddLTX25LoRALoader:
         )
 
 
+class WeeToddLTX25GuidedModelLoader:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "model": ("WEETODD_LTX25_MODEL",),
+                "development_transformer": (
+                    "STRING",
+                    {"default": "ltx-2.5-22b-dev-transformer-bf16.safetensors"},
+                ),
+                "distilled_lora": (
+                    "STRING",
+                    {"default": "ltx-2.5-22b-distilled-lora-450-bf16.safetensors"},
+                ),
+            }
+        }
+
+    RETURN_TYPES = ("WEETODD_LTX25_MODEL", "STRING")
+    RETURN_NAMES = ("model", "guided_model_info")
+    FUNCTION = "attach"
+    CATEGORY = "WeeTodd/LTX 2.5/loaders"
+    DESCRIPTION = (
+        "Select the LTX 2.5 development transformer for guided stage one and the official "
+        "rank-450 distilled LoRA for stage two. No weights load in this node."
+    )
+
+    def attach(self, model, development_transformer, distilled_lora):
+        transformer = _resolve_component(
+            development_transformer, ("diffusion_models", "ltx25", "checkpoints")
+        )
+        adapter = _resolve_component(distilled_lora, ("loras", "ltx25"))
+        from ltx25_mlx.transformer import inspect_ltx25_lora
+
+        report = inspect_ltx25_lora(adapter)
+        if (
+            report["adapter_role"] != "transformer_lora"
+            or report["lora_rank"] != 450
+            or report["lora_alpha"] != 450
+        ):
+            raise ValueError(
+                "Guided LTX 2.5 requires the official rank-450/alpha-450 distilled LoRA."
+            )
+        updated = replace(
+            model,
+            transformer_path=str(transformer),
+            distilled_lora_path=str(adapter),
+        )
+        return updated, json.dumps(
+            {
+                "stage1_transformer": str(transformer),
+                "stage2_distilled_lora": str(adapter),
+                "lora_rank": report["lora_rank"],
+                "lora_alpha": report["lora_alpha"],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+
+
 class WeeToddLTX25GenerationConfig:
     @classmethod
     def INPUT_TYPES(cls):
@@ -396,6 +590,101 @@ class WeeToddLTX25GenerationConfig:
             "real_evaluations": config.stage1_steps + config.stage2_steps,
         }
         return config, json.dumps(info, indent=2, sort_keys=True)
+
+
+LTX25_QUALITY_MODES = (
+    "Fast distilled — 8 ancestral + 3 deterministic",
+    "Production guided — 30 Euler + 3 deterministic",
+    "HQ guided — 15 res_2s + 3 deterministic",
+)
+
+
+class WeeToddLTX25QualityMode:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "config": ("WEETODD_LTX25_CONFIG",),
+                "mode": (list(LTX25_QUALITY_MODES), {"default": LTX25_QUALITY_MODES[0]}),
+                "negative_prompt": (
+                    "STRING",
+                    {
+                        "default": LTX25_DEFAULT_NEGATIVE_PROMPT,
+                        "multiline": True,
+                        "dynamicPrompts": False,
+                    },
+                ),
+            }
+        }
+
+    RETURN_TYPES = ("WEETODD_LTX25_CONFIG", "STRING")
+    RETURN_NAMES = ("config", "quality_mode_info")
+    FUNCTION = "apply"
+    CATEGORY = "WeeTodd/LTX 2.5"
+    DESCRIPTION = (
+        "Choose fast distilled inference, production guided Euler, or the official HQ "
+        "second-order res_2s recipe without changing the base Generation Config schema."
+    )
+
+    def apply(self, config, mode, negative_prompt):
+        if mode == LTX25_QUALITY_MODES[0]:
+            values = {
+                "pipeline_mode": "distilled",
+                "stage1_steps": 8,
+                "stage1_sampler": "euler_ancestral",
+                "video_cfg_scale": 1.0,
+                "audio_cfg_scale": 1.0,
+                "stg_scale": 0.0,
+                "video_rescale_scale": 0.0,
+                "audio_rescale_scale": 0.0,
+                "modality_scale": 1.0,
+                "stg_blocks": (),
+            }
+        elif mode == LTX25_QUALITY_MODES[1]:
+            values = {
+                "pipeline_mode": "guided",
+                "stage1_steps": 30,
+                "stage1_sampler": "euler_guided",
+                "video_cfg_scale": 3.0,
+                "audio_cfg_scale": 7.0,
+                "stg_scale": 1.0,
+                "video_rescale_scale": 0.7,
+                "audio_rescale_scale": 0.7,
+                "modality_scale": 3.0,
+                "stg_blocks": (28,),
+            }
+        elif mode == LTX25_QUALITY_MODES[2]:
+            values = {
+                "pipeline_mode": "guided_hq",
+                "stage1_steps": 15,
+                "stage1_sampler": "res_2s_guided",
+                "video_cfg_scale": 3.0,
+                "audio_cfg_scale": 7.0,
+                "stg_scale": 0.0,
+                "video_rescale_scale": 0.45,
+                "audio_rescale_scale": 1.0,
+                "modality_scale": 3.0,
+                "stg_blocks": (),
+            }
+        else:
+            raise ValueError(f"Unsupported LTX 2.5 quality mode: {mode!r}.")
+        updated = replace(config, negative_prompt=str(negative_prompt), **values)
+        updated.validate()
+        info = {
+            "mode": mode,
+            "pipeline_mode": updated.pipeline_mode,
+            "stage1_sampler": updated.stage1_sampler,
+            "stage1_iterations": updated.stage1_steps,
+            "stage2_iterations": updated.stage2_steps,
+            "guidance": {
+                "video_cfg": updated.video_cfg_scale,
+                "audio_cfg": updated.audio_cfg_scale,
+                "stg": updated.stg_scale,
+                "modality": updated.modality_scale,
+            },
+            "requires_guided_model_loader": updated.pipeline_mode != "distilled",
+        }
+        return updated, json.dumps(info, indent=2, sort_keys=True)
 
 
 class WeeToddLTX25AutoDuration:
@@ -733,6 +1022,7 @@ class WeeToddLTX25Generate:
             "optional": {
                 "first_frame": ("IMAGE",),
                 "keyframes": ("WEETODD_LTX25_KEYFRAMES",),
+                "media_conditioning": ("WEETODD_LTX25_MEDIA_CONDITIONING",),
             },
         }
 
@@ -752,10 +1042,22 @@ class WeeToddLTX25Generate:
         unload_after_generate,
         first_frame=None,
         keyframes=None,
+        media_conditioning=None,
     ):
         import numpy as np
         from PIL import Image
 
+        if media_conditioning is not None:
+            media_conditioning.validate_for_generation(config.num_frames)
+            media_keyframes = LTX25KeyframeStack()
+            for item in media_conditioning.items:
+                media_keyframes = media_keyframes.append(
+                    LTX25Keyframe(item.images, item.start_frame, item.strength)
+                )
+            if keyframes is not None:
+                for item in keyframes.keyframes:
+                    media_keyframes = media_keyframes.append(item)
+            keyframes = media_keyframes
         report = model.validate(config.pipeline_mode)
         config.validate(scale_factors=tuple(int(value) for value in report["video_scale_factors"]))
         validate_ltx25_dfr_prebaked_pair(config, report)
@@ -1239,7 +1541,9 @@ class WeeToddLTX25Unload:
 NODE_CLASS_MAPPINGS = {
     "WeeToddLTX25ComponentLoader": WeeToddLTX25ComponentLoader,
     "WeeToddLTX25LoRALoader": WeeToddLTX25LoRALoader,
+    "WeeToddLTX25GuidedModelLoader": WeeToddLTX25GuidedModelLoader,
     "WeeToddLTX25GenerationConfig": WeeToddLTX25GenerationConfig,
+    "WeeToddLTX25QualityMode": WeeToddLTX25QualityMode,
     "WeeToddLTX25AutoDuration": WeeToddLTX25AutoDuration,
     "WeeToddLTX25GeneratedKeyframes": WeeToddLTX25GeneratedKeyframes,
     "WeeToddLTX25DiffVAEOptimization": WeeToddLTX25DiffVAEOptimization,
@@ -1247,6 +1551,7 @@ NODE_CLASS_MAPPINGS = {
     "WeeToddLTX25DFRTemporalRefinement": WeeToddLTX25DFRTemporalRefinement,
     "WeeToddLTX25Preflight": WeeToddLTX25Preflight,
     "WeeToddLTX25Keyframe": WeeToddLTX25Keyframe,
+    "WeeToddLTX25MediaConditioning": WeeToddLTX25MediaConditioning,
     "WeeToddLTX25Generate": WeeToddLTX25Generate,
     "WeeToddLTX25GenerateChained": WeeToddLTX25GenerateChained,
     "WeeToddLTX25VideoUpscale": WeeToddLTX25VideoUpscale,
@@ -1256,7 +1561,9 @@ NODE_CLASS_MAPPINGS = {
 NODE_DISPLAY_NAME_MAPPINGS = {
     "WeeToddLTX25ComponentLoader": "WeeTodd LTX 2.5 Component Loader (MLX)",
     "WeeToddLTX25LoRALoader": "WeeTodd LTX 2.5 LoRA Loader (MLX)",
+    "WeeToddLTX25GuidedModelLoader": "WeeTodd LTX 2.5 Guided Model Loader (MLX)",
     "WeeToddLTX25GenerationConfig": "WeeTodd LTX 2.5 Generation Config",
+    "WeeToddLTX25QualityMode": "WeeTodd LTX 2.5 Quality Mode",
     "WeeToddLTX25AutoDuration": "WeeTodd LTX 2.5 Automatic Duration",
     "WeeToddLTX25GeneratedKeyframes": "WeeTodd LTX 2.5 Generated Keyframes",
     "WeeToddLTX25DiffVAEOptimization": "WeeTodd LTX 2.5 Diffusion VAE Optimization",
@@ -1264,6 +1571,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "WeeToddLTX25DFRTemporalRefinement": "WeeTodd LTX 2.5 DFR Temporal Refinement",
     "WeeToddLTX25Preflight": "WeeTodd LTX 2.5 Preflight",
     "WeeToddLTX25Keyframe": "WeeTodd LTX 2.5 Timed Keyframe",
+    "WeeToddLTX25MediaConditioning": "WeeTodd LTX 2.5 Media Conditioning",
     "WeeToddLTX25Generate": "WeeTodd LTX 2.5 Generate Video + Audio",
     "WeeToddLTX25GenerateChained": "WeeTodd LTX 2.5 Generate Chained Timeline",
     "WeeToddLTX25VideoUpscale": "WeeTodd LTX 2.5 Video Upscale / Refine",

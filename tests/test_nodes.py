@@ -236,7 +236,7 @@ def test_hires_fix_resolves_target_and_preserves_audio_contract(monkeypatch):
 
 
 def test_expected_nodes_are_registered():
-    assert len(NODE_CLASS_MAPPINGS) == 67
+    assert len(NODE_CLASS_MAPPINGS) == 70
     assert "WeeToddH3ComponentLoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3QuantizedTransformerLoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3Preflight" in NODE_CLASS_MAPPINGS
@@ -291,8 +291,11 @@ def test_expected_nodes_are_registered():
     assert "WeeToddLTX23UpscalePublish" in NODE_CLASS_MAPPINGS
     assert "WeeToddLTX23Unload" in NODE_CLASS_MAPPINGS
     assert "WeeToddLTX25ComponentLoader" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX25GuidedModelLoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddLTX25GenerationConfig" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX25QualityMode" in NODE_CLASS_MAPPINGS
     assert "WeeToddLTX25Preflight" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX25MediaConditioning" in NODE_CLASS_MAPPINGS
     assert "WeeToddLTX25Generate" in NODE_CLASS_MAPPINGS
     assert "WeeToddLTX25VideoUpscale" in NODE_CLASS_MAPPINGS
     assert "WeeToddLTX25Unload" in NODE_CLASS_MAPPINGS

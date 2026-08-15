@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -48,7 +49,9 @@ from ltx25_mlx.upscale import (
 )
 from ltx25_mlx.video_only import LTX25VideoOnlyX0Model
 from wee_todd_nodes.ltx25_nodes import (
+    LTX25_QUALITY_MODES,
     LTX25KeyframeStack,
+    LTX25MediaConditioningStack,
     WeeToddLTX25AutoDuration,
     WeeToddLTX25DFRDetailing,
     WeeToddLTX25DFRTemporalRefinement,
@@ -56,10 +59,33 @@ from wee_todd_nodes.ltx25_nodes import (
     WeeToddLTX25GenerateChained,
     WeeToddLTX25GeneratedKeyframes,
     WeeToddLTX25GenerationConfig,
+    WeeToddLTX25GuidedModelLoader,
     WeeToddLTX25Keyframe,
     WeeToddLTX25LoRALoader,
+    WeeToddLTX25MediaConditioning,
+    WeeToddLTX25QualityMode,
     WeeToddLTX25VideoUpscale,
 )
+
+
+def _rank450_lora(path):
+    save_file(
+        {
+            "diffusion_model.adaln_single.emb.timestep_embedder.linear_1.lora_A.weight": (
+                np.zeros((2, 4), dtype=np.float32)
+            ),
+            "diffusion_model.adaln_single.emb.timestep_embedder.linear_1.lora_B.weight": (
+                np.zeros((4, 2), dtype=np.float32)
+            ),
+        },
+        path,
+        metadata={
+            "model_version": "2.5.0",
+            "lora_rank": "450",
+            "lora_alpha": "450",
+        },
+    )
+    return path
 
 
 def test_ltx25_duration_head_matches_constant_log_seconds():
@@ -292,6 +318,59 @@ def test_ltx25_timed_keyframes_are_composable_and_validate_window():
     ]
     with pytest.raises(ValueError, match="outside"):
         stack.validate(120)
+
+
+def test_ltx25_media_conditioning_composes_image_keyframes():
+    image = np.zeros((1, 32, 32, 3), dtype=np.float32)
+    node = WeeToddLTX25MediaConditioning()
+
+    stack, raw = node.append("image_keyframe", 8, 8, 0.75, images=image)
+
+    assert isinstance(stack, LTX25MediaConditioningStack)
+    stack.validate_for_generation(17)
+    assert json.loads(raw)["items"] == [
+        {
+            "end_frame": 8,
+            "role": "image_keyframe",
+            "start_frame": 8,
+            "strength": 0.75,
+        }
+    ]
+
+
+def test_ltx25_media_conditioning_rejects_unimplemented_roles_before_generation():
+    images = np.zeros((9, 32, 32, 3), dtype=np.float32)
+    stack = WeeToddLTX25MediaConditioning().append(
+        "video_reference", 0, 8, 1.0, images=images
+    )[0]
+
+    with pytest.raises(ValueError, match="requires its IC-LoRA or audio pipeline"):
+        stack.validate_for_generation(17)
+
+
+@pytest.mark.parametrize(
+    ("mode_index", "pipeline_mode", "stage1_steps", "stage1_sampler", "stg_scale"),
+    (
+        (0, "distilled", 8, "euler_ancestral", 0.0),
+        (1, "guided", 30, "euler_guided", 1.0),
+        (2, "guided_hq", 15, "res_2s_guided", 0.0),
+    ),
+)
+def test_ltx25_quality_mode_pins_complete_recipe(
+    mode_index, pipeline_mode, stage1_steps, stage1_sampler, stg_scale
+):
+    updated, raw = WeeToddLTX25QualityMode().apply(
+        LTX25GenerationConfig(),
+        LTX25_QUALITY_MODES[mode_index],
+        "bad output",
+    )
+
+    assert updated.pipeline_mode == pipeline_mode
+    assert updated.stage1_steps == stage1_steps
+    assert updated.stage1_sampler == stage1_sampler
+    assert updated.stage2_steps == 3
+    assert updated.stg_scale == stg_scale
+    assert json.loads(raw)["requires_guided_model_loader"] == (mode_index != 0)
 
 
 def test_ltx25_generated_keyframes_use_even_interior_pixel_frames():
@@ -619,6 +698,31 @@ def test_ltx25_split_preflight_reads_metadata_without_weights(tmp_path):
     assert report["transformer_architecture"]["use_prompt_adaln_single"] is True
     assert report["transformer_architecture"]["caption_proj_before_connector"] is True
     assert len(report["components"]) == 5
+
+
+def test_ltx25_guided_loader_selects_dev_transformer_and_rank450_stage2_lora(
+    monkeypatch, tmp_path
+):
+    spec = _bundle(tmp_path)
+    development = tmp_path / "development.safetensors"
+    development.write_bytes((tmp_path / "transformer.safetensors").read_bytes())
+    distilled_lora = _rank450_lora(tmp_path / "distilled-lora.safetensors")
+    monkeypatch.setattr(
+        "wee_todd_nodes.ltx25_nodes._resolve_component",
+        lambda value, _categories: value,
+    )
+
+    updated, raw = WeeToddLTX25GuidedModelLoader().attach(
+        spec, str(development), str(distilled_lora)
+    )
+
+    assert updated.transformer_path == str(development)
+    assert updated.distilled_lora_path == str(distilled_lora)
+    assert json.loads(raw)["lora_rank"] == 450
+    report = updated.validate("guided")
+    assert report["model_version"] == "2.5.0"
+    with pytest.raises(ValueError, match="Guided Model Loader"):
+        updated.validate("distilled")
 
 
 def test_ltx25_preflight_rejects_23_transformer(tmp_path):
@@ -951,6 +1055,50 @@ def test_ltx25_runtime_requires_versioned_backend_and_filters_signature(tmp_path
     assert calls[1] == ("generate", "A literal chronological test prompt.", 512, 768, 121)
     assert info["mlx_peak_bytes"] == 123
     assert not runtime.loaded
+
+
+def test_ltx25_runtime_forwards_guided_recipe_without_loading_during_preflight(
+    tmp_path, monkeypatch
+):
+    import mlx.core as mx
+
+    base = _bundle(tmp_path)
+    development = tmp_path / "development.safetensors"
+    development.write_bytes((tmp_path / "transformer.safetensors").read_bytes())
+    spec = replace(
+        base,
+        transformer_path=str(development),
+        distilled_lora_path=str(_rank450_lora(tmp_path / "distilled-lora.safetensors")),
+    )
+    config = WeeToddLTX25QualityMode().apply(
+        LTX25GenerationConfig(), LTX25_QUALITY_MODES[2], "bad output"
+    )[0]
+    calls = {}
+
+    class FakePipeline:
+        def __init__(self, transformer_path, distilled_lora_path, low_memory):
+            calls["init"] = (transformer_path, distilled_lora_path, low_memory)
+
+        def generate_and_save(self, **kwargs):
+            calls["generate"] = kwargs
+            return kwargs["output_path"]
+
+    monkeypatch.setattr("ltx25_mlx.runtime._pipeline_class", lambda: FakePipeline)
+    monkeypatch.setattr(mx, "reset_peak_memory", lambda: None)
+    monkeypatch.setattr(mx, "get_peak_memory", lambda: 456)
+    monkeypatch.setattr(mx, "clear_cache", lambda: None)
+
+    info = LTX25RuntimeCache().generate_to_file(
+        spec, config, "A guided test prompt.", tmp_path / "guided.mp4"
+    )
+
+    assert calls["init"] == (str(development), spec.distilled_lora_path, True)
+    assert calls["generate"]["pipeline_mode"] == "guided_hq"
+    assert calls["generate"]["stage1_steps"] == 15
+    assert calls["generate"]["stage1_sampler"] == "res_2s_guided"
+    assert calls["generate"]["video_cfg_scale"] == 3.0
+    assert calls["generate"]["audio_cfg_scale"] == 7.0
+    assert info["mlx_peak_bytes"] == 456
 
 
 def test_ltx25_backend_capability_reports_project_native_pipeline():

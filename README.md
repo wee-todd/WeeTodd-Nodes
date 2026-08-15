@@ -10,11 +10,11 @@ and can unload between Qwen3-VL, transformer, video VAE, and audio VAE stages.
 
 Recent experimental controls include target-frame H3 image, clip, and audio guides; an H3 token
 and attention-workspace estimator; independent MLX attention-head and feed-forward row chunking;
-LTX 2.5 timed input keyframes; learned generated-keyframe slots; and lazy ordered LTX 2.5 LoRA
-stacks. An optional modifier predicts a one-shot duration from the prompt with the official LTX
-2.5 duration head. A separate experimental DFR modifier can add learned temporal refinement at
-48 or 96 fps. Its stream and conditioning contracts pass, but current MLX visual parity is not
-production-ready.
+LTX 2.5 timed input keyframes; learned generated-keyframe slots; lazy ordered LTX 2.5 LoRA stacks;
+and selectable fast-distilled, production-guided, and HQ `res_2s` recipes. An optional modifier
+predicts a one-shot duration from the prompt with the official LTX 2.5 duration head. A separate
+experimental DFR modifier can add learned temporal refinement at 48 or 96 fps. Its stream and
+conditioning contracts pass, but current MLX visual parity is not production-ready.
 Existing modifier and conditioning nodes preserve older Generation Config socket order.
 The H3 projection backend adds a backward-compatible `auto` choice; saved workflows that explicitly
 select `mlx` retain that selection. Eligible projections in paged transformer checkpoints are
@@ -57,6 +57,7 @@ Frames** when the graph needs numbered middle frames.
 | --- | --- | --- |
 | Balance | [LTX 2.3 two-stage](workflows/balance/t2v/ltx23_two_stage.json) | Standalone LTX 2.3 synchronized generation. |
 | Balance | [LTX 2.5 768×512](workflows/balance/t2v/ltx25_768x512_two_stage.json) | Recommended LTX 2.5 starting point with the official 8+3 schedule. |
+| Performance | [LTX 2.5 768×512 guided HQ](workflows/performance/t2v/ltx25_768x512_guided_hq.json) | Development transformer with selectable 30-step guided Euler or 15-step guided `res_2s`, followed by the official distilled-LoRA refinement stage. |
 | Balance | [LTX 2.5 768×512 practical DFR](workflows/balance/t2v/ltx25_768x512_dfr_conv_vae.json) | Exact prebaked Q8 DFR sampling with bounded convolutional-VAE publication. |
 | Performance | [LTX 2.5 768×512 DFR + Diffusion VAE](workflows/performance/t2v/ltx25_768x512_dfr_diffusion_vae.json) | Experimental full-resolution detail generation with exact prebaked Q8 adapters and one-step pixel-diffusion decode. |
 | Performance | [LTX 2.5 768×512 accelerated DFR + Diffusion VAE](workflows/performance/t2v/ltx25_768x512_dfr_diffusion_vae_metal_tiled.json) | Experimental query-tiled Metal decoder with substantially lower runtime and memory than the exact Diffusion VAE. |
@@ -151,6 +152,7 @@ in standard ComfyUI folders.
 | --- | --- |
 | `models/diffusion_models/` | `ltx-2.5-22b-distilled-transformer-bf16.safetensors` |
 | `models/diffusion_models/` | Official DFR: `ltx-2.5-22b-dev-transformer-bf16.safetensors` |
+| `models/loras/` | Guided modes: `ltx-2.5-22b-distilled-lora-450-bf16.safetensors` |
 | `models/text_encoders/` | `gemma4-12b-with-proj-ltx-2.5-bf16.safetensors` |
 | `models/vae/` | `ltx-2.5-video-vae-conv-bf16.safetensors` |
 | `models/vae/` | Optional detail decoder: `ltx-2.5-video-vae-bf16.safetensors` |
@@ -159,9 +161,21 @@ in standard ComfyUI folders.
 | `models/latent_upscale_models/` | Optional DFR temporal refinement: `ltx-2.5-latent-temporal-upscaler-x2-bf16-1.0.safetensors` |
 | `models/model_patches/LTX-2.5/` | Optional automatic duration: `ltx-2.5-duration-head-bf16.safetensors` |
 | `models/loras/LTX-2.5/` | Optional DFR: [`ltx-2.5-22b-ic-lora-pixel-spatial-upscaler-x2-1.0.safetensors`](https://huggingface.co/Lightricks/LTX-2.5-22b-IC-LoRA-Pixel-Spatial-Upscaler) |
-| `models/loras/` | Official DFR: `ltx-2.5-22b-distilled-lora-450-bf16.safetensors` |
 | `models/diffusion_models/` | Derived DFR stage one: `ltx-2.5-22b-dev-distilled450-q8-paged/` |
 | `models/diffusion_models/` | Derived DFR stage two: `ltx-2.5-22b-dev-distilled450-detail2x-q8-paged/` |
+
+The default 8+3 distilled workflow remains the fastest path. For guided generation, connect **LTX
+2.5 Guided Model Loader** and **LTX 2.5 Quality Mode**. **Production guided** runs 30 guided Euler
+iterations with CFG, STG, and audio-video modality guidance. **HQ guided** runs 15 second-order
+`res_2s` iterations with CFG and modality guidance. Both reload the development transformer with
+the official rank-450 distilled LoRA for the three full-resolution refinement iterations. Guided
+iterations require several transformer predictions, so the displayed iteration count is not a
+claim about total transformer forwards.
+
+**LTX 2.5 Media Conditioning** provides one composable typed stack for future image, video, audio,
+and mask pipelines. Image keyframes execute through the current Generate node. Video-reference,
+audio-reference, and inpaint-mask roles currently stop during validation with an actionable error;
+they do not silently fall back to image conditioning or load model weights.
 
 The video-refine workflow also requires the
 [pixel-spatial upscaler IC-LoRA](https://huggingface.co/Lightricks/LTX-2.5-22b-IC-LoRA-Pixel-Spatial-Upscaler)
@@ -327,14 +341,17 @@ This table is generated from the registered node contracts. Run
 | LTX 2.3 Unload MLX Runtime | Release the process-local LTX 2.3 pipeline. | LTX 2.3 — Core | Supported |
 | LTX 2.5 Component Loader (MLX) | Select LTX 2.5 split components without loading weights or downloading files. | LTX 2.5 — Loaders | Experimental |
 | LTX 2.5 LoRA Loader (MLX) | Attach a generic LTX 2.5 transformer LoRA, including block and non-block targets. Multiple loader nodes may be chained; IC-LoRA control media still requires its matching conditioning workflow. | LTX 2.5 — Loaders | Supported |
+| LTX 2.5 Guided Model Loader (MLX) | Select the LTX 2.5 development transformer for guided stage one and the official rank-450 distilled LoRA for stage two. No weights load in this node. | LTX 2.5 — Loaders | Experimental |
 | LTX 2.5 Generation Config | Configure the official distilled 8+3-evaluation LTX 2.5 two-stage schedule. | LTX 2.5 — Core | Experimental |
+| LTX 2.5 Quality Mode | Choose fast distilled inference, production guided Euler, or the official HQ second-order res_2s recipe without changing the base Generation Config schema. | LTX 2.5 — Core | Experimental |
 | LTX 2.5 Automatic Duration | Predict one-shot duration from the prompt with the official LTX 2.5 duration head. The manual duration remains unchanged when this modifier is not connected. | LTX 2.5 — Core | Supported |
 | LTX 2.5 Generated Keyframes | Apply LTX 2.5 generated interior keyframe slots as a composable config modifier. | LTX 2.5 — Conditioning | Supported |
 | LTX 2.5 Diffusion VAE Optimization | Select an MLX Diffusion VAE execution layout. It does not affect the convolutional VAE. | LTX 2.5 — Optimization | Experimental |
 | LTX 2.5 DFR Detail Refinement | Enable MLX Diffusion Fidelity Rendering: segment-grid generated keyframes, stage-one latent reference conditioning, stage-two-only Pixel-Spatial IC-LoRA, optional exact prebaked Q8 adapter pages, and untouched stage-one audio publication. | LTX 2.5 — Conditioning | Experimental |
 | LTX 2.5 DFR Temporal Refinement | Experimentally add one or two learned x2 temporal DFR rounds. Each round preserves stage-one audio, doubles playback frame rate, reapplies one-shot image anchors, and adds four transformer evaluations per temporal tile. Current MLX visual parity is not yet production-validated. | LTX 2.5 — Conditioning | Experimental |
 | LTX 2.5 Preflight | Validate LTX 2.5 component metadata and architecture requirements before allocation. | LTX 2.5 — Loaders | Experimental |
-| LTX 2.5 Timed Keyframe | Append a first, middle, or last image at an exact zero-based pixel-frame index. Nonzero frames use LTX 2.5's generated-keyframe token slots. | LTX 2.5 — Conditioning | Supported |
+| LTX 2.5 Timed Keyframe | Append a first, middle, or last image at an exact zero-based pixel-frame index. The image is encoded as reference conditioning; generated keyframe slots are separate. | LTX 2.5 — Conditioning | Supported |
+| LTX 2.5 Media Conditioning | Build a shared LTX 2.5 image, video, audio, or mask conditioning stack. Image keyframes execute now; other roles fail before model loading until their matching IC-LoRA or audio pipeline is connected. | LTX 2.5 — Conditioning | Experimental |
 | LTX 2.5 Generate Video + Audio | Generate synchronized LTX 2.5 video and audio through the MLX adapter. | LTX 2.5 — Core | Experimental |
 | LTX 2.5 Generate Chained Timeline | Generate two to four overlapping LTX 2.5 windows with timeline-aligned latent guides, causal-aware latent transitions, and one synchronized audio/video decode. | LTX 2.5 — Core | Experimental |
 | LTX 2.5 Video Upscale / Refine | Upscale decoded ComfyUI IMAGE+AUDIO from any movie through LTX 2.5 latent space, optionally adding video-only refinement while preserving the source audio. | LTX 2.5 — Core | Experimental |

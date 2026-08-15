@@ -267,6 +267,25 @@ def test_ltx25_high_quality_workflow_uses_verified_preset_and_prompt():
     assert "clean synchronized speech" in prompt
 
 
+def test_ltx25_guided_hq_workflow_pins_dev_model_and_res2s_recipe():
+    workflow = json.loads(
+        (ROOT / "workflows/performance/t2v/ltx25_768x512_guided_hq.json").read_text()
+    )
+    nodes = _execution_node_map(workflow)
+    guided_loader = next(
+        node for node in nodes.values() if node["type"] == "WeeToddLTX25GuidedModelLoader"
+    )
+    quality = next(
+        node for node in nodes.values() if node["type"] == "WeeToddLTX25QualityMode"
+    )
+
+    assert guided_loader["widgets_values"] == [
+        "ltx-2.5-22b-dev-transformer-bf16.safetensors",
+        "ltx-2.5-22b-distilled-lora-450-bf16.safetensors",
+    ]
+    assert quality["widgets_values"][0] == "HQ guided — 15 res_2s + 3 deterministic"
+
+
 @pytest.mark.parametrize(
     "filename",
     (

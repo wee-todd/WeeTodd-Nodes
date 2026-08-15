@@ -18,7 +18,7 @@ from safetensors import safe_open
 
 from .gemma_pack import inspect_gemma4_pack
 
-LTX25_CONFIG_MODES = ("distilled",)
+LTX25_CONFIG_MODES = ("distilled", "guided", "guided_hq")
 LTX25_PROMPT_CONTEXTS = ("official_1024", "auto", "128", "256", "512", "1024")
 LTX25_FEED_FORWARD_BACKENDS = (
     "reference_fp32",
@@ -39,6 +39,15 @@ LTX25_GENERATION_PRESETS = (
 )
 LTX25_DISTILLED_SIGMAS = (1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875, 0.0)
 LTX25_STAGE2_SIGMAS = (0.909375, 0.725, 0.421875, 0.0)
+LTX25_DEFAULT_NEGATIVE_PROMPT = (
+    "blurry, out of focus, overexposed, underexposed, low contrast, washed out colors, "
+    "excessive noise, grainy texture, poor lighting, flickering, motion blur, distorted "
+    "proportions, deformed facial features, extra limbs, disfigured hands, inconsistent "
+    "perspective, camera shake, cartoonish rendering, 3D CGI look, unrealistic materials, "
+    "mismatched lip sync, silent or muted audio, distorted voice, robotic voice, echo, "
+    "background noise, off-sync audio, incorrect dialogue, added dialogue, repetitive speech, "
+    "jittery movement, awkward pauses, unnatural transitions, inconsistent framing, AI artifacts"
+)
 
 
 @lru_cache(maxsize=16)
@@ -221,6 +230,7 @@ class LTX25ComponentSpec:
     audio_vae_path: str
     spatial_upscaler_path: str
     duration_head_path: str = ""
+    distilled_lora_path: str = ""
     loras: tuple[tuple[str, float], ...] = ()
 
     def paths(self) -> dict[str, Path]:
@@ -239,6 +249,30 @@ class LTX25ComponentSpec:
             "spatial_upscaler_path",
         }
         paths = self.paths()
+        if mode == "distilled" and "distilled_lora_path" in paths:
+            raise ValueError(
+                "The Guided Model Loader selects a development transformer. Connect a guided "
+                "Quality Mode, or use the Component Loader output directly for fast distilled "
+                "generation."
+            )
+        if mode in {"guided", "guided_hq"}:
+            distilled_lora = paths.get("distilled_lora_path")
+            if distilled_lora is None or not distilled_lora.is_file():
+                raise FileNotFoundError(
+                    "Guided LTX 2.5 modes require the official rank-450 distilled LoRA."
+                )
+            from .transformer import inspect_ltx25_lora
+
+            adapter = inspect_ltx25_lora(distilled_lora)
+            if (
+                adapter["adapter_role"] != "transformer_lora"
+                or adapter["lora_rank"] != 450
+                or adapter["lora_alpha"] != 450
+            ):
+                raise ValueError(
+                    "Guided LTX 2.5 modes require the official rank-450/alpha-450 "
+                    "distilled transformer LoRA."
+                )
         for lora_path, strength in self.loras:
             resolved = Path(lora_path).expanduser()
             if not resolved.is_file() or resolved.suffix != ".safetensors":
@@ -356,7 +390,7 @@ class LTX25ComponentSpec:
 
 @dataclass(frozen=True)
 class LTX25GenerationConfig:
-    """Validated distilled LTX 2.5 generation settings."""
+    """Validated LTX 2.5 generation settings with a distilled default recipe."""
 
     pipeline_mode: str = "distilled"
     width: int = 768
@@ -374,6 +408,14 @@ class LTX25GenerationConfig:
     stage1_eta: float = 1.0
     stage1_s_noise: float = 1.0
     ancestral_seed_offset: int = 10000
+    negative_prompt: str = LTX25_DEFAULT_NEGATIVE_PROMPT
+    video_cfg_scale: float = 1.0
+    audio_cfg_scale: float = 1.0
+    stg_scale: float = 0.0
+    video_rescale_scale: float = 0.0
+    audio_rescale_scale: float = 0.0
+    modality_scale: float = 1.0
+    stg_blocks: tuple[int, ...] = ()
     low_memory: bool = True
     low_ram_streaming: bool = False
     prompt_context: str = "official_1024"
@@ -496,20 +538,48 @@ class LTX25GenerationConfig:
                 )
         if not 1.0 <= self.frame_rate <= 60.0:
             raise ValueError("LTX 2.5 frame rate must be between 1 and 60 fps.")
-        if self.stage1_steps != 8 or self.stage2_steps != 3:
+        if self.pipeline_mode == "distilled":
+            if (
+                self.stage1_steps != 8
+                or self.stage2_steps != 3
+                or self.stage1_sampler != "euler_ancestral"
+                or self.stage2_sampler != "euler"
+            ):
+                raise ValueError(
+                    "The LTX 2.5 distilled path requires eight stage-one and three stage-two "
+                    "steps with the official samplers."
+                )
+            if self.stage1_eta != 1.0 or self.stage1_s_noise != 1.0:
+                raise ValueError("LTX 2.5 distilled stage one requires eta=1.0 and s_noise=1.0.")
+            if self.ancestral_seed_offset != 10000:
+                raise ValueError(
+                    "LTX 2.5 distilled requires the stage-one noise seed offset 10000."
+                )
+        elif self.pipeline_mode == "guided":
+            if (
+                self.stage1_steps != 30
+                or self.stage2_steps != 3
+                or self.stage1_sampler != "euler_guided"
+                or self.stage2_sampler != "euler"
+            ):
+                raise ValueError("Production guided LTX 2.5 requires 30 guided Euler steps.")
+            if not self.negative_prompt.strip() or self.video_cfg_scale <= 1.0:
+                raise ValueError("Production guided LTX 2.5 requires CFG and a negative prompt.")
+        else:
+            if (
+                self.stage1_steps != 15
+                or self.stage2_steps != 3
+                or self.stage1_sampler != "res_2s_guided"
+                or self.stage2_sampler != "euler"
+            ):
+                raise ValueError("HQ guided LTX 2.5 requires 15 res_2s stage-one steps.")
+            if not self.negative_prompt.strip() or self.video_cfg_scale <= 1.0:
+                raise ValueError("HQ guided LTX 2.5 requires CFG and a negative prompt.")
+        if self.dfr_enabled and self.pipeline_mode != "distilled":
             raise ValueError(
-                "The LTX 2.5 distilled path requires eight stage-one and three stage-two "
-                "transformer evaluations."
+                "DFR currently uses its own distilled recipe and cannot be stacked on a "
+                "guided mode."
             )
-        if self.stage1_sampler != "euler_ancestral" or self.stage2_sampler != "euler":
-            raise ValueError(
-                "LTX 2.5 distilled requires Euler ancestral stage one and deterministic Euler "
-                "stage two."
-            )
-        if self.stage1_eta != 1.0 or self.stage1_s_noise != 1.0:
-            raise ValueError("LTX 2.5 distilled stage one requires eta=1.0 and s_noise=1.0.")
-        if self.ancestral_seed_offset != 10000:
-            raise ValueError("LTX 2.5 distilled requires the stage-one noise seed offset 10000.")
         if (self.num_frames - 1) % temporal:
             raise ValueError(
                 f"LTX 2.5 frame count must align to temporal compression factor {temporal}."
@@ -612,6 +682,7 @@ class LTX25RuntimeCache:
         validate_ltx25_dfr_prebaked_pair(config, report)
         key = (
             spec,
+            config.pipeline_mode,
             config.low_memory,
             config.low_ram_streaming,
             config.feed_forward_backend,
@@ -726,6 +797,15 @@ class LTX25RuntimeCache:
             "step_callback": step_callback,
             "prompt_context": config.prompt_context,
             "generated_keyframes": config.generated_keyframes,
+            "pipeline_mode": config.pipeline_mode,
+            "negative_prompt": config.negative_prompt,
+            "video_cfg_scale": config.video_cfg_scale,
+            "audio_cfg_scale": config.audio_cfg_scale,
+            "stg_scale": config.stg_scale,
+            "video_rescale_scale": config.video_rescale_scale,
+            "audio_rescale_scale": config.audio_rescale_scale,
+            "modality_scale": config.modality_scale,
+            "stg_blocks": config.stg_blocks,
             "dfr_enabled": config.dfr_enabled,
             "dfr_official_recipe": dfr_recipe == "official_dev_distilled_lora",
             "dfr_detailing_lora": (

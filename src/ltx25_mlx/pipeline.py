@@ -73,6 +73,7 @@ class LTX25DistilledPipeline:
         audio_vae_path: str,
         spatial_upscaler_path: str,
         duration_head_path: str = "",
+        distilled_lora_path: str = "",
         temporal_upsampler_path: str = "",
         dfr_stage2_transformer_path: str = "",
         low_memory: bool = True,
@@ -88,6 +89,9 @@ class LTX25DistilledPipeline:
     ) -> None:
         self.transformer_path = Path(transformer_path)
         self.duration_head_path = Path(duration_head_path) if duration_head_path else None
+        self.distilled_lora_path = (
+            Path(distilled_lora_path) if distilled_lora_path else None
+        )
         self.spatial_upscaler_path = Path(spatial_upscaler_path)
         self.temporal_upsampler_path = (
             Path(temporal_upsampler_path) if temporal_upsampler_path else None
@@ -587,6 +591,15 @@ class LTX25DistilledPipeline:
         output_audio_context_tokens: int = 0,
         return_continuation: bool = False,
         generated_keyframes: int = 0,
+        pipeline_mode: str = "distilled",
+        negative_prompt: str = "",
+        video_cfg_scale: float = 1.0,
+        audio_cfg_scale: float = 1.0,
+        stg_scale: float = 0.0,
+        video_rescale_scale: float = 0.0,
+        audio_rescale_scale: float = 0.0,
+        modality_scale: float = 1.0,
+        stg_blocks: tuple[int, ...] = (),
         dfr_enabled: bool = False,
         dfr_official_recipe: bool = False,
         dfr_detailing_lora: tuple[str, float] | None = None,
@@ -596,9 +609,17 @@ class LTX25DistilledPipeline:
         auto_duration_max_seconds: float = 20.0,
         **_unused,
     ):
-        """Generate synchronized latents using official 8+3 stage semantics."""
-        if stage1_steps != 8 or stage2_steps != 3:
-            raise ValueError("LTX 2.5 distilled generation requires exactly 8+3 evaluations.")
+        """Generate synchronized latents using a validated LTX 2.5 two-stage recipe."""
+        if pipeline_mode not in {"distilled", "guided", "guided_hq"}:
+            raise ValueError(f"Unsupported LTX 2.5 pipeline mode: {pipeline_mode!r}.")
+        expected_stage1 = {"distilled": 8, "guided": 30, "guided_hq": 15}[pipeline_mode]
+        if stage1_steps != expected_stage1 or stage2_steps != 3:
+            raise ValueError(
+                f"LTX 2.5 {pipeline_mode} generation requires exactly "
+                f"{expected_stage1}+3 sampler iterations."
+            )
+        if pipeline_mode != "distilled" and self.distilled_lora_path is None:
+            raise ValueError("Guided LTX 2.5 generation requires a stage-two distilled LoRA.")
         if temporal_upsample_rounds not in {0, 1, 2}:
             raise ValueError("LTX 2.5 DFR temporal rounds must be zero, one, or two.")
         if temporal_upsample_rounds and not dfr_enabled:
@@ -624,13 +645,26 @@ class LTX25DistilledPipeline:
 
         timings: dict[str, object] = {"stage1_evaluations": [], "stage2_evaluations": []}
         prompt_started = time.perf_counter()
+        negative_video_embeds = None
+        negative_audio_embeds = None
         if encoded_prompt is None:
             self.prompt_encoder.load()
             video_embeds, audio_embeds, resolved_context = self.prompt_encoder.encode(
                 prompt, prompt_context
             )
             mx.eval(video_embeds, audio_embeds)
+            if pipeline_mode != "distilled":
+                if not negative_prompt.strip():
+                    raise ValueError("Guided LTX 2.5 generation requires a negative prompt.")
+                negative_video_embeds, negative_audio_embeds, _negative_context = (
+                    self.prompt_encoder.encode(negative_prompt, prompt_context)
+                )
+                mx.eval(negative_video_embeds, negative_audio_embeds)
         else:
+            if pipeline_mode != "distilled":
+                raise ValueError(
+                    "Pre-encoded chained prompts currently support distilled mode only."
+                )
             video_embeds, audio_embeds, resolved_context = encoded_prompt
         timings["prompt_encode_seconds"] = (
             time.perf_counter() - prompt_started if encoded_prompt is None else 0.0
@@ -768,32 +802,95 @@ class LTX25DistilledPipeline:
         set_mpp_feed_forward_enabled(self.dit, self.feed_forward_stage_scope in {"all", "stage1"})
         stage1_started = time.perf_counter()
         try:
-            stage1 = euler_ancestral_denoise_loop(
-                model,
-                video_state,
-                audio_state,
-                video_embeds,
-                audio_embeds,
-                sigmas=LTX25_DISTILLED_SIGMAS,
-                noise_seed=(seed + 10000 if ancestral_noise_seed is None else ancestral_noise_seed),
-                # Official DFR attaches the rank-450 distilled adapter to the
-                # development transformer and uses deterministic Euler in both
-                # spatial stages. Fused distilled checkpoints retain their
-                # ordinary ancestral first stage.
-                eta=0.0 if dfr_official_recipe else 1.0,
-                s_noise=1.0,
-                check_interrupted=check_interrupted,
-                step_callback=(
-                    (lambda completed, _total: step_callback(completed, 11))
-                    if step_callback is not None
-                    else None
-                ),
-                evaluation_timing_callback=(
-                    lambda index, elapsed: timings["stage1_evaluations"].append(
-                        {"evaluation": index, "seconds": elapsed}
-                    )
-                ),
-            )
+            if pipeline_mode == "distilled":
+                stage1 = euler_ancestral_denoise_loop(
+                    model,
+                    video_state,
+                    audio_state,
+                    video_embeds,
+                    audio_embeds,
+                    sigmas=LTX25_DISTILLED_SIGMAS,
+                    noise_seed=(
+                        seed + 10000
+                        if ancestral_noise_seed is None
+                        else ancestral_noise_seed
+                    ),
+                    # Official DFR attaches the rank-450 distilled adapter to the
+                    # development transformer and uses deterministic Euler in both
+                    # spatial stages. Fused distilled checkpoints retain their
+                    # ordinary ancestral first stage.
+                    eta=0.0 if dfr_official_recipe else 1.0,
+                    s_noise=1.0,
+                    check_interrupted=check_interrupted,
+                    step_callback=(
+                        (
+                            lambda completed, _total: step_callback(
+                                completed, stage1_steps + stage2_steps
+                            )
+                        )
+                        if step_callback is not None
+                        else None
+                    ),
+                    evaluation_timing_callback=(
+                        lambda index, elapsed: timings["stage1_evaluations"].append(
+                            {"evaluation": index, "seconds": elapsed}
+                        )
+                    ),
+                )
+            else:
+                from ltx_core_mlx.components.guiders import (
+                    MultiModalGuiderParams,
+                    create_multimodal_guider_factory,
+                )
+                from ltx_pipelines_mlx.scheduler import ltx2_schedule
+                from ltx_pipelines_mlx.utils.samplers import (
+                    guided_denoise_loop,
+                    res2s_denoise_loop,
+                )
+
+                video_params = MultiModalGuiderParams(
+                    cfg_scale=video_cfg_scale,
+                    stg_scale=stg_scale,
+                    rescale_scale=video_rescale_scale,
+                    modality_scale=modality_scale,
+                    stg_blocks=list(stg_blocks),
+                )
+                audio_params = MultiModalGuiderParams(
+                    cfg_scale=audio_cfg_scale,
+                    stg_scale=stg_scale,
+                    rescale_scale=audio_rescale_scale,
+                    modality_scale=modality_scale,
+                    stg_blocks=list(stg_blocks),
+                )
+                video_factory = create_multimodal_guider_factory(
+                    video_params, negative_context=negative_video_embeds
+                )
+                audio_factory = create_multimodal_guider_factory(
+                    audio_params, negative_context=negative_audio_embeds
+                )
+                sigmas = ltx2_schedule(
+                    stage1_steps, num_tokens=latent_f * latent_h * latent_w
+                )
+                sampler = (
+                    res2s_denoise_loop
+                    if pipeline_mode == "guided_hq"
+                    else guided_denoise_loop
+                )
+                stage1 = sampler(
+                    model=model,
+                    video_state=video_state,
+                    audio_state=audio_state,
+                    video_text_embeds=video_embeds,
+                    audio_text_embeds=audio_embeds,
+                    video_guider_factory=video_factory,
+                    audio_guider_factory=audio_factory,
+                    sigmas=sigmas,
+                    show_progress=True,
+                )
+                timings["stage1_sampler"] = (
+                    "res_2s_guided" if pipeline_mode == "guided_hq" else "euler_guided"
+                )
+                timings["stage1_sampler_iterations"] = stage1_steps
         finally:
             if stage1_generated_slot_rows:
                 set_generated_keyframe_marker(self.dit, 0)
@@ -975,6 +1072,11 @@ class LTX25DistilledPipeline:
         )
         aggressive_cleanup()
         timings["stage_boundary_cleanup_seconds"] = time.perf_counter() - cleanup_started
+        if pipeline_mode != "distilled":
+            self._load_transformer(
+                extra_loras=((str(self.distilled_lora_path), 1.0),)
+            )
+            model = X0Model(self.dit)
         if dfr_detailing_lora is not None:
             if self.dfr_stage2_transformer_path is not None:
                 self._load_transformer(
@@ -1002,7 +1104,11 @@ class LTX25DistilledPipeline:
                 s_noise=1.0,
                 check_interrupted=check_interrupted,
                 step_callback=(
-                    (lambda completed, _total: step_callback(8 + completed, 11))
+                    (
+                        lambda completed, _total: step_callback(
+                            stage1_steps + completed, stage1_steps + stage2_steps
+                        )
+                    )
                     if step_callback is not None
                     else None
                 ),

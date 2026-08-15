@@ -1,0 +1,163 @@
+{
+  "last_node_id": 7,
+  "last_link_id": 6,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "WeeToddLTX25ComponentLoader",
+      "pos": [40, 100],
+      "size": [500, 310],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [{"name": "model", "type": "WEETODD_LTX25_MODEL", "links": [1], "slot_index": 0}],
+      "properties": {"Node name for S&R": "WeeToddLTX25ComponentLoader"},
+      "widgets_values": [
+        "ltx-2.5-22b-distilled-transformer-bf16.safetensors",
+        "gemma4-12b-with-proj-ltx-2.5-bf16.safetensors",
+        "ltx-2.5-video-vae-conv-bf16.safetensors",
+        "ltx-2.5-audio-vae-bf16.safetensors",
+        "ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors",
+        ""
+      ]
+    },
+    {
+      "id": 2,
+      "type": "WeeToddLTX25GuidedModelLoader",
+      "pos": [590, 100],
+      "size": [500, 190],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [{"name": "model", "type": "WEETODD_LTX25_MODEL", "link": 1}],
+      "outputs": [
+        {"name": "model", "type": "WEETODD_LTX25_MODEL", "links": [4], "slot_index": 0},
+        {"name": "guided_model_info", "type": "STRING", "links": null, "slot_index": 1}
+      ],
+      "properties": {"Node name for S&R": "WeeToddLTX25GuidedModelLoader"},
+      "widgets_values": [
+        "ltx-2.5-22b-dev-transformer-bf16.safetensors",
+        "ltx-2.5-22b-distilled-lora-450-bf16.safetensors"
+      ]
+    },
+    {
+      "id": 3,
+      "type": "WeeToddLTX25GenerationConfig",
+      "pos": [40, 460],
+      "size": [440, 300],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {"name": "config", "type": "WEETODD_LTX25_CONFIG", "links": [2], "slot_index": 0},
+        {"name": "resolved_settings", "type": "STRING", "links": null, "slot_index": 1}
+      ],
+      "properties": {"Node name for S&R": "WeeToddLTX25GenerationConfig"},
+      "widgets_values": [
+        "Official parity — 768×512, 5 s, reference FP32, 8 ancestral + 3 deterministic",
+        768,
+        512,
+        5.0,
+        24.0,
+        584293325,
+        true,
+        false,
+        "official_1024",
+        "reference_fp32"
+      ]
+    },
+    {
+      "id": 4,
+      "type": "WeeToddLTX25QualityMode",
+      "pos": [590, 350],
+      "size": [500, 360],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [{"name": "config", "type": "WEETODD_LTX25_CONFIG", "link": 2}],
+      "outputs": [
+        {"name": "config", "type": "WEETODD_LTX25_CONFIG", "links": [3, 6], "slot_index": 0},
+        {"name": "quality_mode_info", "type": "STRING", "links": null, "slot_index": 1}
+      ],
+      "properties": {"Node name for S&R": "WeeToddLTX25QualityMode"},
+      "widgets_values": [
+        "HQ guided — 15 res_2s + 3 deterministic",
+        "blurry, out of focus, low contrast, washed out colors, excessive noise, flickering, distorted proportions, deformed facial features, extra limbs, inconsistent perspective, cartoonish rendering, unrealistic materials, mismatched lip sync, distorted or robotic voice, background noise, off-sync audio, incorrect dialogue, repetitive speech, jittery movement, unnatural transitions, AI artifacts"
+      ]
+    },
+    {
+      "id": 5,
+      "type": "WeeToddLTX25Preflight",
+      "pos": [1160, 120],
+      "size": [380, 190],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [
+        {"name": "model", "type": "WEETODD_LTX25_MODEL", "link": 4},
+        {"name": "config", "type": "WEETODD_LTX25_CONFIG", "link": 3}
+      ],
+      "outputs": [
+        {"name": "model", "type": "WEETODD_LTX25_MODEL", "links": [5], "slot_index": 0},
+        {"name": "preflight_report", "type": "STRING", "links": null, "slot_index": 1}
+      ],
+      "properties": {"Node name for S&R": "WeeToddLTX25Preflight"},
+      "widgets_values": []
+    },
+    {
+      "id": 6,
+      "type": "WeeToddLTX25Generate",
+      "pos": [1610, 120],
+      "size": [540, 440],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [
+        {"name": "model", "type": "WEETODD_LTX25_MODEL", "link": 5},
+        {"name": "config", "type": "WEETODD_LTX25_CONFIG", "link": 6}
+      ],
+      "outputs": [
+        {"name": "video_path", "type": "STRING", "links": null, "slot_index": 0},
+        {"name": "generation_info", "type": "STRING", "links": null, "slot_index": 1}
+      ],
+      "properties": {"Node name for S&R": "WeeToddLTX25Generate"},
+      "widgets_values": [
+        "Live-action cinematic medium-wide continuous shot inside a quiet neighborhood bakery at dawn, lit by warm amber oven light and cool blue window light across worn wood counters and flour-dusted surfaces. A gray-haired man in a dark green apron slides a metal tray of bread toward the glowing oven while a small orange cat watches from a nearby stool. One loaf slowly swells into a comically perfect dome; the baker stops, narrows his eyes, leans closer, and steadies the tray with both hands. He tilts his head toward the loaf and says in a dry, quiet voice, “Well, you are ambitious.” The camera makes one restrained push toward the baker, ending in a medium close-up that keeps his puzzled face, the domed loaf, and the attentive cat clearly visible without a cut. Warm oven crackle, soft metal tray scrapes, faint cloth movement, distant morning birds, and clean synchronized speech occupy one continuous acoustic space; no music.",
+        "WeeTodd/LTX25_guided_hq",
+        true
+      ]
+    },
+    {
+      "id": 7,
+      "type": "MarkdownNote",
+      "pos": [40, -500],
+      "size": [1050, 500],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "title": "Setup and model downloads",
+      "properties": {},
+      "widgets_values": [
+        "## LTX 2.5 guided HQ — 768×512\n\n1. Install WeeTodd Nodes and restart ComfyUI.\n2. Accept the LTX 2.5 license and download the split components, development transformer, and official rank-450 distilled LoRA.\n3. Put components under `ComfyUI/models/` or shared roots from `extra_model_paths.yaml`.\n4. Queue the workflow after **LTX 2.5 Preflight** succeeds.\n\nUse **Production guided** for the 30-step Euler recipe or leave **HQ guided** selected for the 15-step res_2s recipe. These sampler iterations require several guided transformer passes and are much slower than fast distilled 8+3.\n\n### Downloads\n\n- [LTX 2.5 model components](https://huggingface.co/Lightricks/LTX-2.5)"
+      ],
+      "color": "#243447",
+      "bgcolor": "#15202b"
+    }
+  ],
+  "links": [
+    [1, 1, 0, 2, 0, "WEETODD_LTX25_MODEL"],
+    [2, 3, 0, 4, 0, "WEETODD_LTX25_CONFIG"],
+    [3, 4, 0, 5, 1, "WEETODD_LTX25_CONFIG"],
+    [4, 2, 0, 5, 0, "WEETODD_LTX25_MODEL"],
+    [5, 5, 0, 6, 0, "WEETODD_LTX25_MODEL"],
+    [6, 4, 0, 6, 1, "WEETODD_LTX25_CONFIG"]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {},
+  "version": 0.4
+}
