@@ -214,7 +214,7 @@ work. Results apply to the stated workflow and hardware conditions.
 
 | Optimization | Category | Impact | Measured result | Output effect |
 | --- | --- | --- | --- | --- |
-| H3 paged Qwen3-VL plus q8-extended transformer | Memory | Very high | Matched 384p complete-process peak fell from 28.823 GB to 14.951 GB. | Qwen paging preserved the MP4 digest. Q8 transformer weights remain approximate relative to BF16. |
+| H3 paged Qwen3-VL plus q8-extended transformer | Memory | Very high | Matched 384p complete-process peak fell from 28.823 GB to 14.951 GB. Four-block paging remains the default; a one-block test did not reduce complete-process peak and was 18.2% slower. | Qwen paging preserved the MP4 digest. Q8 transformer weights remain approximate relative to BF16. |
 | H3 paged MPP projections | Sampling speed | Medium | On M3 Ultra, matched warm q8-paged 384p sampling fell from 113.35 to 108.49 seconds (4.3%) with no peak change. | The final MP4 was byte-identical. Unsupported and quantized projections retain MLX. |
 | H3 four-evaluation Turbo | Speed | Very high | Uses four real evaluations instead of the 19-evaluation dense schedule. | Changes the sampling trajectory. |
 | H3 staged Turbo | Speed/quality | Very high | Uses two base plus four Turbo evaluations. | Changes the sampling trajectory but retains base-model setup evaluations. |
@@ -237,11 +237,11 @@ work. Results apply to the stated workflow and hardware conditions.
 
 | Rank | Candidate | Potential gain | Confidence |
 | ---: | --- | --- | --- |
-| 1 | Ref2VA reference-feature reuse and adaptive temporal packing | High Ref2VA speed and memory reduction | Medium |
+| 1 | H3-specific fused attention data movement | High transformer speed potential | Medium; requires an exact-shape MLX extension |
 | 2 | H3-specific W4A8 projection kernel | Very high checkpoint and resident-memory reduction | Low |
-| 3 | Adaptive full-block H3 paging | Very high BF16 peak-memory reduction | Medium |
+| 3 | Complete-process BF16 one-block paging validation | Very high BF16 peak-memory reduction | Medium; q8 remains faster with four-block windows |
 | 4 | LTX 2.5 visual-token routing parity | High long-duration speed potential | Low until the routing contract is verified |
-| 5 | H3-specific MLX attention tiles | High transformer speed potential | Medium; preserve multimodal prefix and exact output shape |
+| 5 | Ref2VA automatic-density quality validation | High Ref2VA speed and memory reduction | Medium; full density remains the default |
 | 6 | LTX 2.5 temporal image-conditioning and chain parity | Medium feature completeness | Medium |
 
 ## Memory guidance
