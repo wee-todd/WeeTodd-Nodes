@@ -264,15 +264,16 @@ class WeeToddLTX25LoRALoader:
     FUNCTION = "attach"
     CATEGORY = "WeeTodd/LTX 2.5/loaders"
     DESCRIPTION = (
-        "Attach a generic LTX 2.5 transformer LoRA. Multiple loader nodes may be chained; "
-        "IC-LoRA control media still requires its matching conditioning workflow."
+        "Attach a generic LTX 2.5 transformer LoRA, including block and non-block targets. "
+        "Multiple loader nodes may be chained; IC-LoRA control media still requires its "
+        "matching conditioning workflow."
     )
 
     def attach(self, model, lora, strength):
         resolved = _resolve_component(lora, ("loras", "ltx25"))
-        from ltx25_mlx.transformer import inspect_ltx25_ic_lora
+        from ltx25_mlx.transformer import inspect_ltx25_lora
 
-        report = inspect_ltx25_ic_lora(resolved)
+        report = inspect_ltx25_lora(resolved)
         attached = replace(
             model,
             loras=(*model.loras, (str(resolved), float(strength))),

@@ -576,6 +576,7 @@ class LTX25DistilledPipeline:
         return_continuation: bool = False,
         generated_keyframes: int = 0,
         dfr_enabled: bool = False,
+        dfr_official_recipe: bool = False,
         dfr_detailing_lora: tuple[str, float] | None = None,
         temporal_upsample_rounds: int = 0,
         auto_duration: bool = False,
@@ -763,7 +764,11 @@ class LTX25DistilledPipeline:
                 audio_embeds,
                 sigmas=LTX25_DISTILLED_SIGMAS,
                 noise_seed=(seed + 10000 if ancestral_noise_seed is None else ancestral_noise_seed),
-                eta=1.0,
+                # Official DFR attaches the rank-450 distilled adapter to the
+                # development transformer and uses deterministic Euler in both
+                # spatial stages. Fused distilled checkpoints retain their
+                # ordinary ancestral first stage.
+                eta=0.0 if dfr_official_recipe else 1.0,
                 s_noise=1.0,
                 check_interrupted=check_interrupted,
                 step_callback=(

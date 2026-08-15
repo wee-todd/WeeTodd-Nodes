@@ -146,6 +146,7 @@ in standard ComfyUI folders.
 | ComfyUI folder | Required file |
 | --- | --- |
 | `models/diffusion_models/` | `ltx-2.5-22b-distilled-transformer-bf16.safetensors` |
+| `models/diffusion_models/` | Official DFR: `ltx-2.5-22b-dev-transformer-bf16.safetensors` |
 | `models/text_encoders/` | `gemma4-12b-with-proj-ltx-2.5-bf16.safetensors` |
 | `models/vae/` | `ltx-2.5-video-vae-conv-bf16.safetensors` |
 | `models/vae/` | Optional detail decoder: `ltx-2.5-video-vae-bf16.safetensors` |
@@ -154,6 +155,7 @@ in standard ComfyUI folders.
 | `models/latent_upscale_models/` | Optional DFR temporal refinement: `ltx-2.5-latent-temporal-upscaler-x2-bf16-1.0.safetensors` |
 | `models/model_patches/LTX-2.5/` | Optional automatic duration: `ltx-2.5-duration-head-bf16.safetensors` |
 | `models/loras/LTX-2.5/` | Optional DFR: [`ltx-2.5-22b-ic-lora-pixel-spatial-upscaler-x2-1.0.safetensors`](https://huggingface.co/Lightricks/LTX-2.5-22b-IC-LoRA-Pixel-Spatial-Upscaler) |
+| `models/loras/` | Official DFR: `ltx-2.5-22b-distilled-lora-450-bf16.safetensors` |
 
 The video-refine workflow also requires the
 [pixel-spatial upscaler IC-LoRA](https://huggingface.co/Lightricks/LTX-2.5-22b-IC-LoRA-Pixel-Spatial-Upscaler)
@@ -198,7 +200,7 @@ work. Results apply to the stated workflow and hardware conditions.
 | LTX 2.5 query-tiled Metal Diffusion VAE | Decode memory | High | A 65,536-row tile reduced matched 512×512 Metal peak from 5.41 to 4.24 GB. Decode time changed from 15.83 to 16.77 s, and the MP4 digest remained identical. | Select `metal_na3d_query_tiled_experimental` only when Diffusion VAE memory has priority. Fine tiles are substantially slower. |
 | LTX 2.5 automatic duration | Usability | Low runtime cost | A real Q8 prompt probe spent 0.027 s in the MLX duration head after prompt encoding. | Opt-in modifier; manual duration remains authoritative unless connected. Raw predicted seconds and resolved `8k+1` frames are recorded. |
 | LTX 2.5 Diffusion VAE width tiling | Decode memory | Experimental | A 32-cell stage-four stripe reduced 512×512 peak from 8.27 GB to 7.62 GB. | Decode slowed from 61.99 s to 100.13 s and output was not pixel-identical. Select `stage4_width_tiles` only when memory is the priority. |
-| LTX 2.5 DFR | Full-resolution detail | Experimental | Adds generated stage-one slots, stage-one latent reference conditioning, and a stage-two-only Pixel-Spatial IC-LoRA. | DFR generatively changes composition and motion. It preserves stage-one audio but is not a decoder-only enhancement. |
+| LTX 2.5 DFR | Full-resolution detail | Experimental | The official development-transformer plus rank-450 distilled-LoRA stack completed a 256×256, two-second, 11-evaluation probe in 100.36 s. MLX peak was 17.66 GB and complete-process peak was 16.36 GB. | Applies every block and non-block LoRA target, uses deterministic Euler in both spatial stages, and adds a stage-two-only Pixel-Spatial IC-LoRA. DFR changes composition and motion but preserves stage-one audio. |
 | LTX 2.5 DFR temporal refinement | Motion smoothness | Not production-ready | After correcting stage two to deterministic Euler, a 768×512 Q8-paged I2V probe produced 97 frames at 48 fps in 127.97 s and peaked at 9.65 GB. A matched control took 63.58 s and peaked at 9.46 GB. | Streams, audio preservation, first-frame landing, and evaluation counts pass. Both Q8 and BF16 temporal probes develop matching mid-clip color corruption, so quantization is not the cause. Keep this path diagnostic-only. |
 
 ### Remaining optimization priorities
@@ -295,7 +297,7 @@ This table is generated from the registered node contracts. Run
 | LTX 2.3 Upscale + Publish | Upscale decoded H3 or other ComfyUI video frames with the LTX latent upscaler and preserve the supplied audio. | LTX 2.3 — Upscaling | Experimental |
 | LTX 2.3 Unload MLX Runtime | Release the process-local LTX 2.3 pipeline. | LTX 2.3 — Core | Supported |
 | LTX 2.5 Component Loader (MLX) | Select LTX 2.5 split components without loading weights or downloading files. | LTX 2.5 — Loaders | Experimental |
-| LTX 2.5 LoRA Loader (MLX) | Attach a generic LTX 2.5 transformer LoRA. Multiple loader nodes may be chained; IC-LoRA control media still requires its matching conditioning workflow. | LTX 2.5 — Loaders | Supported |
+| LTX 2.5 LoRA Loader (MLX) | Attach a generic LTX 2.5 transformer LoRA, including block and non-block targets. Multiple loader nodes may be chained; IC-LoRA control media still requires its matching conditioning workflow. | LTX 2.5 — Loaders | Supported |
 | LTX 2.5 Generation Config | Configure the official distilled 8+3-evaluation LTX 2.5 two-stage schedule. | LTX 2.5 — Core | Experimental |
 | LTX 2.5 Automatic Duration | Predict one-shot duration from the prompt with the official LTX 2.5 duration head. The manual duration remains unchanged when this modifier is not connected. | LTX 2.5 — Core | Supported |
 | LTX 2.5 Generated Keyframes | Apply LTX 2.5 generated interior keyframe slots as a composable config modifier. | LTX 2.5 — Conditioning | Supported |

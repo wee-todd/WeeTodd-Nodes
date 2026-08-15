@@ -282,33 +282,43 @@ def transformer_metadata(path: str | Path) -> dict[str, Any]:
     return decoded
 
 
-def inspect_ltx25_ic_lora(path: str | Path) -> dict[str, Any]:
-    """Validate an LTX 2.5 IC-LoRA header without materializing its tensors."""
+def inspect_ltx25_lora(path: str | Path) -> dict[str, Any]:
+    """Validate an LTX 2.5 transformer LoRA header without materializing tensors."""
     source = Path(path).expanduser()
     if not source.is_file() or source.suffix != ".safetensors":
-        raise FileNotFoundError(f"LTX 2.5 IC-LoRA is not a safetensors file: {source}")
+        raise FileNotFoundError(f"LTX 2.5 LoRA is not a safetensors file: {source}")
     with safe_open(source, framework="numpy") as handle:
         metadata = handle.metadata() or {}
         keys = list(handle.keys())
     model_version = str(metadata.get("model_version", ""))
     if not model_version.startswith("2.5"):
         raise ValueError(
-            f"The selected IC-LoRA is not identified as LTX 2.5; model_version={model_version!r}."
+            f"The selected LoRA is not identified as LTX 2.5; model_version={model_version!r}."
         )
     try:
         downscale = int(metadata.get("reference_downscale_factor", "1"))
     except (TypeError, ValueError) as exc:
-        raise ValueError("LTX 2.5 IC-LoRA has an invalid reference downscale factor.") from exc
+        raise ValueError("LTX 2.5 LoRA has an invalid reference downscale factor.") from exc
     pairs = sum(key.endswith(".lora_A.weight") for key in keys)
     if pairs == 0 or pairs != sum(key.endswith(".lora_B.weight") for key in keys):
-        raise ValueError("LTX 2.5 IC-LoRA does not contain balanced A/B adapter pairs.")
+        raise ValueError("LTX 2.5 LoRA does not contain balanced A/B adapter pairs.")
     return {
         "path": source,
         "model_version": model_version,
         "reference_downscale_factor": downscale,
         "adapter_pairs": pairs,
+        "adapter_role": (
+            "ic_lora" if "reference_downscale_factor" in metadata else "transformer_lora"
+        ),
+        "lora_rank": int(metadata["lora_rank"]) if metadata.get("lora_rank") else None,
+        "lora_alpha": int(metadata["lora_alpha"]) if metadata.get("lora_alpha") else None,
         "bytes": source.stat().st_size,
     }
+
+
+def inspect_ltx25_ic_lora(path: str | Path) -> dict[str, Any]:
+    """Backward-compatible alias for generic LTX 2.5 LoRA inspection."""
+    return inspect_ltx25_lora(path)
 
 
 def remap_comfy_transformer_key(key: str) -> str | None:
@@ -357,6 +367,38 @@ def _remap_comfy_lora_weights(weights: dict[str, mx.array]) -> dict[str, mx.arra
     return mapped
 
 
+def _fuse_non_block_loras(
+    weights: dict[str, mx.array],
+    loaded_loras: list[tuple[dict[str, mx.array], float]],
+) -> list[tuple[str, mx.array]]:
+    """Fuse LoRA targets outside transformer blocks without materializing block deltas."""
+    from ltx_core_mlx.loader.fuse_loras import apply_loras
+    from ltx_core_mlx.loader.primitives import LoraStateDictWithStrength, StateDict
+
+    non_block_weights = {
+        key: value for key, value in weights.items() if not key.startswith("transformer_blocks.")
+    }
+    non_block_loras = []
+    for remapped, strength in loaded_loras:
+        values = {
+            key: value
+            for key, value in remapped.items()
+            if not key.startswith("transformer_blocks.")
+        }
+        if values:
+            non_block_loras.append(
+                LoraStateDictWithStrength(
+                    StateDict(sd=values, size=0, dtype=set()),
+                    strength,
+                )
+            )
+    fused = apply_loras(
+        StateDict(sd=non_block_weights, size=0, dtype=set()),
+        non_block_loras,
+    )
+    return list(fused.sd.items())
+
+
 def _load_resident_transformer_with_loras(
     model,
     weights: dict[str, mx.array],
@@ -371,10 +413,7 @@ def _load_resident_transformer_with_loras(
         remapped = _remap_comfy_lora_weights(dict(mx.load(str(path))))
         loaded_loras.append((remapped, float(strength)))
 
-    non_block = [
-        (key, value) for key, value in weights.items() if not key.startswith("transformer_blocks.")
-    ]
-    model.load_weights(non_block, strict=False)
+    model.load_weights(_fuse_non_block_loras(weights, loaded_loras), strict=False)
 
     for index, block in enumerate(model.transformer_blocks):
         prefix = f"transformer_blocks.{index}."
@@ -637,7 +676,7 @@ def load_ltx25_transformer(
             )
     resolved_loras = tuple((Path(item).expanduser(), float(strength)) for item, strength in loras)
     for lora_path, _strength in resolved_loras:
-        inspect_ltx25_ic_lora(lora_path)
+        inspect_ltx25_lora(lora_path)
     config = LTX25TransformerConfig.from_metadata(transformer_metadata(source))
     model = LTX25Model.build(config)
     if paged_manifest is None:
@@ -665,12 +704,15 @@ def load_ltx25_transformer(
             )
             quantization_weights = {**weights, **first_page}
         apply_quantization(model, quantization_weights)
-        non_block = [
-            (key, value)
-            for key, value in weights.items()
-            if not key.startswith("transformer_blocks.")
+        loaded_non_block_loras = [
+            (_remap_comfy_lora_weights(dict(mx.load(str(path)))), strength)
+            for path, strength in resolved_loras
         ]
-        model.load_weights(non_block, strict=False)
+        model.load_weights(
+            _fuse_non_block_loras(weights, loaded_non_block_loras),
+            strict=False,
+        )
+        loaded_non_block_loras.clear()
         if streaming_window > 1:
             first_block = model.transformer_blocks[0]
             model.transformer_blocks = [
@@ -737,6 +779,7 @@ __all__ = [
     "LTX25Model",
     "LTX25TransformerConfig",
     "inspect_ltx25_ic_lora",
+    "inspect_ltx25_lora",
     "load_ltx25_transformer",
     "remap_comfy_transformer_key",
     "remap_comfy_transformer_weights",

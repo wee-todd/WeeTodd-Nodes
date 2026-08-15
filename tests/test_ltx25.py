@@ -29,8 +29,14 @@ from ltx25_mlx.runtime import (
     LTX25RuntimeCache,
     apply_ltx25_generation_preset,
     backend_capability,
+    resolve_ltx25_dfr_recipe,
 )
-from ltx25_mlx.transformer import inspect_ltx25_ic_lora, remap_comfy_transformer_key
+from ltx25_mlx.transformer import (
+    _fuse_non_block_loras,
+    inspect_ltx25_ic_lora,
+    inspect_ltx25_lora,
+    remap_comfy_transformer_key,
+)
 from ltx25_mlx.upscale import (
     LTX25_INPUT_SIZE_POLICIES,
     LTX25_PIXEL_SPATIAL_MODE,
@@ -181,6 +187,53 @@ def test_ltx25_lora_loader_builds_lazy_ordered_stack(tmp_path):
     assert spec.loras == ()
     assert attached.loras == ((str(adapter), 0.75),)
     assert json.loads(raw)["adapter_pairs"] == 1
+    report = attached.validate()
+    lora_component = report["components"][-1]
+    assert lora_component["component"] == "transformer_lora_1"
+    assert lora_component["strength"] == 0.75
+    assert lora_component["adapter_role"] == "ic_lora"
+    assert report["checkpoint_bytes"] >= adapter.stat().st_size
+
+
+def test_ltx25_distilled_lora_header_is_generic_transformer_adapter(tmp_path):
+    adapter = tmp_path / "distilled.safetensors"
+    save_file(
+        {
+            "diffusion_model.adaln_single.emb.timestep_embedder.linear_1.lora_A.weight": np.zeros(
+                (2, 4), dtype=np.float32
+            ),
+            "diffusion_model.adaln_single.emb.timestep_embedder.linear_1.lora_B.weight": np.zeros(
+                (4, 2), dtype=np.float32
+            ),
+        },
+        adapter,
+        metadata={"model_version": "2.5.0", "lora_rank": "2", "lora_alpha": "2"},
+    )
+
+    report = inspect_ltx25_lora(adapter)
+    assert report["adapter_role"] == "transformer_lora"
+    assert report["reference_downscale_factor"] == 1
+    assert report["lora_rank"] == 2
+    assert report["lora_alpha"] == 2
+
+
+def test_ltx25_non_block_lora_targets_are_fused_independently():
+    import mlx.core as mx
+
+    weights = {
+        "adaln.weight": mx.zeros((2, 2), dtype=mx.float32),
+        "transformer_blocks.0.proj.weight": mx.zeros((2, 2), dtype=mx.float32),
+    }
+    adapter = {
+        "adaln.lora_A.weight": mx.eye(2, dtype=mx.float32),
+        "adaln.lora_B.weight": mx.eye(2, dtype=mx.float32),
+        "transformer_blocks.0.proj.lora_A.weight": mx.eye(2, dtype=mx.float32),
+        "transformer_blocks.0.proj.lora_B.weight": mx.eye(2, dtype=mx.float32),
+    }
+
+    fused = dict(_fuse_non_block_loras(weights, [(adapter, 0.5)]))
+    assert set(fused) == {"adaln.weight"}
+    assert mx.array_equal(fused["adaln.weight"], mx.eye(2, dtype=mx.float32) * 0.5)
 
 
 def test_ltx25_dfr_modifier_selects_stage2_pixel_spatial_lora(tmp_path):
@@ -205,6 +258,25 @@ def test_ltx25_dfr_modifier_selects_stage2_pixel_spatial_lora(tmp_path):
     assert config.generated_keyframes == 0
     assert report["generated_keyframe_positions"] == [24, 48]
     assert report["audio_source"] == "stage_1"
+
+
+def test_ltx25_dfr_recipe_detects_official_rank_450_adapter():
+    config = LTX25GenerationConfig(dfr_enabled=True)
+    report = {
+        "components": [
+            {
+                "adapter_role": "transformer_lora",
+                "lora_rank": 450,
+                "lora_alpha": 450,
+            }
+        ]
+    }
+    assert resolve_ltx25_dfr_recipe(config, report) == "official_dev_distilled_lora"
+    assert (
+        resolve_ltx25_dfr_recipe(config, {"components": []})
+        == "fused_distilled_experimental"
+    )
+    assert resolve_ltx25_dfr_recipe(LTX25GenerationConfig(), report) == "disabled"
 
 
 def test_ltx25_timed_keyframes_are_composable_and_validate_window():

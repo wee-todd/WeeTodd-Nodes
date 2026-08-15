@@ -39,6 +39,31 @@ LTX25_DISTILLED_SIGMAS = (1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725,
 LTX25_STAGE2_SIGMAS = (0.909375, 0.725, 0.421875, 0.0)
 
 
+def resolve_ltx25_dfr_recipe(
+    config: LTX25GenerationConfig, component_report: dict[str, object]
+) -> str:
+    """Resolve the sampler recipe from the validated adapter inventory.
+
+    The official DFR stack is the development transformer plus the rank-450
+    distilled adapter. Its two spatial stages are deterministic. The fused
+    distilled checkpoint keeps the ordinary ancestral first stage.
+    """
+    if not config.dfr_enabled:
+        return "disabled"
+    components = component_report.get("components", ())
+    if isinstance(components, list):
+        for component in components:
+            if not isinstance(component, dict):
+                continue
+            if (
+                component.get("adapter_role") == "transformer_lora"
+                and component.get("lora_rank") == 450
+                and component.get("lora_alpha") == 450
+            ):
+                return "official_dev_distilled_lora"
+    return "fused_distilled_experimental"
+
+
 def _metadata(path: Path) -> dict[str, object]:
     """Read and JSON-decode a safetensors metadata header without loading weights."""
     if path.is_dir():
@@ -230,6 +255,25 @@ class LTX25ComponentSpec:
             )
             total += size
             inventory.append({"component": name, "file": path.name, "bytes": size})
+        if self.loras:
+            from .transformer import inspect_ltx25_lora
+
+            for index, (lora_path, strength) in enumerate(self.loras, start=1):
+                report = inspect_ltx25_lora(lora_path)
+                size = int(report["bytes"])
+                total += size
+                inventory.append(
+                    {
+                        "component": f"transformer_lora_{index}",
+                        "file": Path(lora_path).name,
+                        "bytes": size,
+                        "strength": float(strength),
+                        "adapter_role": report["adapter_role"],
+                        "adapter_pairs": report["adapter_pairs"],
+                        "lora_rank": report["lora_rank"],
+                        "lora_alpha": report["lora_alpha"],
+                    }
+                )
         return {
             "model_version": str(model_version),
             "gemma_source_checkpoint": transformer_gemma or text_gemma,
@@ -545,6 +589,7 @@ class LTX25RuntimeCache:
         report = spec.validate(config.pipeline_mode)
         scales = tuple(int(value) for value in report["video_scale_factors"])
         config.validate(scale_factors=scales)
+        dfr_recipe = resolve_ltx25_dfr_recipe(config, report)
         if config.duration_mode == "automatic" and not spec.duration_head_path:
             raise ValueError(
                 "Automatic LTX 2.5 duration requires a duration head in the component loader."
@@ -595,6 +640,7 @@ class LTX25RuntimeCache:
             "prompt_context": config.prompt_context,
             "generated_keyframes": config.generated_keyframes,
             "dfr_enabled": config.dfr_enabled,
+            "dfr_official_recipe": dfr_recipe == "official_dev_distilled_lora",
             "dfr_detailing_lora": (
                 (config.dfr_detailing_lora_path, config.dfr_detailing_lora_strength)
                 if config.dfr_enabled
@@ -650,6 +696,7 @@ class LTX25RuntimeCache:
                     pipeline, "last_predicted_duration_seconds", None
                 ),
                 "pipeline_mode": config.pipeline_mode,
+                "resolved_dfr_recipe": dfr_recipe,
                 "model_version": report["model_version"],
                 "video_decoder": report["video_decoder"],
                 "video_scale_factors": report["video_scale_factors"],
