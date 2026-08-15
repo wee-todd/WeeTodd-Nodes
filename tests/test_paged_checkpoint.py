@@ -21,6 +21,7 @@ from minimax_h3_mlx.paged_checkpoint import (
     convert_to_paged_checkpoint,
     load_paged_dit,
 )
+from minimax_h3_mlx.projection import MPPLinear, configure_projection_backend
 from minimax_h3_mlx.quantize import QuantConfig, quantize_dit
 
 
@@ -199,6 +200,38 @@ def test_paged_forward_and_modulation_cache_match_resident_model(tmp_path):
     assert report["windows_materialized"] == 4
     assert report["prefetch_backend"] == "darwin_advisory"
     assert report["prefetch_buffer_bytes"] == 0
+    paged.paged_blocks.close()
+
+
+def test_paged_mpp_backend_wraps_each_materialized_bf16_block(tmp_path, monkeypatch):
+    config = _tiny_dit_config()
+    mx.random.seed(44)
+    resident = MiniMaxH3DiT(config)
+    resident.set_dtype(mx.bfloat16)
+    mx.eval(resident.parameters())
+    source = tmp_path / "full"
+    source.mkdir()
+    (source / "config.json").write_text(json.dumps(asdict(config)))
+    mx.save_safetensors(
+        str(source / "model.safetensors"), dict(tree_flatten(resident.parameters()))
+    )
+    paged_dir = tmp_path / "paged"
+    convert_to_paged_checkpoint(source, paged_dir)
+    paged = load_paged_dit(paged_dir, window_size=2)
+    monkeypatch.setattr(
+        "minimax_h3_mlx.projection.mpp_capability", lambda: (True, None)
+    )
+
+    report = configure_projection_backend(paged, "mpp_experimental")
+    with paged.paged_blocks.window(0) as blocks:
+        assert all(isinstance(block.attn.qkv_proj, MPPLinear) for block in blocks)
+        assert all(isinstance(block.mlp.fc2, MPPLinear) for block in blocks)
+
+    runtime = paged.paged_blocks.report()
+    assert report.resolved == "mpp_experimental"
+    assert runtime["projection_backend"] == "mpp_experimental"
+    assert runtime["projection_wrapped"] == 8
+    assert runtime["projection_skipped"] == 0
     paged.paged_blocks.close()
 
 

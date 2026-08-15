@@ -220,6 +220,8 @@ class PagedBlockExecutor:
         self.window_compute_seconds = 0.0
         self.lora_requests: list[tuple[Any, mx.array | None]] = []
         self.lora_timesteps: mx.array | None = None
+        self.projection_backend = "mlx"
+        self.projection_wrapped_by_block: dict[int, tuple[int, int]] = {}
 
     @property
     def num_blocks(self) -> int:
@@ -259,6 +261,12 @@ class PagedBlockExecutor:
                     )
                 block.update(tree_unflatten(list(local.items())))
                 block.attn.query_chunk_size = self.query_chunk_size
+                if self.projection_backend == "mpp_experimental":
+                    from .projection import configure_block_projection_backend
+
+                    self.projection_wrapped_by_block[index] = (
+                        configure_block_projection_backend(block)
+                    )
                 if self.lora_requests:
                     from .lora import apply_paged_loras_to_block
 
@@ -295,6 +303,13 @@ class PagedBlockExecutor:
             "peak_window_bytes": self.store.peak_page_bytes,
             "lora_count": len(self.lora_requests),
             "windows_materialized": self.windows_materialized,
+            "projection_backend": self.projection_backend,
+            "projection_wrapped": sum(
+                counts[0] for counts in self.projection_wrapped_by_block.values()
+            ),
+            "projection_skipped": sum(
+                counts[1] for counts in self.projection_wrapped_by_block.values()
+            ),
             "window_setup_seconds": self.window_setup_seconds,
             "window_compute_seconds": self.window_compute_seconds,
             **self.prefetch.report(),

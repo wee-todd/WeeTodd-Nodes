@@ -17,8 +17,10 @@ stacks. An optional modifier predicts a one-shot duration from the prompt with t
 production-ready.
 Existing modifier and conditioning nodes preserve older Generation Config socket order.
 The H3 projection backend adds a backward-compatible `auto` choice; saved workflows that explicitly
-select `mlx` retain that selection. Add a modifier or conditioning node only when the feature is
-needed.
+select `mlx` retain that selection. Eligible projections in paged transformer checkpoints are
+wrapped when each block window loads. On an M3 Ultra q8-paged 384p Turbo control, MPP reduced
+sampling from 113.35 to 108.49 seconds (4.3%) with the same 7.23 GB MLX peak and a byte-identical
+MP4. Add a modifier or conditioning node only when the feature is needed.
 
 ## Choose a workflow
 
@@ -213,6 +215,7 @@ work. Results apply to the stated workflow and hardware conditions.
 | Optimization | Category | Impact | Measured result | Output effect |
 | --- | --- | --- | --- | --- |
 | H3 paged Qwen3-VL plus q8-extended transformer | Memory | Very high | Matched 384p complete-process peak fell from 28.823 GB to 14.951 GB. | Qwen paging preserved the MP4 digest. Q8 transformer weights remain approximate relative to BF16. |
+| H3 paged MPP projections | Sampling speed | Medium | On M3 Ultra, matched warm q8-paged 384p sampling fell from 113.35 to 108.49 seconds (4.3%) with no peak change. | The final MP4 was byte-identical. Unsupported and quantized projections retain MLX. |
 | H3 four-evaluation Turbo | Speed | Very high | Uses four real evaluations instead of the 19-evaluation dense schedule. | Changes the sampling trajectory. |
 | H3 staged Turbo | Speed/quality | Very high | Uses two base plus four Turbo evaluations. | Changes the sampling trajectory but retains base-model setup evaluations. |
 | H3 direct latent publication | Memory | High | Streams decoded frames to FFmpeg and avoids a persistent complete `IMAGE` tensor. | Does not change sampling. |
@@ -234,13 +237,12 @@ work. Results apply to the stated workflow and hardware conditions.
 
 | Rank | Candidate | Potential gain | Confidence |
 | ---: | --- | --- | --- |
-| 1 | Cross-boundary H3 projection and head-major attention-output fusion | Medium-to-high speed and data-movement reduction | Low; preparation-only fusion averaged about 0.5% end-to-end and was rejected |
-| 2 | Ref2VA reference-feature reuse and adaptive temporal packing | High Ref2VA speed and memory reduction | Medium |
-| 3 | H3-specific W4A8 projection kernel | Very high checkpoint and resident-memory reduction | Low |
-| 4 | Adaptive full-block H3 paging | Very high BF16 peak-memory reduction | Medium |
-| 5 | LTX 2.5 visual-token routing parity | High long-duration speed potential | Low until the routing contract is verified |
-| 6 | H3-specific MLX attention tiles | High transformer speed potential | Medium; preserve multimodal prefix and exact output shape |
-| 7 | LTX 2.5 temporal image-conditioning and chain parity | Medium feature completeness | Medium |
+| 1 | Ref2VA reference-feature reuse and adaptive temporal packing | High Ref2VA speed and memory reduction | Medium |
+| 2 | H3-specific W4A8 projection kernel | Very high checkpoint and resident-memory reduction | Low |
+| 3 | Adaptive full-block H3 paging | Very high BF16 peak-memory reduction | Medium |
+| 4 | LTX 2.5 visual-token routing parity | High long-duration speed potential | Low until the routing contract is verified |
+| 5 | H3-specific MLX attention tiles | High transformer speed potential | Medium; preserve multimodal prefix and exact output shape |
+| 6 | LTX 2.5 temporal image-conditioning and chain parity | Medium feature completeness | Medium |
 
 ## Memory guidance
 

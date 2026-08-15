@@ -98,6 +98,21 @@ def test_automatic_backend_uses_mpp_when_capable(monkeypatch) -> None:
     assert isinstance(block.attn.qkv_proj, MPPLinear)
 
 
+def test_mpp_backend_is_deferred_to_paged_block_materialization(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "minimax_h3_mlx.projection.mpp_capability", lambda: (True, None)
+    )
+    paged = SimpleNamespace(projection_backend="mlx")
+
+    report = configure_projection_backend(
+        SimpleNamespace(blocks=[], paged_blocks=paged), "mpp_experimental"
+    )
+
+    assert report.resolved == "mpp_experimental"
+    assert "paged block window" in report.reason
+    assert paged.projection_backend == "mpp_experimental"
+
+
 def test_automatic_backend_falls_back_when_mpp_is_unavailable(monkeypatch) -> None:
     monkeypatch.setattr(
         "minimax_h3_mlx.projection.mpp_capability",

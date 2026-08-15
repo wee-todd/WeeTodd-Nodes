@@ -260,6 +260,25 @@ def _eligible_linear(layer) -> bool:
     )
 
 
+def configure_block_projection_backend(block) -> tuple[int, int]:
+    """Wrap one resident H3 block, including blocks materialized from paged weights."""
+    wrapped = 0
+    skipped = 0
+    for owner, name in (
+        (block.attn, "qkv_proj"),
+        (block.attn, "out_proj"),
+        (block.mlp, "fc1"),
+        (block.mlp, "fc2"),
+    ):
+        layer = getattr(owner, name)
+        if _eligible_linear(layer):
+            setattr(owner, name, MPPLinear(layer))
+            wrapped += 1
+        else:
+            skipped += 1
+    return wrapped, skipped
+
+
 def configure_projection_backend(dit, requested: str) -> ProjectionBackendReport:
     """Apply the requested projection backend to the 50-block H3 transformer stack.
 
@@ -281,7 +300,8 @@ def configure_projection_backend(dit, requested: str) -> ProjectionBackendReport
             return ProjectionBackendReport(requested, "mlx", 0, 0, reason)
 
     blocks = getattr(dit, "blocks", None)
-    if blocks is None:
+    paged = getattr(dit, "paged_blocks", None)
+    if blocks is None and paged is None:
         return ProjectionBackendReport(
             requested,
             "mlx",
@@ -292,19 +312,19 @@ def configure_projection_backend(dit, requested: str) -> ProjectionBackendReport
 
     wrapped = 0
     skipped = 0
-    for block in blocks:
-        for owner, name in (
-            (block.attn, "qkv_proj"),
-            (block.attn, "out_proj"),
-            (block.mlp, "fc1"),
-            (block.mlp, "fc2"),
-        ):
-            layer = getattr(owner, name)
-            if _eligible_linear(layer):
-                setattr(owner, name, MPPLinear(layer))
-                wrapped += 1
-            else:
-                skipped += 1
+    for block in blocks or ():
+        block_wrapped, block_skipped = configure_block_projection_backend(block)
+        wrapped += block_wrapped
+        skipped += block_skipped
+    if paged is not None:
+        paged.projection_backend = "mpp_experimental"
+        return ProjectionBackendReport(
+            requested,
+            "mpp_experimental",
+            wrapped,
+            skipped,
+            "eligible projections are wrapped when each paged block window materializes",
+        )
     resolved = "mpp_experimental" if wrapped else "mlx"
     fallback_reason = None if wrapped else "no eligible BF16 projections"
     return ProjectionBackendReport(requested, resolved, wrapped, skipped, fallback_reason)
