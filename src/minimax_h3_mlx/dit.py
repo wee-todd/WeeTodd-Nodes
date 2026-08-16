@@ -182,6 +182,7 @@ class Attention(nn.Module):
         self.head_chunk_size: int | None = None
         self.sol_config = None
         self.sol_evidence: ExecutionEvidence | None = None
+        self.sol_route_records: list[tuple[int, int, mx.array]] | None = None
         self.sol_step_index = 0
         self.sol_total_steps = 1
 
@@ -221,8 +222,20 @@ class Attention(nn.Module):
                 else:
                     if evidence is not None:
                         evidence.record_eligible()
-                        evidence.record_executed(work_units=int(q.shape[-2]))
-                    return sol_attention(q, k, v, scale=self.scale, config=config)
+                        evidence.record_executed(work_units=0)
+                    output, route_counts = sol_attention(
+                        q,
+                        k,
+                        v,
+                        scale=self.scale,
+                        config=config,
+                        return_route_counts=True,
+                    )
+                    if self.sol_route_records is not None:
+                        self.sol_route_records.append(
+                            (self.sol_step_index, int(block_index or 0), route_counts)
+                        )
+                    return output
             elif evidence is not None:
                 evidence.record_dense_policy()
 
@@ -709,6 +722,8 @@ class MiniMaxH3DiT(nn.Module):
         self.sol_attention_config = None
         self.last_sol_attention_config = None
         self.sol_attention_evidence: ExecutionEvidence | None = None
+        self.sol_route_records: list[tuple[int, int, mx.array]] = []
+        self.sol_route_report: dict[str, object] | None = None
 
     def set_attention_query_chunk_size(self, chunk_size: int | None) -> None:
         """Select dense attention or memory-bounded query chunks for every attention layer."""
@@ -755,13 +770,17 @@ class MiniMaxH3DiT(nn.Module):
             if config is not None
             else None
         )
+        self.sol_route_records = []
+        self.sol_route_report = None
         for block in self.blocks:
             block.attn.sol_config = config
             block.attn.sol_evidence = self.sol_attention_evidence
+            block.attn.sol_route_records = self.sol_route_records
         paged = getattr(self, "paged_blocks", None)
         if paged is not None:
             paged.sol_config = config
             paged.sol_evidence = self.sol_attention_evidence
+            paged.sol_route_records = self.sol_route_records
 
     def sol_attention_report(self) -> dict[str, object] | None:
         """Return the resolved H3 Sol policy and actual generation dispatch evidence."""
@@ -770,6 +789,16 @@ class MiniMaxH3DiT(nn.Module):
         evidence = self.sol_attention_evidence
         if config is None or evidence is None:
             return None
+        if self.sol_route_report is None and self.sol_route_records:
+            from .sol_attention import route_telemetry_report
+
+            self.sol_route_report = route_telemetry_report(self.sol_route_records)
+            evidence.work_units_processed += int(
+                self.sol_route_report["processed_key_row_units"]
+            )
+            evidence.work_units_avoided += int(
+                self.sol_route_report["avoided_key_row_units"]
+            )
         snapshot = evidence.snapshot()
         return {
             **config.__dict__,
@@ -777,6 +806,7 @@ class MiniMaxH3DiT(nn.Module):
             "attention_calls": snapshot["total_calls"],
             "sparse_kernel_calls": snapshot["executed_calls"],
             "fallback_calls": snapshot["fallback_calls"],
+            **(self.sol_route_report or {}),
         }
 
     def embed_timesteps(self, timesteps: mx.array) -> mx.array:

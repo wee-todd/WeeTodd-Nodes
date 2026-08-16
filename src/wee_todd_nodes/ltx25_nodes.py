@@ -1223,7 +1223,15 @@ class WeeToddLTX25SolAttention:
         return {
             "required": {
                 "config": ("WEETODD_LTX25_CONFIG",),
-                "profile": (["quality", "balanced", "speed", "disabled"],),
+                "profile": (
+                    [
+                        "quality",
+                        "balanced",
+                        "speed",
+                        "paged_speed",
+                        "disabled",
+                    ],
+                ),
             }
         }
 
@@ -1232,8 +1240,8 @@ class WeeToddLTX25SolAttention:
     FUNCTION = "apply"
     CATEGORY = "WeeTodd/LTX 2.5/optimization"
     DESCRIPTION = (
-        "Experimental MLX Sol-style sparse video self-attention for long, resident, "
-        "full-resolution single-stage LTX 2.5 sequences."
+        "Experimental MLX Sol-style sparse video self-attention for long, "
+        "full-resolution single-stage LTX 2.5 sequences, including Q8 paged mode."
     )
 
     def apply(self, config, profile):
@@ -1243,7 +1251,16 @@ class WeeToddLTX25SolAttention:
             {
                 "profile": updated.sol_attention_profile,
                 "minimum_video_tokens": 16000,
-                "scope": "unmasked resident video self-attention only",
+                "scope": (
+                    "unmasked compiled paged video self-attention only"
+                    if updated.sol_attention_profile == "paged_speed"
+                    else "unmasked resident video self-attention only"
+                ),
+                "schedule": (
+                    "always active in every transformer block"
+                    if updated.sol_attention_profile == "paged_speed"
+                    else "profile-controlled dense evaluations and boundary blocks"
+                ),
                 "audio_and_cross_attention": "dense MLX",
                 "output_preserving": False,
             },

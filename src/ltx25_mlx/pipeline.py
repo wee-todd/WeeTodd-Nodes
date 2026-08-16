@@ -209,14 +209,16 @@ class LTX25DistilledPipeline:
             from .sol_attention import configure_ltx25_sol_attention
 
             profiles = {
-                "quality": (0.75, 0.30, 4),
-                "balanced": (1.0, 0.25, 3),
-                "speed": (1.25, 0.20, 2),
+                "quality": (0.75, 0.30, 4, False),
+                "balanced": (1.0, 0.25, 3, False),
+                "speed": (1.25, 0.20, 2, False),
+                "paged_speed": (1.25, 0.0, 0, False),
             }
             sol_config = None
+            force_dense_bf16 = False
             sol_profile = getattr(self, "sol_attention_profile", "disabled")
             if sol_profile != "disabled":
-                tau, start_percent, dense_blocks = profiles[sol_profile]
+                tau, start_percent, dense_blocks, force_dense_bf16 = profiles[sol_profile]
                 sol_config = SolAttentionConfig(
                     enabled=True,
                     tau=tau,
@@ -224,7 +226,11 @@ class LTX25DistilledPipeline:
                     start_percent=start_percent,
                     dense_blocks=dense_blocks,
                 )
-            self.sol_attention_report = configure_ltx25_sol_attention(self.dit, sol_config)
+            self.sol_attention_report = configure_ltx25_sol_attention(
+                self.dit,
+                sol_config,
+                force_dense_bf16=force_dense_bf16,
+            )
             self._loaded_loras = desired_loras
             self._loaded_transformer_path = desired_path
             self.feed_forward_report = getattr(self.dit, "feed_forward_backend_report", None)

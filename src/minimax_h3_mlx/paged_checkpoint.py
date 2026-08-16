@@ -206,6 +206,7 @@ class PagedBlockExecutor:
         self.query_chunk_size: int | None = None
         self.sol_config = None
         self.sol_evidence = None
+        self.sol_route_records = None
         self.sol_step_index = 0
         self.sol_total_steps = 1
         self.store = PagedTensorStore(manifest)
@@ -267,6 +268,7 @@ class PagedBlockExecutor:
                 block.attn.query_chunk_size = self.query_chunk_size
                 block.attn.sol_config = self.sol_config
                 block.attn.sol_evidence = self.sol_evidence
+                block.attn.sol_route_records = self.sol_route_records
                 block.attn.sol_step_index = self.sol_step_index
                 block.attn.sol_total_steps = self.sol_total_steps
                 if self.projection_backend == "mpp_experimental":

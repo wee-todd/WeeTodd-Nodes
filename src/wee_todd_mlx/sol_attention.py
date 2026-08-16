@@ -220,6 +220,13 @@ def _sparse_body() -> str:
       }
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (simd_group_id == 0 && simd_lane_id == 0) {
+      if (route_exact_shared != 0) {
+        route_exact_count += 1;
+      } else {
+        route_approx_count += 1;
+      }
+    }
     const bool route_exact = route_exact_shared != 0;"""
     body = _replace_once(body, loop_marker, loop_replacement, "KV loop")
 
@@ -443,6 +450,9 @@ auto KC = kc;
 auto VC = vc;
 auto THRESHOLDS = thresholds;
 device T* O = output;
+device uint* ROUTE_COUNTS = route_counts;
+uint route_exact_count = 0;
+uint route_approx_count = 0;
 AttnParams params_value{{
     BATCH, HEADS, BD,
     ROWS, ROWS,
@@ -468,13 +478,20 @@ uint simd_group_id = simdgroup_index_in_threadgroup;
 uint3 tid = threadgroup_position_in_grid;
 uint3 lid = thread_position_in_threadgroup;
 {_SPARSE_BODY}
+if (simd_group_id == 0 && simd_lane_id == 0) {{
+    const uint query_tiles = (ROWS + BQ - 1) / BQ;
+    const ulong route_offset =
+        ((ulong(tid.z) * HEADS + tid.y) * query_tiles + tid.x) * 2;
+    ROUTE_COUNTS[route_offset] = route_exact_count;
+    ROUTE_COUNTS[route_offset + 1] = route_approx_count;
+}}
 """
     kernel = mx.fast.metal_kernel(
         name=(
             f"wee_todd_sol_attention_p{prefix_blocks}_s{suffix_blocks}_n{summary_blocks}"
         ),
         input_names=["q", "k", "v", "qc", "kc", "vc", "thresholds"],
-        output_names=["output"],
+        output_names=["output", "route_counts"],
         source=source,
         header=_STEEL_HEADER,
         ensure_row_contiguous=False,
@@ -526,7 +543,8 @@ def sol_attention(
     *,
     scale: float,
     config: SolAttentionConfig,
-) -> mx.array:
+    return_route_counts: bool = False,
+) -> mx.array | tuple[mx.array, mx.array]:
     """Return sparse H3 attention in logical ``[B, H, L, D]`` layout."""
 
     config.validate()
@@ -552,7 +570,8 @@ def sol_attention(
     qc, kc, vc = _summaries(q, k, v)
     thresholds = _thresholds(qc, kc, scale=scale, tau=config.tau)
     threadgroup = (32, 4, 1)
-    physical = _kernel(prefix_blocks, suffix_blocks, blocks)(
+    query_tiles = math.ceil(rows / 32)
+    physical, route_counts = _kernel(prefix_blocks, suffix_blocks, blocks)(
         inputs=[q, k, v, qc, kc, vc, thresholds],
         template=[
             ("BATCH", batch),
@@ -561,10 +580,16 @@ def sol_attention(
         ],
         grid=(math.ceil(rows / 32) * 32, heads * 4, batch),
         threadgroup=threadgroup,
-        output_shapes=[(batch, rows, heads, head_dim)],
-        output_dtypes=[mx.bfloat16],
-    )[0]
-    return physical.transpose(0, 2, 1, 3)
+        output_shapes=[
+            (batch, rows, heads, head_dim),
+            (batch, heads, query_tiles, 2),
+        ],
+        output_dtypes=[mx.bfloat16, mx.uint32],
+    )
+    output = physical.transpose(0, 2, 1, 3)
+    if return_route_counts:
+        return output, route_counts
+    return output
 
 
 def supports_sol_attention(q: mx.array, mask: mx.array | None, config: SolAttentionConfig) -> bool:
@@ -578,3 +603,63 @@ def supports_sol_attention(q: mx.array, mask: mx.array | None, config: SolAttent
         and q.shape[-1] == 128
         and q.shape[-2] >= config.min_tokens
     )
+
+
+def route_telemetry_report(
+    records: list[tuple[int, int, mx.array]],
+) -> dict[str, object]:
+    """Aggregate fused-kernel route counters with one synchronization."""
+
+    if not records:
+        return {}
+    totals = mx.stack([mx.sum(counts, axis=(0, 1, 2)) for _step, _block, counts in records])
+    mx.eval(totals)
+    values = totals.tolist()
+    by_step: dict[int, list[int]] = {}
+    by_block: dict[int, list[int]] = {}
+    for (step, block, _counts), (exact, approximate) in zip(records, values, strict=True):
+        for destination, key in ((by_step, step), (by_block, block)):
+            current = destination.setdefault(int(key), [0, 0])
+            current[0] += int(exact)
+            current[1] += int(approximate)
+
+    def summarize(values_by_key: dict[int, list[int]]) -> dict[str, dict[str, object]]:
+        result = {}
+        for key, (exact, approximate) in sorted(values_by_key.items()):
+            total = exact + approximate
+            result[str(key)] = {
+                "exact_routes": exact,
+                "approximate_routes": approximate,
+                "approximate_fraction": approximate / total if total else 0.0,
+            }
+        return result
+
+    exact_routes = sum(int(item[0]) for item in values)
+    approximate_routes = sum(int(item[1]) for item in values)
+    total_routes = exact_routes + approximate_routes
+    dense_key_row_units = total_routes * 64
+    processed_key_row_units = exact_routes * 64 + approximate_routes * 8
+    avoided_key_row_units = dense_key_row_units - processed_key_row_units
+    return {
+        "route_count_scope": "query-tile/head/key-block decisions",
+        "exact_routes": exact_routes,
+        "approximate_routes": approximate_routes,
+        "total_routes": total_routes,
+        "approximate_fraction": approximate_routes / total_routes if total_routes else 0.0,
+        "dense_key_row_units": dense_key_row_units,
+        "processed_key_row_units": processed_key_row_units,
+        "avoided_key_row_units": avoided_key_row_units,
+        "avoided_key_row_fraction": (
+            avoided_key_row_units / dense_key_row_units if dense_key_row_units else 0.0
+        ),
+        "route_by_step": summarize(by_step),
+        "route_by_block": summarize(by_block),
+    }
+
+
+__all__ = [
+    "SolAttentionConfig",
+    "route_telemetry_report",
+    "sol_attention",
+    "supports_sol_attention",
+]

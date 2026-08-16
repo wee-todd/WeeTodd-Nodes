@@ -617,16 +617,27 @@ class LTX25GenerationConfig:
             raise ValueError(
                 f"Unsupported LTX 2.5 Diffusion VAE optimization: {self.diffvae_optimization!r}."
             )
-        if self.sol_attention_profile not in {"disabled", "quality", "balanced", "speed"}:
+        if self.sol_attention_profile not in {
+            "disabled",
+            "quality",
+            "balanced",
+            "speed",
+            "paged_speed",
+        }:
             raise ValueError("Unsupported LTX 2.5 MLX Sol Attention profile.")
         if self.sol_attention_profile != "disabled" and not self.ic_lora_single_stage:
             raise ValueError(
                 "LTX 2.5 MLX Sol Attention currently requires full-resolution single-stage mode."
             )
-        if self.sol_attention_profile != "disabled" and self.low_ram_streaming:
+        if self.low_ram_streaming and self.sol_attention_profile not in {
+            "disabled",
+            "paged_speed",
+        }:
             raise ValueError(
-                "LTX 2.5 MLX Sol Attention currently requires a resident transformer."
+                "Low-RAM LTX 2.5 MLX Sol Attention requires the paged_speed profile."
             )
+        if self.sol_attention_profile == "paged_speed" and not self.low_ram_streaming:
+            raise ValueError("The paged_speed Sol profile requires low-RAM block streaming.")
         if self.diffvae_query_chunk_size < 1:
             raise ValueError("Diffusion VAE query chunk size must be positive.")
         if self.diffvae_context_width_chunks < 1:

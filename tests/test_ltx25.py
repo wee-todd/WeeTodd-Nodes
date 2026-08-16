@@ -555,7 +555,7 @@ def test_ltx25_ic_lora_pipeline_mode_enables_official_single_stage_geometry():
     assert json.loads(raw)["recommended_ingredients_lora_strength"] == 1.2
 
 
-def test_ltx25_sol_attention_requires_resident_single_stage():
+def test_ltx25_sol_attention_requires_single_stage():
     from wee_todd_nodes.ltx25_nodes import (
         WeeToddLTX25SingleStage,
         WeeToddLTX25SolAttention,
@@ -571,6 +571,24 @@ def test_ltx25_sol_attention_requires_resident_single_stage():
     assert configured.stage2_steps == 0
     assert configured.sol_attention_profile == "speed"
     assert json.loads(raw)["minimum_video_tokens"] == 16000
+
+
+def test_ltx25_sol_attention_paged_profile_requires_streaming():
+    resident = LTX25GenerationConfig(
+        width=1344,
+        height=768,
+        ic_lora_single_stage=True,
+        stage2_steps=0,
+        sol_attention_profile="paged_speed",
+    )
+    with pytest.raises(ValueError, match="requires low-RAM"):
+        resident.validate()
+
+    paged = replace(resident, low_ram_streaming=True)
+    paged.validate()
+
+    with pytest.raises(ValueError, match="requires the paged_speed"):
+        replace(paged, sol_attention_profile="speed").validate()
 
 
 def test_ltx25_sol_attention_patches_only_video_self_attention_and_tracks_context():
@@ -679,6 +697,129 @@ def test_ltx25_sol_attention_casts_fp32_projected_qkv_to_bf16_kernel():
     assert report["bf16_projection_cast_calls"] == 1
     assert report["observed_projected_dtype"] == "mlx.core.float32"
     assert report["observed_kernel_dtype"] == "mlx.core.bfloat16"
+    assert report["exact_suffix_rows"] == 0
+    assert report["approximation_candidate_rows"] == 64
+    assert report["compiled_exact_suffix_rows"] is None
+    assert report["exact_routes"] == 2
+    assert report["approximate_routes"] == 0
+    assert report["avoided_key_row_units"] == 0
+
+
+def test_ltx25_bf16_dense_control_uses_same_cast_without_sparse_kernel():
+    import mlx.core as mx
+    from ltx_core_mlx.model.transformer.attention import Attention
+
+    from ltx25_mlx.sol_attention import (
+        configure_ltx25_sol_attention,
+        ltx25_sol_attention_report,
+    )
+    from wee_todd_mlx.sol_attention import SolAttentionConfig
+
+    class Block:
+        def __init__(self):
+            self.attn1 = Attention(128, num_heads=1, head_dim=128)
+
+    class Model:
+        def __init__(self):
+            self.transformer_blocks = [Block()]
+
+    model = Model()
+    report = configure_ltx25_sol_attention(
+        model,
+        SolAttentionConfig(enabled=True, min_tokens=64, start_percent=0.0, dense_blocks=0),
+        force_dense_bf16=True,
+    )
+    output = model.transformer_blocks[0].attn1(mx.random.normal((1, 64, 128)))
+    mx.eval(output)
+    report = ltx25_sol_attention_report(model, report)
+
+    assert report["resolved_backend"] == "mlx_dense_bf16_control"
+    assert report["executed_calls"] == 1
+    assert report["sparse_kernel_calls"] == 0
+    assert report["dense_bf16_control_calls"] == 1
+    assert report["bf16_projection_cast_calls"] == 1
+    assert report["observed_projected_dtype"] == "mlx.core.float32"
+    assert report["observed_kernel_dtype"] == "mlx.core.bfloat16"
+
+
+def test_ltx25_sol_attention_preserves_compiled_paged_block_and_route_telemetry():
+    from types import SimpleNamespace
+
+    import mlx.core as mx
+    import mlx.nn as nn
+    from ltx_core_mlx.model.transformer.attention import Attention
+
+    from ltx25_mlx.sol_attention import (
+        configure_ltx25_sol_attention,
+        ltx25_sol_attention_report,
+        set_ltx25_sol_context,
+    )
+    from wee_todd_mlx.sol_attention import SolAttentionConfig
+
+    class Block(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.attn1 = Attention(128, num_heads=1, head_dim=128)
+
+        def __call__(self, *, video_hidden, audio_hidden, block_idx=0, **_kwargs):
+            return self.attn1(video_hidden), audio_hidden
+
+    class Model:
+        def __init__(self):
+            block = Block()
+            self.inner = SimpleNamespace(
+                transformer_blocks=[block],
+                config=SimpleNamespace(num_layers=2),
+            )
+            object.__setattr__(self, "_shared_block", block)
+            object.__setattr__(self, "_compiled_block", mx.compile(block, inputs=block))
+
+    model = Model()
+    policy = configure_ltx25_sol_attention(
+        model,
+        SolAttentionConfig(
+            enabled=True,
+            min_tokens=64,
+            start_percent=0.0,
+            dense_blocks=0,
+        ),
+    )
+    initial_compiled = model._compiled_block
+    set_ltx25_sol_context(
+        model,
+        step_index=0,
+        total_steps=2,
+        exact_suffix_rows=64,
+    )
+    assert model._compiled_block is not initial_compiled
+    video, audio = model._compiled_block(
+        video_hidden=mx.random.normal((1, 64, 128)),
+        audio_hidden=mx.zeros((1, 2, 4)),
+        block_idx=1,
+    )
+    mx.eval(video, audio)
+    report = ltx25_sol_attention_report(model, policy)
+
+    assert policy["streaming_compiled"] is True
+    assert policy["patched_video_self_attention"] == 2
+    assert report["executed_calls"] == 1
+    assert report["route_by_block"]["1"]["exact_routes"] == 2
+    assert report["fallback_calls"] == 0
+    assert report["exact_suffix_rows"] == 64
+    assert report["approximation_candidate_rows"] == 0
+    assert report["compiled_exact_suffix_rows"] == 64
+
+    set_ltx25_sol_context(model, step_index=1, total_steps=2)
+    previous_compiled = model._compiled_block
+    set_ltx25_sol_context(
+        model,
+        step_index=0,
+        total_steps=2,
+        exact_suffix_rows=0,
+    )
+    assert model._compiled_block is not previous_compiled
+    assert model._weetodd_sol_state.evidence.total_calls == 0
+    assert model._weetodd_sol_state.route_records == []
 
 
 def test_ltx25_ic_lora_pipeline_mode_allows_explicit_batched_cfg_pp():
