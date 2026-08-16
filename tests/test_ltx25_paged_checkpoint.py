@@ -142,6 +142,46 @@ def test_paged_lora_fusion_bakes_block_and_non_block_targets(tmp_path):
         )
 
 
+def test_paged_ic_lora_fusion_preserves_reference_contract(tmp_path):
+    source = tmp_path / "source.safetensors"
+    block_key = "model.diffusion_model.transformer_blocks.0.attn1.to_q.weight"
+    mx.save_safetensors(
+        str(source),
+        {block_key: mx.zeros((64, 64), dtype=mx.bfloat16)},
+        metadata={"model_version": "2.5.0", "config": json.dumps({"transformer": {}})},
+    )
+    paged = convert_to_paged_q8(source, tmp_path / "paged", kind="transformer")
+    adapter = tmp_path / "ingredients-reference.safetensors"
+    mx.save_safetensors(
+        str(adapter),
+        {
+            "diffusion_model.transformer_blocks.0.attn1.to_q.lora_A.weight": mx.ones(
+                (2, 64), dtype=mx.bfloat16
+            ),
+            "diffusion_model.transformer_blocks.0.attn1.to_q.lora_B.weight": mx.ones(
+                (64, 2), dtype=mx.bfloat16
+            ),
+        },
+        metadata={
+            "model_version": "2.5.0",
+            "reference_downscale_factor": "2",
+            "reference_temporal_scale_factor": "3",
+        },
+    )
+
+    fused = fuse_paged_transformer_loras(
+        paged.root, tmp_path / "fused", ((adapter, 1.2),)
+    )
+
+    baked = fused.metadata["weetodd_baked_loras"][0]
+    assert baked["adapter_role"] == "ic_lora"
+    assert baked["adapter_family"] == "ingredients_reference_sheet"
+    assert baked["ic_lora_task"] == "reference_conditioning"
+    assert baked["reference_downscale_factor"] == 2
+    assert baked["reference_temporal_scale_factor"] == 3
+    assert baked["strength"] == pytest.approx(1.2)
+
+
 def test_dfr_prebaked_pair_validates_adapter_provenance(tmp_path):
     source = tmp_path / "source.safetensors"
     block_key = "model.diffusion_model.transformer_blocks.0.attn1.to_q.weight"

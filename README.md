@@ -58,7 +58,9 @@ Frames** when the graph needs numbered middle frames.
 | Balance | [LTX 2.3 two-stage](workflows/balance/t2v/ltx23_two_stage.json) | Standalone LTX 2.3 synchronized generation. |
 | Balance | [LTX 2.5 768×512](workflows/balance/t2v/ltx25_768x512_two_stage.json) | Recommended LTX 2.5 starting point with the official 8+3 schedule. |
 | Balance | [LTX 2.5 audio-to-video](workflows/balance/ref2va/ltx25_audio_to_video.json) | Freeze one input audio track during both visual stages and publish the original waveform. |
-| Balance | [LTX 2.5 Ingredients reference sheet](workflows/balance/ref2va/ltx25_ingredients_reference_sheet.json) | Ingredients generation with selectable 15-forward quality, 12-forward balanced, 10-forward speed, and eight-forward ancestral modes. |
+| Performance | [LTX 2.5 Ingredients quality](workflows/performance/ref2va/ltx25_ingredients_reference_sheet_quality.json) | Full 15-forward CFG++ Ingredients generation. |
+| Balance | [LTX 2.5 Ingredients balanced](workflows/balance/ref2va/ltx25_ingredients_reference_sheet_balanced.json) | Hybrid 12-forward CFG++ Ingredients generation. |
+| Speed | [LTX 2.5 Ingredients speed](workflows/speed/ref2va/ltx25_ingredients_reference_sheet_speed.json) | Hybrid 10-forward CFG++ Ingredients generation. |
 | Performance | [LTX 2.5 768×512 guided HQ](workflows/performance/t2v/ltx25_768x512_guided_hq.json) | Development transformer with selectable 30-step guided Euler or 15-step guided `res_2s`, followed by the official distilled-LoRA refinement stage. |
 | Balance | [LTX 2.5 768×512 practical DFR](workflows/balance/t2v/ltx25_768x512_dfr_conv_vae.json) | Exact prebaked Q8 DFR sampling with bounded convolutional-VAE publication. |
 | Performance | [LTX 2.5 768×512 DFR + Diffusion VAE](workflows/performance/t2v/ltx25_768x512_dfr_diffusion_vae.json) | Experimental full-resolution detail generation with exact prebaked Q8 adapters and one-step pixel-diffusion decode. |
@@ -217,6 +219,38 @@ Use `scripts/convert_ltx25_paged_q8.py` to create directly loadable Q8 pages. Ke
 source files and checkpoint terms. Generated page directories are model artifacts and must not be
 committed.
 
+The balance and speed Ingredients workflows use a self-describing Q8 transformer with the
+Ingredients adapter baked at strength 1.2. Build the transformer pages and Gemma pages once, then
+bake the adapter from the original transformer pages:
+
+```bash
+"$COMFYUI_ROOT/.venv/bin/python" \
+  "$COMFYUI_ROOT/custom_nodes/WeeTodd-Nodes/scripts/convert_ltx25_paged_q8.py" \
+  transformer \
+  "$COMFYUI_ROOT/models/diffusion_models/ltx-2.5-22b-distilled-transformer-bf16.safetensors" \
+  "$COMFYUI_ROOT/models/diffusion_models/ltx-2.5-22b-distilled-transformer-q8-paged"
+
+"$COMFYUI_ROOT/.venv/bin/python" \
+  "$COMFYUI_ROOT/custom_nodes/WeeTodd-Nodes/scripts/convert_ltx25_paged_q8.py" \
+  gemma \
+  "$COMFYUI_ROOT/models/text_encoders/gemma4-12b-with-proj-ltx-2.5-bf16.safetensors" \
+  "$COMFYUI_ROOT/models/text_encoders/gemma4-12b-with-proj-ltx-2.5-q8-paged"
+
+"$COMFYUI_ROOT/.venv/bin/python" \
+  "$COMFYUI_ROOT/custom_nodes/WeeTodd-Nodes/scripts/fuse_ltx25_paged_lora.py" \
+  "$COMFYUI_ROOT/models/diffusion_models/ltx-2.5-22b-distilled-transformer-q8-paged" \
+  "$COMFYUI_ROOT/models/loras/ltx-2.3-22b-ic-lora-ingredients-0.9.safetensors" \
+  "$COMFYUI_ROOT/models/diffusion_models/ltx-2.5-22b-distilled-ingredients1p2-q8-paged" \
+  --strength 1.2
+```
+
+Do not connect a separate IC-LoRA Loader when selecting the baked transformer. Preflight rejects
+double application. In a matched 768×448, 121-frame, 10-forward test, baked Q8 produced the exact
+same MP4 as live Q8 adapter fusion while reducing total time from 305.43 to 287.22 seconds and
+complete Comfy peak from 18.65 to 18.18 GB. Against the matched BF16 speed run, total time improved
+from 304.08 to 287.22 seconds and complete peak fell from 32.07 to 18.18 GB. Q8 remains an
+approximation relative to BF16; use the performance workflow when BF16 quality is the priority.
+
 For the optimized DFR workflow, build both adapter page sets from the same original development
 transformer Q8 pages. The first command bakes the rank-450 adapter for stage one. The second command
 bakes the rank-450 and Pixel-Spatial adapters together for stage two.
@@ -371,9 +405,9 @@ This table is generated from the registered node contracts. Run
 | LTX 2.3 Upscaler Loader | Select and preflight a learned LTX 2.3 spatial latent upscaler. | LTX 2.3 — Loaders | Experimental |
 | LTX 2.3 Upscale + Publish | Upscale decoded H3 or other ComfyUI video frames with the LTX latent upscaler and preserve the supplied audio. | LTX 2.3 — Upscaling | Experimental |
 | LTX 2.3 Unload MLX Runtime | Release the process-local LTX 2.3 pipeline. | LTX 2.3 — Core | Supported |
-| LTX 2.5 Component Loader (MLX) | Select LTX 2.5 split components without loading weights or downloading files. | LTX 2.5 — Loaders | Experimental |
+| LTX 2.5 Component Loader (MLX) | Select LTX 2.5 split components without loading weights or downloading files. Self-describing paged transformers may contain one prebaked IC-LoRA. | LTX 2.5 — Loaders | Experimental |
 | LTX 2.5 LoRA Loader (MLX) | Attach a generic LTX 2.5 transformer LoRA, including block and non-block targets. Multiple loader nodes may be chained. Use the dedicated loader for IC-LoRA task adapters. | LTX 2.5 — Loaders | Supported |
-| LTX 2.5 IC-LoRA Loader (MLX) | Attach one LTX 2.5-compatible IC-LoRA for video/reference conditioning. Official LTX 2.3 22B adapters pass an additional shape check. The selected IC-LoRA Pipeline Mode determines whether the adapter runs for stage one or the full generation. | LTX 2.5 — Loaders | Experimental |
+| LTX 2.5 IC-LoRA Loader (MLX) | Attach one LTX 2.5-compatible IC-LoRA for video/reference conditioning. Official LTX 2.3 22B adapters pass an additional shape check. The selected IC-LoRA Pipeline Mode determines whether the adapter runs for stage one or the full generation. Do not use this node with a transformer that already bakes the same IC-LoRA. | LTX 2.5 — Loaders | Experimental |
 | LTX 2.5 Guided Model Loader (MLX) | Select the LTX 2.5 development transformer for guided stage one and the official rank-450 distilled LoRA for stage two. No weights load in this node. | LTX 2.5 — Loaders | Experimental |
 | LTX 2.5 Generation Config | Configure the official distilled 8+3-evaluation LTX 2.5 two-stage schedule. | LTX 2.5 — Core | Experimental |
 | LTX 2.5 Quality Mode | Choose fast distilled inference, production guided Euler, or the official HQ second-order res_2s recipe without changing the base Generation Config schema. | LTX 2.5 — Core | Experimental |

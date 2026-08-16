@@ -682,7 +682,10 @@ class WeeToddLTX25ComponentLoader:
     RETURN_NAMES = ("model",)
     FUNCTION = "specify"
     CATEGORY = "WeeTodd/LTX 2.5/loaders"
-    DESCRIPTION = "Select LTX 2.5 split components without loading weights or downloading files."
+    DESCRIPTION = (
+        "Select LTX 2.5 split components without loading weights or downloading files. "
+        "Self-describing paged transformers may contain one prebaked IC-LoRA."
+    )
 
     def specify(
         self,
@@ -789,7 +792,8 @@ class WeeToddLTX25ICLoRALoader:
     DESCRIPTION = (
         "Attach one LTX 2.5-compatible IC-LoRA for video/reference conditioning. "
         "Official LTX 2.3 22B adapters pass an additional shape check. The selected IC-LoRA "
-        "Pipeline Mode determines whether the adapter runs for stage one or the full generation."
+        "Pipeline Mode determines whether the adapter runs for stage one or the full generation. "
+        "Do not use this node with a transformer that already bakes the same IC-LoRA."
     )
 
     def attach(self, model, ic_lora, strength):
@@ -1517,17 +1521,19 @@ class WeeToddLTX25Generate:
                     for item in media_conditioning.items
                     if item.role == "video_reference"
                 ]
-                if video_references and not model.ic_loras:
+                ic_components = [
+                    item
+                    for item in report["components"]
+                    if str(item.get("component", "")).startswith("ic_lora_")
+                    or item.get("component") == "baked_ic_lora"
+                ]
+                if video_references and not ic_components:
                     raise ValueError(
                         "Connect the LTX 2.5 IC-LoRA Loader before generating with a "
-                        "video_reference media item."
+                        "video_reference media item, or select a transformer with a baked "
+                        "IC-LoRA."
                     )
                 if video_references:
-                    ic_components = [
-                        item
-                        for item in report["components"]
-                        if str(item.get("component", "")).startswith("ic_lora_")
-                    ]
                     adapter_family = (
                         ic_components[0].get("adapter_family") if ic_components else None
                     )

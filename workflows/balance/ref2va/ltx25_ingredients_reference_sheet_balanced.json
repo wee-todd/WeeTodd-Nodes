@@ -1,0 +1,449 @@
+{
+  "last_node_id": 9,
+  "last_link_id": 9,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "WeeToddLTX25ComponentLoader",
+      "pos": [
+        40,
+        120
+      ],
+      "size": [
+        500,
+        310
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "model",
+          "type": "WEETODD_LTX25_MODEL",
+          "links": [
+            2
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddLTX25ComponentLoader"
+      },
+      "widgets_values": [
+        "ltx-2.5-22b-distilled-ingredients1p2-q8-paged",
+        "gemma4-12b-with-proj-ltx-2.5-q8-paged",
+        "ltx-2.5-video-vae-conv-bf16.safetensors",
+        "ltx-2.5-audio-vae-bf16.safetensors",
+        "",
+        ""
+      ]
+    },
+    {
+      "id": 3,
+      "type": "WeeToddLTX25GenerationConfig",
+      "pos": [
+        40,
+        480
+      ],
+      "size": [
+        460,
+        300
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "config",
+          "type": "WEETODD_LTX25_CONFIG",
+          "links": [
+            3
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "resolved_settings",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddLTX25GenerationConfig"
+      },
+      "widgets_values": [
+        "Custom",
+        768,
+        448,
+        5.0,
+        24.0,
+        42,
+        true,
+        true,
+        "official_1024",
+        "reference_fp32"
+      ]
+    },
+    {
+      "id": 4,
+      "type": "WeeToddLTX25ICLoRAPipelineMode",
+      "pos": [
+        550,
+        480
+      ],
+      "size": [
+        470,
+        170
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "config",
+          "type": "WEETODD_LTX25_CONFIG",
+          "link": 3
+        }
+      ],
+      "outputs": [
+        {
+          "name": "config",
+          "type": "WEETODD_LTX25_CONFIG",
+          "links": [
+            4,
+            6
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "mode_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddLTX25ICLoRAPipelineMode"
+      },
+      "widgets_values": [
+        "CFG++ quality — 8 steps / 15 real forwards",
+        "automatic",
+        "balanced"
+      ]
+    },
+    {
+      "id": 5,
+      "type": "LoadImage",
+      "pos": [
+        40,
+        850
+      ],
+      "size": [
+        360,
+        320
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            7
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "MASK",
+          "type": "MASK",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoadImage"
+      },
+      "widgets_values": [
+        ""
+      ]
+    },
+    {
+      "id": 6,
+      "type": "WeeToddLTX25ReferenceSheetGuide",
+      "pos": [
+        460,
+        820
+      ],
+      "size": [
+        600,
+        430
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "reference_sheet",
+          "type": "IMAGE",
+          "link": 7
+        },
+        {
+          "name": "attention_mask",
+          "type": "MASK",
+          "link": null
+        },
+        {
+          "name": "previous_conditioning",
+          "type": "WEETODD_LTX25_MEDIA_CONDITIONING",
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "name": "conditioning",
+          "type": "WEETODD_LTX25_MEDIA_CONDITIONING",
+          "links": [
+            8
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "prompt",
+          "type": "STRING",
+          "links": [
+            9
+          ],
+          "slot_index": 1
+        },
+        {
+          "name": "reference_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 2
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddLTX25ReferenceSheetGuide"
+      },
+      "widgets_values": [
+        "Describe every character, prop, and location panel visible in the reference sheet. Keep identities distinct.",
+        "Describe one continuous five-second shot, physical action, camera behavior, dialogue, ambience, and sound effects.",
+        1.0,
+        1.0
+      ]
+    },
+    {
+      "id": 7,
+      "type": "WeeToddLTX25Preflight",
+      "pos": [
+        1090,
+        150
+      ],
+      "size": [
+        380,
+        190
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "WEETODD_LTX25_MODEL",
+          "link": 2
+        },
+        {
+          "name": "config",
+          "type": "WEETODD_LTX25_CONFIG",
+          "link": 4
+        }
+      ],
+      "outputs": [
+        {
+          "name": "model",
+          "type": "WEETODD_LTX25_MODEL",
+          "links": [
+            5
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "preflight_report",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddLTX25Preflight"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 8,
+      "type": "WeeToddLTX25Generate",
+      "pos": [
+        1520,
+        180
+      ],
+      "size": [
+        600,
+        500
+      ],
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "WEETODD_LTX25_MODEL",
+          "link": 5
+        },
+        {
+          "name": "config",
+          "type": "WEETODD_LTX25_CONFIG",
+          "link": 6
+        },
+        {
+          "name": "prompt",
+          "type": "STRING",
+          "link": 9
+        },
+        {
+          "name": "first_frame",
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "keyframes",
+          "type": "WEETODD_LTX25_KEYFRAMES",
+          "link": null
+        },
+        {
+          "name": "media_conditioning",
+          "type": "WEETODD_LTX25_MEDIA_CONDITIONING",
+          "link": 8
+        }
+      ],
+      "outputs": [
+        {
+          "name": "video_path",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 0
+        },
+        {
+          "name": "generation_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddLTX25Generate"
+      },
+      "widgets_values": [
+        "WeeTodd/LTX25_ingredients_balanced",
+        true
+      ]
+    },
+    {
+      "id": 9,
+      "type": "MarkdownNote",
+      "pos": [
+        40,
+        -500
+      ],
+      "size": [
+        1000,
+        500
+      ],
+      "flags": {},
+      "order": 8,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "title": "Setup and model downloads",
+      "properties": {},
+      "widgets_values": [
+        "## LTX 2.5 Ingredients reference sheet\n\n1. Install WeeTodd Nodes and restart ComfyUI.\n2. Accept the model licenses and place the LTX 2.5 split components under `ComfyUI/models/` or a shared root from `extra_model_paths.yaml`.\n3. Download the Ingredients IC-LoRA into `ComfyUI/models/loras/`.\n4. Select one clean composite reference sheet. Leave workflow image paths empty when sharing.\n5. Describe the sheet panels separately from the generated action.\n6. Queue the workflow after **LTX 2.5 Preflight** succeeds.\n\nThe balanced profile uses Ingredients LoRA strength 1.2, empty negative conditioning, and eight CFG++ sampler steps. It performs 12 real forwards by retaining CFG++ correction at four nonterminal steps. This workflow selects the balanced 12-forward CFG++ schedule. Choose the quality 15-forward or speed 10-forward schedule for measured compute savings, or **Fast single stage** for the distinct eight-forward ancestral shortcut. Automatic CFG++ execution selects serial; batched execution is an experimental lower-memory option. The reference image is repeated internally across all 121 frames and is not used as the first generated frame.\n\n### Downloads\n\n- [LTX 2.5 model components](https://huggingface.co/Lightricks/LTX-2.5)\n- [Ingredients IC-LoRA](https://huggingface.co/Lightricks/LTX-2.3-22b-IC-LoRA-Ingredients)\n\n### Baked Q8 setup\n\nFollow the README baked-Q8 instructions to convert the transformer and Gemma pack, then bake the Ingredients adapter once:\n\n`$COMFYUI_ROOT/.venv/bin/python $COMFYUI_ROOT/custom_nodes/WeeTodd-Nodes/scripts/fuse_ltx25_paged_lora.py $COMFYUI_ROOT/models/diffusion_models/ltx-2.5-22b-distilled-transformer-q8-paged $COMFYUI_ROOT/models/loras/ltx-2.3-22b-ic-lora-ingredients-0.9.safetensors $COMFYUI_ROOT/models/diffusion_models/ltx-2.5-22b-distilled-ingredients1p2-q8-paged --strength 1.2`\n\nThe baked checkpoint is self-describing. Do not connect a separate IC-LoRA Loader or the adapter will be applied twice."
+      ],
+      "color": "#243447",
+      "bgcolor": "#15202b"
+    }
+  ],
+  "links": [
+    [
+      2,
+      1,
+      0,
+      7,
+      0,
+      "WEETODD_LTX25_MODEL"
+    ],
+    [
+      3,
+      3,
+      0,
+      4,
+      0,
+      "WEETODD_LTX25_CONFIG"
+    ],
+    [
+      4,
+      4,
+      0,
+      7,
+      1,
+      "WEETODD_LTX25_CONFIG"
+    ],
+    [
+      5,
+      7,
+      0,
+      8,
+      0,
+      "WEETODD_LTX25_MODEL"
+    ],
+    [
+      6,
+      4,
+      0,
+      8,
+      1,
+      "WEETODD_LTX25_CONFIG"
+    ],
+    [
+      7,
+      5,
+      0,
+      6,
+      0,
+      "IMAGE"
+    ],
+    [
+      8,
+      6,
+      0,
+      8,
+      5,
+      "WEETODD_LTX25_MEDIA_CONDITIONING"
+    ],
+    [
+      9,
+      6,
+      1,
+      8,
+      2,
+      "STRING"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {},
+  "version": 0.4
+}

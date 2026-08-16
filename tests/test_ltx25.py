@@ -1013,6 +1013,102 @@ def test_ltx25_split_preflight_reads_metadata_without_weights(tmp_path):
     assert len(report["components"]) == 5
 
 
+def test_ltx25_preflight_accepts_one_baked_ic_lora(tmp_path):
+    spec = _bundle(tmp_path)
+    transformer = tmp_path / "transformer.safetensors"
+    _component(
+        transformer,
+        model_version="2.5.0",
+        gemma_source_checkpoint={"gemma_version": "gemma4-12b-ltx-v1"},
+        config={
+            "transformer": {
+                "caption_proj_before_connector": True,
+                "cross_attention_adaln": True,
+                "ff_bias": False,
+                "audio_ff_bias": True,
+                "use_prompt_adaln_single": True,
+                "use_keyframes_abs_pos_embedding": True,
+            }
+        },
+        weetodd_baked_loras=[
+            {
+                "file": "ingredients.safetensors",
+                "bytes": 1234,
+                "strength": 1.2,
+                "adapter_role": "ic_lora",
+                "adapter_family": "ingredients_reference_sheet",
+                "ic_lora_task": "reference_conditioning",
+                "reference_downscale_factor": 1,
+                "reference_temporal_scale_factor": 1,
+            }
+        ],
+    )
+
+    report = spec.validate(require_spatial_upscaler=False)
+
+    baked = next(item for item in report["components"] if item["component"] == "baked_ic_lora")
+    assert baked["adapter_family"] == "ingredients_reference_sheet"
+    assert report["ic_lora_reference_downscale_factor"] == 1
+    assert report["ic_lora_reference_temporal_scale_factor"] == 1
+    guided = replace(
+        spec,
+        distilled_lora_path=str(_rank450_lora(tmp_path / "distilled.safetensors")),
+    )
+    with pytest.raises(ValueError, match="distilled generation mode"):
+        guided.validate("guided", require_spatial_upscaler=False)
+
+
+def test_ltx25_preflight_rejects_live_and_baked_ic_lora(tmp_path):
+    spec = _bundle(tmp_path)
+    transformer = tmp_path / "transformer.safetensors"
+    adapter = tmp_path / "ingredients.safetensors"
+    save_file(
+        {
+            "transformer_blocks.0.attn1.to_q.lora_A.weight": np.zeros(
+                (2, 4), dtype=np.float32
+            ),
+            "transformer_blocks.0.attn1.to_q.lora_B.weight": np.zeros(
+                (4, 2), dtype=np.float32
+            ),
+        },
+        adapter,
+        metadata={
+            "model_version": "2.5.0",
+            "reference_downscale_factor": "1",
+            "reference_temporal_scale_factor": "1",
+        },
+    )
+    _component(
+        transformer,
+        model_version="2.5.0",
+        gemma_source_checkpoint={"gemma_version": "gemma4-12b-ltx-v1"},
+        config={
+            "transformer": {
+                "caption_proj_before_connector": True,
+                "cross_attention_adaln": True,
+                "ff_bias": False,
+                "audio_ff_bias": True,
+                "use_prompt_adaln_single": True,
+                "use_keyframes_abs_pos_embedding": True,
+            }
+        },
+        weetodd_baked_loras=[
+            {
+                "file": adapter.name,
+                "adapter_role": "ic_lora",
+                "adapter_family": "ingredients_reference_sheet",
+                "ic_lora_task": "reference_conditioning",
+                "reference_downscale_factor": 1,
+                "reference_temporal_scale_factor": 1,
+            }
+        ],
+    )
+    spec = replace(spec, ic_loras=((str(adapter), 1.2),))
+
+    with pytest.raises(ValueError, match="avoid applying the adapter twice"):
+        spec.validate(require_spatial_upscaler=False)
+
+
 def test_ltx25_single_stage_preflight_does_not_require_spatial_upscaler(tmp_path):
     spec = replace(_bundle(tmp_path), spatial_upscaler_path="")
 

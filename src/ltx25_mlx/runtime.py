@@ -334,6 +334,40 @@ class LTX25ComponentSpec:
                 raise ValueError(f"LTX 2.5 {name} must be a .safetensors file: {path}")
 
         transformer_meta = _metadata(paths["transformer_path"])
+        baked_ic_loras = [
+            item
+            for item in transformer_meta.get("weetodd_baked_loras", [])
+            if item.get("adapter_role") == "ic_lora"
+        ]
+        if self.ic_loras and baked_ic_loras:
+            raise ValueError(
+                "The selected transformer already contains a baked IC-LoRA. Remove the "
+                "separate IC-LoRA Loader to avoid applying the adapter twice."
+            )
+        if baked_ic_loras and mode != "distilled":
+            raise ValueError(
+                "A transformer with a baked IC-LoRA requires distilled generation mode."
+            )
+        if len(baked_ic_loras) > 1:
+            raise ValueError(
+                "The selected transformer contains more than one baked IC-LoRA. Use one "
+                "task adapter per reference-conditioned generation."
+            )
+        for item in baked_ic_loras:
+            if item.get("ic_lora_task") == "pixel_spatial_upscaler":
+                raise ValueError(
+                    "The selected transformer bakes the Pixel-Spatial Upscaler adapter, "
+                    "which is not a general video/reference conditioning checkpoint."
+                )
+            for field in (
+                "reference_downscale_factor",
+                "reference_temporal_scale_factor",
+            ):
+                if int(item.get(field, 0)) < 1:
+                    raise ValueError(
+                        "The baked IC-LoRA manifest is missing valid reference-scale "
+                        f"metadata: {field}. Rebuild it with the current fusion script."
+                    )
         text_meta = _metadata(paths["text_encoder_path"])
         gemma_pack = inspect_gemma4_pack(paths["text_encoder_path"])
         video_vae_meta = _metadata(paths["video_vae_path"])
@@ -452,6 +486,22 @@ class LTX25ComponentSpec:
                     "Stacked LTX 2.5 IC-LoRAs must declare identical spatial and temporal "
                     "reference scale factors."
                 )
+        elif baked_ic_loras:
+            baked = baked_ic_loras[0]
+            downscales = {int(baked["reference_downscale_factor"])}
+            temporal_scales = {int(baked["reference_temporal_scale_factor"])}
+            inventory.append(
+                {
+                    "component": "baked_ic_lora",
+                    "file": str(baked.get("file", "embedded adapter")),
+                    "bytes": int(baked.get("bytes", 0)),
+                    "strength": float(baked.get("strength", 1.0)),
+                    "adapter_role": "ic_lora",
+                    "adapter_family": baked.get("adapter_family"),
+                    "reference_downscale_factor": next(iter(downscales)),
+                    "reference_temporal_scale_factor": next(iter(temporal_scales)),
+                }
+            )
         return {
             "model_version": str(model_version),
             "gemma_source_checkpoint": transformer_gemma or text_gemma,
@@ -463,10 +513,10 @@ class LTX25ComponentSpec:
             "components": inventory,
             "checkpoint_bytes": total,
             "ic_lora_reference_downscale_factor": (
-                next(iter(downscales)) if self.ic_loras else None
+                next(iter(downscales)) if self.ic_loras or baked_ic_loras else None
             ),
             "ic_lora_reference_temporal_scale_factor": (
-                next(iter(temporal_scales)) if self.ic_loras else None
+                next(iter(temporal_scales)) if self.ic_loras or baked_ic_loras else None
             ),
         }
 

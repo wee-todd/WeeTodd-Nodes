@@ -345,6 +345,58 @@ def test_ltx25_any_video_upscale_workflow_uses_native_movie_components():
     assert nodes[4]["widgets_values"][4] == 0.35
 
 
+@pytest.mark.parametrize(
+    ("profile", "filename", "schedule", "uses_baked_q8"),
+    (
+        (
+            "performance",
+            "ltx25_ingredients_reference_sheet_quality.json",
+            "full",
+            False,
+        ),
+        (
+            "balance",
+            "ltx25_ingredients_reference_sheet_balanced.json",
+            "balanced",
+            True,
+        ),
+        (
+            "speed",
+            "ltx25_ingredients_reference_sheet_speed.json",
+            "speed",
+            True,
+        ),
+    ),
+)
+def test_ltx25_ingredients_profiles_pin_the_intended_adapter_and_schedule(
+    profile, filename, schedule, uses_baked_q8
+):
+    workflow = json.loads((ROOT / "workflows" / profile / "ref2va" / filename).read_text())
+    nodes = list(_execution_node_map(workflow).values())
+    loader = next(node for node in nodes if node["type"] == "WeeToddLTX25ComponentLoader")
+    mode = next(node for node in nodes if node["type"] == "WeeToddLTX25ICLoRAPipelineMode")
+    config = next(node for node in nodes if node["type"] == "WeeToddLTX25GenerationConfig")
+    images = [node for node in nodes if node["type"] == "LoadImage"]
+    live_adapters = [node for node in nodes if node["type"] == "WeeToddLTX25ICLoRALoader"]
+
+    assert mode["widgets_values"][2] == schedule
+    assert all(node["widgets_values"] == [""] for node in images)
+    if uses_baked_q8:
+        assert loader["widgets_values"][0] == "ltx-2.5-22b-distilled-ingredients1p2-q8-paged"
+        assert loader["widgets_values"][1] == "gemma4-12b-with-proj-ltx-2.5-q8-paged"
+        assert config["widgets_values"][7] is True
+        assert live_adapters == []
+    else:
+        assert loader["widgets_values"][0].endswith("transformer-bf16.safetensors")
+        assert loader["widgets_values"][1].endswith("bf16.safetensors")
+        assert config["widgets_values"][7] is False
+        assert len(live_adapters) == 1
+        assert live_adapters[0]["widgets_values"] == [
+            "ltx-2.3-22b-ic-lora-ingredients-0.9.safetensors",
+            1.2,
+        ]
+
+
 def test_h3_to_ltx23_upscale_api_preserves_comfy_image_and_audio_contracts():
     prompt = json.loads((ROOT / "examples" / "h3_to_ltx23_2x_upscale_api.json").read_text())
 

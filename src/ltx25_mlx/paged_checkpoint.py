@@ -333,6 +333,14 @@ def fuse_paged_transformer_loras(
                 "adapter_pairs": int(report["adapter_pairs"]),
                 "lora_rank": report["lora_rank"],
                 "lora_alpha": report["lora_alpha"],
+                "adapter_family": report["adapter_family"],
+                "ic_lora_task": report["ic_lora_task"],
+                "reference_downscale_factor": report[
+                    "reference_downscale_factor"
+                ],
+                "reference_temporal_scale_factor": report[
+                    "reference_temporal_scale_factor"
+                ],
             }
         )
 

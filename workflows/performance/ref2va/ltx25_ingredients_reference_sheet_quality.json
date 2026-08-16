@@ -172,7 +172,7 @@
         {"name": "generation_info", "type": "STRING", "links": null, "slot_index": 1}
       ],
       "properties": {"Node name for S&R": "WeeToddLTX25Generate"},
-      "widgets_values": ["WeeTodd/LTX25_ingredients_reference", true]
+      "widgets_values": ["WeeTodd/LTX25_ingredients_quality", true]
     },
     {
       "id": 9,
@@ -187,7 +187,7 @@
       "title": "Setup and model downloads",
       "properties": {},
       "widgets_values": [
-        "## LTX 2.5 Ingredients reference sheet\n\n1. Install WeeTodd Nodes and restart ComfyUI.\n2. Accept the model licenses and place the LTX 2.5 split components under `ComfyUI/models/` or a shared root from `extra_model_paths.yaml`.\n3. Download the Ingredients IC-LoRA into `ComfyUI/models/loras/`.\n4. Select one clean composite reference sheet. Leave workflow image paths empty when sharing.\n5. Describe the sheet panels separately from the generated action.\n6. Queue the workflow after **LTX 2.5 Preflight** succeeds.\n\nThe quality default uses Ingredients LoRA strength 1.2, empty negative conditioning, and eight CFG++ sampler steps. It performs 15 useful real forwards because the terminal update does not consume an unconditional prediction. Choose the balanced 12-forward or speed 10-forward CFG++ schedule for measured compute savings, or **Fast single stage** for the distinct eight-forward ancestral shortcut. Automatic CFG++ execution selects serial; batched execution is an experimental lower-memory option. The reference image is repeated internally across all 121 frames and is not used as the first generated frame.\n\n### Downloads\n\n- [LTX 2.5 model components](https://huggingface.co/Lightricks/LTX-2.5)\n- [Ingredients IC-LoRA](https://huggingface.co/Lightricks/LTX-2.3-22b-IC-LoRA-Ingredients)"
+        "## LTX 2.5 Ingredients reference sheet\n\n1. Install WeeTodd Nodes and restart ComfyUI.\n2. Accept the model licenses and place the LTX 2.5 split components under `ComfyUI/models/` or a shared root from `extra_model_paths.yaml`.\n3. Download the Ingredients IC-LoRA into `ComfyUI/models/loras/`.\n4. Select one clean composite reference sheet. Leave workflow image paths empty when sharing.\n5. Describe the sheet panels separately from the generated action.\n6. Queue the workflow after **LTX 2.5 Preflight** succeeds.\n\nThe performance profile uses Ingredients LoRA strength 1.2, empty negative conditioning, and eight CFG++ sampler steps. It performs 15 useful real forwards because the terminal update does not consume an unconditional prediction. This workflow selects the quality 15-forward CFG++ schedule. Choose the balanced 12-forward or speed 10-forward schedule for measured compute savings, or **Fast single stage** for the distinct eight-forward ancestral shortcut. Automatic CFG++ execution selects serial; batched execution is an experimental lower-memory option. The reference image is repeated internally across all 121 frames and is not used as the first generated frame.\n\n### Downloads\n\n- [LTX 2.5 model components](https://huggingface.co/Lightricks/LTX-2.5)\n- [Ingredients IC-LoRA](https://huggingface.co/Lightricks/LTX-2.3-22b-IC-LoRA-Ingredients)"
       ],
       "color": "#243447",
       "bgcolor": "#15202b"

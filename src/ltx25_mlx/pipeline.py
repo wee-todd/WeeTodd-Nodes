@@ -28,7 +28,7 @@ from .sampling import (
     euler_ancestral_cfg_pp_denoise_loop,
     euler_ancestral_denoise_loop,
 )
-from .transformer import load_ltx25_transformer
+from .transformer import load_ltx25_transformer, transformer_metadata
 
 
 class _PromptEncoder:
@@ -111,6 +111,13 @@ class LTX25DistilledPipeline:
         self.feed_forward_backend = feed_forward_backend
         self.loras = tuple(loras)
         self.ic_loras = tuple(ic_loras)
+        self.baked_ic_loras = tuple(
+            item
+            for item in transformer_metadata(self.transformer_path).get(
+                "weetodd_baked_loras", ()
+            )
+            if item.get("adapter_role") == "ic_lora"
+        )
         if feed_forward_stage_scope not in {"all", "stage1", "stage2"}:
             raise ValueError("feed_forward_stage_scope must be all, stage1, or stage2")
         self.feed_forward_stage_scope = feed_forward_stage_scope
@@ -754,7 +761,7 @@ class LTX25DistilledPipeline:
             aggressive_cleanup()
             timings["prompt_release_seconds"] = time.perf_counter() - release_started
         resolved_video_references = list(video_references or ())
-        if resolved_video_references and not self.ic_loras:
+        if resolved_video_references and not (self.ic_loras or self.baked_ic_loras):
             raise ValueError(
                 "LTX 2.5 video-reference conditioning requires a dedicated IC-LoRA loader."
             )
@@ -828,7 +835,11 @@ class LTX25DistilledPipeline:
             encoder = self.image_conditioner.load()
             from .transformer import inspect_ltx25_lora
 
-            adapter_reports = [inspect_ltx25_lora(path) for path, _ in self.ic_loras]
+            adapter_reports = (
+                [inspect_ltx25_lora(path) for path, _ in self.ic_loras]
+                if self.ic_loras
+                else list(self.baked_ic_loras)
+            )
             spatial_scales = {
                 int(adapter["reference_downscale_factor"]) for adapter in adapter_reports
             }
