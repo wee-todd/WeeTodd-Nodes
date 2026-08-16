@@ -11,8 +11,18 @@ from ltx25_mlx.feed_forward import (
     feed_forward_runtime_status,
     mpp_bf16_linear,
     mpp_capability,
+    reset_feed_forward_runtime_status,
     set_mpp_feed_forward_enabled,
 )
+
+
+def test_feed_forward_runtime_status_can_be_scoped_to_one_generation():
+    reset_feed_forward_runtime_status()
+    assert feed_forward_runtime_status() == {
+        "mpp_calls": 0,
+        "bf16_cast_elements": 0,
+        "fused_calls": 0,
+    }
 
 
 def test_experimental_backend_wraps_bias_free_video_ff_and_casts_input(monkeypatch):

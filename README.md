@@ -6,7 +6,7 @@ WeeTodd keeps each model engine behind a separate ComfyUI adapter. H3 generation
 and audio as one synchronized latent contract. Weighted components load only when the graph runs
 and can unload between Qwen3-VL, transformer, video VAE, and audio VAE stages.
 
-- 46 composable nodes under `WeeTodd/H3`
+- 47 composable nodes under `WeeTodd/H3`
 
 Recent experimental controls include target-frame H3 image, clip, and audio guides; an H3 token
 and attention-workspace estimator; independent MLX attention-head and feed-forward row chunking;
@@ -61,6 +61,10 @@ Frames** when the graph needs numbered middle frames.
 | Performance | [LTX 2.5 Ingredients quality](workflows/performance/ref2va/ltx25_ingredients_reference_sheet_quality.json) | Full 15-forward CFG++ Ingredients generation. |
 | Balance | [LTX 2.5 Ingredients balanced](workflows/balance/ref2va/ltx25_ingredients_reference_sheet_balanced.json) | Hybrid 12-forward CFG++ Ingredients generation. |
 | Speed | [LTX 2.5 Ingredients speed](workflows/speed/ref2va/ltx25_ingredients_reference_sheet_speed.json) | Hybrid 10-forward CFG++ Ingredients generation. |
+| Balance | [LTX 2.5 Union Canny](workflows/balance/ref2va/ltx25_union_canny_balanced.json) | MLX-native Canny preprocessing with baked Q8 Union Control. |
+| Balance | [LTX 2.5 Union Depth](workflows/balance/ref2va/ltx25_union_depth_balanced.json) | MLX Video Depth Anything preprocessing with baked Q8 Union Control. |
+| Balance | [LTX 2.5 Union Pose](workflows/balance/ref2va/ltx25_union_pose_balanced.json) | Preprocessed pose-video control with baked Q8 Union Control. |
+| Performance | [LTX 2.5 Motion Track quality](workflows/performance/i2v/ltx25_motion_track_quality.json) | MLX-generated colored trajectories with the dedicated Motion Track IC-LoRA and full 15-forward CFG++. |
 | Performance | [LTX 2.5 768×512 guided HQ](workflows/performance/t2v/ltx25_768x512_guided_hq.json) | Development transformer with selectable 30-step guided Euler or 15-step guided `res_2s`, followed by the official distilled-LoRA refinement stage. |
 | Balance | [LTX 2.5 768×512 practical DFR](workflows/balance/t2v/ltx25_768x512_dfr_conv_vae.json) | Exact prebaked Q8 DFR sampling with bounded convolutional-VAE publication. |
 | Performance | [LTX 2.5 768×512 DFR + Diffusion VAE](workflows/performance/t2v/ltx25_768x512_dfr_diffusion_vae.json) | Experimental full-resolution detail generation with exact prebaked Q8 adapters and one-step pixel-diffusion decode. |
@@ -188,11 +192,162 @@ therefore accepts an older adapter only when every target and tensor shape match
 block layout. The loader still rejects the specialized Pixel-Spatial upscaler from this path.
 
 Use **LTX 2.5 IC-LoRA Control Guide** for Canny edges, depth maps, pose skeletons, Motion Track, or
-another preprocessed control video. Connect the IMAGE batch from the matching ComfyUI preprocessor.
-Motion Track accepts the source frames directly. Canny preserves edges and composition. Depth
-preserves camera movement and scene geometry. Pose transfers human movement. Use one control group
-at a time as the default memory policy. IC-LoRA requires the distilled model. Combined video and
-audio reference input remains gated as an unvalidated LipDub topology.
+another preprocessed control video. Connect the IMAGE batch from the matching preprocessor.
+Motion Track does not accept raw source frames. Connect the colored trajectory video from
+**Motion Track Guide (MLX)**, which supports multiple normalized or pixel-coordinate tracks,
+spline control points, and explicit per-frame coordinates. Canny preserves edges and composition.
+Depth preserves camera movement and scene geometry. Pose transfers human movement. Use one control
+group at a time as the default memory policy. IC-LoRA requires the distilled model. Combined video
+and audio reference input remains gated as an unvalidated LipDub topology.
+
+The Union Control checkpoint covers Canny, Depth, and Pose and declares `ref0.5`, so its reference
+video is encoded at half of the active generation stage. The official two-stage workflow applies
+the guide during the half-resolution first stage and therefore requires final width and height to
+be divisible by 128. The shipped workflows use 768×512. **Canny Preprocessor (MLX)** executes the
+complete Gaussian-blur, Sobel, non-maximum suppression, threshold, and hysteresis path on MLX.
+**Video Depth Preprocessor (MLX)** creates the frame-aligned depth guide with a weighted MLX model.
+**DWPose Preprocessor (MLX)** creates the frame-aligned whole-body pose guide with staged detector
+and pose-model residency.
+
+### MLX control preprocessors
+
+Control preprocessors are independent from the H3 and LTX generation runtimes. A preprocessor
+loads only when its node executes and returns a normal ComfyUI IMAGE batch. This boundary lets one
+guide serve LTX 2.5 Union Control or another compatible graph without keeping a generation model
+resident.
+
+Implementation order follows control usefulness and available checkpoint terms:
+
+| Category | Options | Default direction | Status |
+| --- | --- | --- | --- |
+| Edges | Canny; TEED soft edge | Canny for exact structure; TEED for learned contours | Both available |
+| Depth | Video Depth Anything Small; Depth Anything V2 Small | Video depth for consistency; frame depth for speed | Both available |
+| Pose | whole-body pose; body-only pose | Whole-body for face and hand motion; body-only for speed | DWPose available |
+| Structure | depth-derived normals; realistic line art; segmentation | Normals and line art are available; segmentation remains gated | Partial |
+| Motion | colored trajectory guides; automated optical-flow extraction | Use the Motion Track guide with the dedicated adapter; tracker extraction remains future work | Guide available |
+
+The MLX Canny defaults match current ComfyUI normalized thresholds: low `0.4`, high `0.8`, a 5×5
+Gaussian kernel, sigma `1.0`, and hysteresis enabled. Lower thresholds retain more weak contours.
+The output keeps the input frame count, width, and height.
+
+**Motion Track Guide (MLX)** independently implements the dedicated adapter's colored-guide
+contract. Enter one or more tracks as JSON, choose normalized or pixel coordinates, and select
+spline control points or per-frame coordinates. The node interpolates sparse control points,
+renders a 50-frame age trail on black using the training BGR color convention, reports its resolved
+tracks, and checks ComfyUI cancellation while constructing the batch. On the development M4 Max,
+two spline tracks over 121 frames at 768×512 rendered in 0.30 seconds (400.8 fps) at a 545 MiB MLX
+peak. The full quality workflow then completed in 314.61 seconds with 15 real forwards, a 16.92 GB
+MLX peak, and an 18.90 GB complete-Comfy lifetime peak. The `ref0.5` adapter encoded the guide at
+384×256 while delivering the requested 768×512 output.
+
+**TEED Model Loader (MLX)** and **TEED Soft-Edge Preprocessor (MLX)** provide a learned contour
+option using the MIT-licensed 58K-parameter Tiny and Efficient Edge Detector. The 233 KB converted
+checkpoint processes a 121-frame 768×512 guide in 0.97 seconds (125.4 fps) on the development M4
+Max, with a 1.86 GB MLX peak at the default eight-frame chunk. All four MLX output heads match the
+official PyTorch model at relative L2 no worse than `1.86e-6`.
+
+Download official `7_model.pth` from [TEED](https://github.com/xavysp/TEED), then convert it once:
+
+```bash
+"$COMFYUI_ROOT/.venv/bin/python" \
+  "$COMFYUI_ROOT/custom_nodes/WeeTodd-Nodes/scripts/convert_teed_mlx.py" \
+  7_model.pth \
+  "$COMFYUI_ROOT/models/annotators/teed/7_model_mlx.safetensors"
+```
+
+**Video Depth Model Loader (MLX)** selects a converted Video Depth Anything Small checkpoint
+without loading it. **Video Depth Preprocessor (MLX)** processes 32-frame temporal windows with
+the trained overlap-alignment policy. The default unloads the depth model before LTX sampling.
+Use input size `518` for the quality default. Smaller input sizes reduce preprocessing cost. On the
+development M4 Max, a 121-frame 768×512 guide took about 5.0 seconds at the default chunk sizes.
+Chunking the high-resolution decoder reduced measured MLX peak allocation from 12.92 GB to 6.00 GB
+without changing a single output value. These figures describe preprocessing only, not total
+ComfyUI generation memory.
+
+Download the Apache-2.0 Small checkpoint from
+[Video Depth Anything Small](https://huggingface.co/depth-anything/Video-Depth-Anything-Small),
+place it under `ComfyUI/models/annotators/video_depth_anything/`, and convert it once:
+
+```bash
+"$COMFYUI_ROOT/.venv/bin/python" \
+  "$COMFYUI_ROOT/custom_nodes/WeeTodd-Nodes/scripts/convert_video_depth_anything_mlx.py" \
+  "$COMFYUI_ROOT/models/annotators/video_depth_anything/video_depth_anything_vits.pth" \
+  "$COMFYUI_ROOT/models/annotators/video_depth_anything/video_depth_anything_vits_mlx.safetensors"
+```
+
+The converter requires PyTorch only to read the original checkpoint safely. Generation-time depth
+inference and all weighted depth operations use MLX. Do not redistribute Base or Large Video Depth
+Anything checkpoints with this project; their checkpoint terms are noncommercial.
+
+**Fast Depth Model Loader (MLX)** loads the standard Apache-2.0 Depth Anything V2 Small Hugging
+Face safetensors directly. No conversion is required. **Fast Depth Preprocessor (MLX)** processes
+frames independently and is the speed-oriented alternative to Video Depth Anything. Use per-clip
+normalization for a shared depth range. Independent frames can flicker when lighting or scene
+content changes abruptly, so use Video Depth Anything for the quality default.
+
+On the development M4 Max, the BF16 speed default processed 121 frames at 768×512 in 1.73 seconds
+(70.1 fps) with a 1.21 GB MLX peak. The float32 MLX model matches the official Transformers output
+at relative L2 `1.29e-6`. Place the standard checkpoint at:
+
+```text
+ComfyUI/models/annotators/depth_anything_v2/Depth-Anything-V2-Small-hf/model.safetensors
+```
+
+Download it from
+[Depth Anything V2 Small](https://huggingface.co/depth-anything/Depth-Anything-V2-Small-hf).
+
+**Depth to Normal Map (MLX)** converts any grayscale depth IMAGE batch into an RGB surface-normal
+guide with the standard +Z-blue channel convention. The node has no checkpoint. Sobel gradients
+and strength `40` are the normalized-depth defaults. A discontinuity threshold can replace unstable
+depth edges with a forward-facing normal. The 121-frame 768×512 probe took 0.43 seconds (284 fps)
+with a 0.86 GB MLX peak. Match the normal-map convention to the target adapter before generation.
+
+**Line Art Model Loader (MLX)** and **Realistic Line Art Preprocessor (MLX)** support the fine and
+coarse realistic line-art checkpoints used by current ComfyUI auxiliary preprocessors. The node
+defaults to ComfyUI-compatible white lines on black and two-frame chunks. The fine model processed
+121 frames at 768×512 in 2.88 seconds (42.1 fps) with a 3.52 GB MLX peak. Its output matches the
+Apache-2.0 PyTorch reference at relative L2 `1.24e-7`.
+
+Download `sk_model.pth` or `sk_model2.pth` from
+[lllyasviel/Annotators](https://huggingface.co/lllyasviel/Annotators), then convert each selected
+checkpoint once:
+
+```bash
+"$COMFYUI_ROOT/.venv/bin/python" \
+  "$COMFYUI_ROOT/custom_nodes/WeeTodd-Nodes/scripts/convert_lineart_mlx.py" \
+  sk_model.pth \
+  "$COMFYUI_ROOT/models/annotators/lineart/realistic_lineart_fine_mlx.safetensors"
+```
+
+The converter requires PyTorch. Runtime line-art inference uses only MLX. Use line art only with an
+adapter that was trained for the same representation; Union Depth does not become Line Art by
+changing the guide image.
+
+**DWPose Model Loader (MLX)** selects converted YOLOX-L person-detection and DWPose-L whole-body
+bundles without loading them. **DWPose Preprocessor (MLX)** renders body, face, and hand keypoints
+by default; body-and-hands and body-only modes reduce guide detail. The models unload before LTX
+sampling unless keep-warm is selected. On the development M4 Max, a 121-frame 768×512 guide took
+5.78 seconds (20.9 fps), with a 2.11 GB MLX peak. The converted detector and pose logits match ONNX
+Runtime at relative L2 `2.86e-6` and at most `2.43e-6`, respectively.
+
+Download Apache-2.0 `yolox_l.onnx` and `dw-ll_ucoco_384.onnx` from the
+[official DWPose model repository](https://huggingface.co/yzd-v/DWPose). Install the conversion
+extra once, then create the local MLX bundles:
+
+```bash
+"$COMFYUI_ROOT/.venv/bin/python" -m pip install \
+  "$COMFYUI_ROOT/custom_nodes/WeeTodd-Nodes[convert]"
+"$COMFYUI_ROOT/.venv/bin/python" \
+  "$COMFYUI_ROOT/custom_nodes/WeeTodd-Nodes/scripts/convert_onnx_mlx.py" \
+  yolox_l.onnx \
+  "$COMFYUI_ROOT/models/annotators/dwpose_mlx/yolox_l"
+"$COMFYUI_ROOT/.venv/bin/python" \
+  "$COMFYUI_ROOT/custom_nodes/WeeTodd-Nodes/scripts/convert_onnx_mlx.py" \
+  dw-ll_ucoco_384.onnx \
+  "$COMFYUI_ROOT/models/annotators/dwpose_mlx/dw-ll_ucoco_384"
+```
+
+ONNX is conversion-only. Runtime detection, pose estimation, and all weighted operations use MLX.
 
 Use **LTX 2.5 Ingredients Reference Sheet** when one composite image defines characters, props,
 and a location. The node creates the trained two-part `Reference sheet:` / `Generated video:`
@@ -243,6 +398,28 @@ bake the adapter from the original transformer pages:
   "$COMFYUI_ROOT/models/diffusion_models/ltx-2.5-22b-distilled-ingredients1p2-q8-paged" \
   --strength 1.2
 ```
+
+Build the reusable Union Control pages from the same original Q8 transformer pages:
+
+```bash
+"$COMFYUI_ROOT/.venv/bin/python" \
+  "$COMFYUI_ROOT/custom_nodes/WeeTodd-Nodes/scripts/fuse_ltx25_paged_lora.py" \
+  "$COMFYUI_ROOT/models/diffusion_models/ltx-2.5-22b-distilled-transformer-q8-paged" \
+  "$COMFYUI_ROOT/models/loras/ltx-2.3-22b-ic-lora-union-control-ref0.5.safetensors" \
+  "$COMFYUI_ROOT/models/diffusion_models/ltx-2.5-22b-distilled-union1p0-q8-paged" \
+  --strength 1.0
+```
+
+One baked Union transformer serves Canny, Depth, and Pose. The matched Canny validation used
+768×512, 121 frames, 24 fps, and the official eight-plus-three schedule. Internal generation took
+87.79 seconds, complete Comfy wall time was 110.31 seconds, complete-process peak was 19.07 GB, and
+the guide encoded to 192×128. The visual review preserved the controlled composition and motion
+without a fade or scene reset. Matched Depth and Pose runs used the same dimensions, frame count,
+seed, reference-FP32 backend, and eight-plus-three schedule. Depth generation took 92.86 seconds;
+its complete graph took 99.58 seconds. Pose generation took 85.07 seconds and its complete graph
+took 91.37 seconds. Both reported about 8.20 GiB MLX peak and a 21.74 GiB complete Comfy
+process-lifetime peak. Each guide encoded all 121 frames at 192×128, produced synchronized stereo
+audio, and preserved coherent subjects and movement without an obvious cut or scene reset.
 
 Do not connect a separate IC-LoRA Loader when selecting the baked transformer. Preflight rejects
 double application. In a matched 768×448, 121-frame, 10-forward test, baked Q8 produced the exact
@@ -303,6 +480,7 @@ work. Results apply to the stated workflow and hardware conditions.
 | H3 head and FFN row chunking | Sampling memory | Unmeasured; bounded by construction | Independently limits SDPA head groups and packed-row SwiGLU intermediates through the Low-Memory Tuning node. | Same operations and ordering within each independent chunk; checkpoint parity tests are still required before claiming bit identity. |
 | H3 token and workspace budget | Preflight | Diagnostic | Reports target, conditioning, packed-token, attention-score, and bounded-workspace estimates before allocation. | Reporting only. |
 | LTX 2.5 Q8 paging | Memory and speed | Very high | 9.90 GB and 78.38 s versus 31.60 GB and 102.13 s for matched BF16 one-block streaming at 768×512. | Q8 changes the numerical trajectory. |
+| LTX 2.5 fused Sol attention | Long-sequence sampling speed | Experimental | On a matched one-stage 1344×768, five-second run, the speed profile executed 276 sparse video-self-attention calls. Complete time fell from 333.08 to 281.11 seconds (15.60%); eligible forwards averaged 36.59 versus 30.21 seconds (17.45%). | Requires a resident BF16 transformer and at least 16,000 video tokens. It casts eligible FP32 Q/K/V projections to BF16 and uses approximate routing, so composition and trajectory can change. Peak MLX allocation remained 66.00 GB. |
 | LTX 2.5 temporal VAE tiling | Decode memory | High for long clips | Activates from an explicit decode-memory budget and grows in value with duration. | Preserves the synchronized output contract. |
 | LTX 2.5 generated-keyframe slots | Motion allocation | Experimental | Adds evenly distributed learned interior slots during stage one without changing existing workflow schemas. | Changes the latent token sequence and output. |
 | LTX 2.5 Diffusion VAE | Decode quality | Experimental | On a matched fast-motion 512×512 latent, the reference decode took 66.41 s at an 8.41 GB MLX peak. | Runs the official one-step pixel-diffusion decoder and changes decoded pixels. Conv VAE remains the speed and low-memory default. |
@@ -320,7 +498,7 @@ work. Results apply to the stated workflow and hardware conditions.
 | 1 | H3-specific fused attention data movement | High transformer speed potential | Medium; requires an exact-shape MLX extension |
 | 2 | H3-specific W4A8 projection kernel | Very high checkpoint and resident-memory reduction | Low |
 | 3 | Complete-process BF16 one-block paging validation | Very high BF16 peak-memory reduction | Medium; q8 remains faster with four-block windows |
-| 4 | LTX 2.5 visual-token routing parity | High long-duration speed potential | Low until the routing contract is verified |
+| 4 | LTX 2.5 Sol-attention profile calibration and paged integration | Medium-to-high long-sequence speed potential | Medium for resident BF16; paged execution is not implemented |
 | 5 | Ref2VA automatic-density quality validation | High Ref2VA speed and memory reduction | Medium; full density remains the default |
 | 6 | LTX 2.5 temporal image-conditioning and chain parity | Medium feature completeness | Medium |
 
@@ -380,6 +558,7 @@ This table is generated from the registered node contracts. Run
 | H3 Latent Hi Res Fix | Enlarge an H3 video latent and run a second H3 visual refinement pass. The original synchronized audio latent is returned unchanged. | H3 — Sampling and acceleration | Experimental |
 | H3 LoRA Loader (MLX) | Build a lazy, ordered MiniMax H3 LoRA stack. Validate safetensors headers now and load adapter tensors only when the H3 transformer executes. | H3 — Loaders | Supported |
 | H3 Validated Sampling Preset | Apply a measured dense, trajectory-replay, or Turbo sampling policy. Connect all three typed outputs to the H3 sampler. | H3 — Sampling and acceleration | Recommended |
+| H3 Sol Attention (MLX Experimental) | Experimental fused MLX Metal sparse attention for long H3 sequences. It preserves the complete multimodal prefix exactly and falls back to dense MLX for unsupported calls. | H3 — Sampling and acceleration | Experimental |
 | H3 EasyCache (MLX) | Configure joint MLX EasyCache residual reuse for H3 video and audio sampling. Choose quality-first, balanced, or speed-first bounded automatic reuse. | H3 — Sampling and acceleration | Experimental |
 | H3 Trajectory Forecast (MLX) | Experimentally forecast compact post-transformer H3 video and audio features. Current timestep output heads still run on every step. Turbo LoRA is supported. | H3 — Sampling and acceleration | Experimental |
 | H3 BlockCache (MLX) | Always run H3 block zero and the current output heads, then safely reuse the cached joint audio/video residual of later transformer blocks when both modality indicators agree. | H3 — Sampling and acceleration | Experimental |
@@ -413,6 +592,8 @@ This table is generated from the registered node contracts. Run
 | LTX 2.5 Quality Mode | Choose fast distilled inference, production guided Euler, or the official HQ second-order res_2s recipe without changing the base Generation Config schema. | LTX 2.5 — Core | Experimental |
 | LTX 2.5 Automatic Duration | Predict one-shot duration from the prompt with the official LTX 2.5 duration head. The manual duration remains unchanged when this modifier is not connected. | LTX 2.5 — Core | Supported |
 | LTX 2.5 Generated Keyframes | Apply LTX 2.5 generated interior keyframe slots as a composable config modifier. | LTX 2.5 — Conditioning | Supported |
+| LTX 2.5 Full-Resolution Single Stage | Run the distilled transformer once at the final resolution without latent upscaling. This experimental path supports T2V and reference-conditioned generation. | LTX 2.5 — Optimization | Experimental |
+| LTX 2.5 Sol Attention (MLX Experimental) | Experimental MLX Sol-style sparse video self-attention for long, resident, full-resolution single-stage LTX 2.5 sequences. | LTX 2.5 — Optimization | Experimental |
 | LTX 2.5 Diffusion VAE Optimization | Select an MLX Diffusion VAE execution layout. It does not affect the convolutional VAE. | LTX 2.5 — Optimization | Experimental |
 | LTX 2.5 DFR Detail Refinement | Enable MLX Diffusion Fidelity Rendering: segment-grid generated keyframes, stage-one latent reference conditioning, stage-two-only Pixel-Spatial IC-LoRA, optional exact prebaked Q8 adapter pages, and untouched stage-one audio publication. | LTX 2.5 — Conditioning | Experimental |
 | LTX 2.5 DFR Temporal Refinement | Experimentally add one or two learned x2 temporal DFR rounds. Each round preserves stage-one audio, doubles playback frame rate, reapplies one-shot image anchors, and adds four transformer evaluations per temporal tile. Current MLX visual parity is not yet production-validated. | LTX 2.5 — Conditioning | Experimental |
@@ -426,6 +607,20 @@ This table is generated from the registered node contracts. Run
 | LTX 2.5 Generate Chained Timeline | Generate two to four overlapping LTX 2.5 windows with timeline-aligned latent guides, causal-aware latent transitions, and one synchronized audio/video decode. | LTX 2.5 — Core | Experimental |
 | LTX 2.5 Video Upscale / Refine | Upscale decoded ComfyUI IMAGE+AUDIO from any movie through LTX 2.5 latent space, optionally adding video-only refinement while preserving the source audio. | LTX 2.5 — Core | Experimental |
 | LTX 2.5 Unload MLX Runtime | Release process-local LTX 2.5 state. | LTX 2.5 — Core | Supported |
+| Canny Preprocessor (MLX) | Create temporally aligned Canny control frames with MLX. The defaults match ComfyUI's current normalized-threshold Canny contract. | MLX preprocessors — Edges | Experimental |
+| Video Depth Model Loader (MLX) | Select a converted Apache-2.0 Video Depth Anything Small checkpoint. This node does not load weights. | MLX preprocessors — Depth | Experimental |
+| Video Depth Preprocessor (MLX) | Estimate temporally consistent relative depth with Video Depth Anything Small on MLX. The default unloads the model after preprocessing. | MLX preprocessors — Depth | Experimental |
+| DWPose Model Loader (MLX) | Select converted YOLOX-L and DWPose whole-body MLX bundles without loading them. | MLX preprocessors — Pose | Experimental |
+| DWPose Preprocessor (MLX) | Estimate whole-body pose with MLX YOLOX-L and DWPose. The default includes body, face, and hands, then unloads both models. | MLX preprocessors — Pose | Experimental |
+| TEED Model Loader (MLX) | Select a converted MIT-licensed TEED checkpoint without loading it. | MLX preprocessors — Edges | Experimental |
+| TEED Soft-Edge Preprocessor (MLX) | Create learned soft-edge guides with the tiny TEED model on MLX. The default unloads the model after preprocessing. | MLX preprocessors — Edges | Experimental |
+| Fast Depth Model Loader (MLX) | Select the standard Apache-2.0 Depth Anything V2 Small safetensors checkpoint. Weights are loaded directly into MLX only when preprocessing runs. | MLX preprocessors — Depth | Experimental |
+| Fast Depth Preprocessor (MLX) | Estimate fast per-frame relative depth with Depth Anything V2 Small on MLX. Use Video Depth Anything when maximum temporal consistency matters. | MLX preprocessors — Depth | Experimental |
+| Depth to Normal Map (MLX) | Convert a relative-depth IMAGE batch into standard RGB +Z-blue surface normals on MLX. Strength compensates for the small slopes in normalized depth. The node is weightless and preserves the input frame count and dimensions. | MLX preprocessors — Normals | Experimental |
+| Line Art Model Loader (MLX) | Select a converted realistic fine or coarse line-art checkpoint without loading it. | MLX preprocessors — Line art | Experimental |
+| Realistic Line Art Preprocessor (MLX) | Extract realistic fine or coarse line art with a compact MLX residual generator. The default matches ComfyUI's conventional white-line guide on black. | MLX preprocessors — Line art | Experimental |
+| Motion Track Guide (MLX) | Render sparse colored point trajectories into the guide-video representation expected by the LTX Motion Track IC-LoRA. This node uses MLX and does not require a checkpoint. | MLX preprocessors — Motion | Experimental |
+| Unload MLX Preprocessors | Release weighted MLX preprocessor state without changing H3 or LTX residency. | MLX preprocessors — Lifecycle | Experimental |
 <!-- END GENERATED NODE CATALOG -->
 
 ## Troubleshooting

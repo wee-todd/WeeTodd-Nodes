@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "comfyui-weetodd-nodes"
 version = "0.1.0"
-description = "Experimental MLX-native MiniMax H3 nodes for ComfyUI on Apple Silicon"
+description = "Experimental MLX-native MiniMax H3 and LTX video nodes for ComfyUI on Apple Silicon"
 readme = "README.md"
 requires-python = ">=3.11"
 license = {file = "LICENSE"}
@@ -14,12 +14,14 @@ dependencies = [
   "mlx>=0.32.0",
   "mlx-vlm>=0.4.4",
   "numpy>=1.26",
+  "opencv-python-headless>=4.10",
   "pillow>=11",
   "safetensors>=0.4",
   "transformers>=4.57",
 ]
 
 [project.optional-dependencies]
+convert = ["onnx==1.22.0"]
 docs = ["PyYAML>=6.0"]
 preview-ane = ["coremltools==9.0"]
 ltx = [
@@ -32,7 +34,14 @@ Repository = "https://github.com/wee-todd/WeeTodd-Nodes"
 Issues = "https://github.com/wee-todd/WeeTodd-Nodes/issues"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/wee_todd_nodes", "src/minimax_h3_mlx", "src/ltx23_mlx", "src/ltx25_mlx"]
+packages = [
+  "src/wee_todd_nodes",
+  "src/minimax_h3_mlx",
+  "src/ltx23_mlx",
+  "src/ltx25_mlx",
+  "src/mlx_preprocessors",
+  "src/wee_todd_mlx",
+]
 
 [tool.hatch.metadata]
 allow-direct-references = true

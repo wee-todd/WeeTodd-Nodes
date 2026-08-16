@@ -25,6 +25,7 @@ from wee_todd_nodes.nodes import (
     WeeToddH3ReferenceImage,
     WeeToddH3ReferenceStrength,
     WeeToddH3ReferenceVideo,
+    WeeToddH3SolAttention,
     WeeToddH3TrajectoryForecast,
     WeeToddH3ValidatedSamplingPreset,
     _frames_from_manifest,
@@ -85,6 +86,18 @@ def test_easycache_exposes_fresh_head_core_residual_strategy_without_changing_de
     assert legacy.reuse_strategy == "output_residual"
     assert fresh_heads.reuse_strategy == "core_residual_fresh_heads"
     assert fresh_heads.allow_turbo_experimental is True
+
+
+def test_sol_attention_profiles_resolve_to_bounded_engine_policies():
+    config, raw = WeeToddH3SolAttention().configure(
+        "balanced", 0.1, 0.0, 0.5, 9, 8192
+    )
+    assert config.enabled is True
+    assert config.tau == 1.0
+    assert config.start_percent == 0.25
+    assert config.end_percent == 1.0
+    assert config.dense_blocks == 3
+    assert json.loads(raw)["exact_prefix"].startswith("automatic")
 
 
 def test_trim_timing_metadata_explicitly_authorizes_changed_frame_count():
@@ -236,7 +249,7 @@ def test_hires_fix_resolves_target_and_preserves_audio_contract(monkeypatch):
 
 
 def test_expected_nodes_are_registered():
-    assert len(NODE_CLASS_MAPPINGS) == 74
+    assert len(NODE_CLASS_MAPPINGS) == 91
     assert "WeeToddH3ComponentLoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3QuantizedTransformerLoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3Preflight" in NODE_CLASS_MAPPINGS
@@ -274,6 +287,7 @@ def test_expected_nodes_are_registered():
     assert "WeeToddH3Sample" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3LatentHiresFix" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3EasyCache" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3SolAttention" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3BlockCache" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3HierarchicalBlockCache" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3LoRALoader" in NODE_CLASS_MAPPINGS
@@ -303,6 +317,20 @@ def test_expected_nodes_are_registered():
     assert "WeeToddLTX25Generate" in NODE_CLASS_MAPPINGS
     assert "WeeToddLTX25VideoUpscale" in NODE_CLASS_MAPPINGS
     assert "WeeToddLTX25Unload" in NODE_CLASS_MAPPINGS
+    assert "WeeToddMLXCannyPreprocessor" in NODE_CLASS_MAPPINGS
+    assert "WeeToddMLXVideoDepthLoader" in NODE_CLASS_MAPPINGS
+    assert "WeeToddMLXVideoDepthPreprocessor" in NODE_CLASS_MAPPINGS
+    assert "WeeToddMLXDWPoseLoader" in NODE_CLASS_MAPPINGS
+    assert "WeeToddMLXDWPosePreprocessor" in NODE_CLASS_MAPPINGS
+    assert "WeeToddMLXTEEDLoader" in NODE_CLASS_MAPPINGS
+    assert "WeeToddMLXTEEDPreprocessor" in NODE_CLASS_MAPPINGS
+    assert "WeeToddMLXFastDepthLoader" in NODE_CLASS_MAPPINGS
+    assert "WeeToddMLXFastDepthPreprocessor" in NODE_CLASS_MAPPINGS
+    assert "WeeToddMLXNormalMapPreprocessor" in NODE_CLASS_MAPPINGS
+    assert "WeeToddMLXLineArtLoader" in NODE_CLASS_MAPPINGS
+    assert "WeeToddMLXLineArtPreprocessor" in NODE_CLASS_MAPPINGS
+    assert "WeeToddMLXMotionTrackGuide" in NODE_CLASS_MAPPINGS
+    assert "WeeToddMLXPreprocessorUnload" in NODE_CLASS_MAPPINGS
 
 
 def test_continuation_context_defaults_to_quality_first_22_frames():

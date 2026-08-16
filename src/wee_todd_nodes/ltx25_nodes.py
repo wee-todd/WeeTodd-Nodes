@@ -269,7 +269,7 @@ class WeeToddLTX25ICLoRAControlGuide:
                         "default": "canny_edges",
                         "tooltip": (
                             "Connect preprocessed Canny, depth, or DWPose frames. Motion Track "
-                            "accepts the source video frames directly."
+                            "requires the colored trajectory video from Motion Track Guide."
                         ),
                     },
                 ),
@@ -336,7 +336,7 @@ class WeeToddLTX25ICLoRAControlGuide:
                 "control_groups": control_groups,
                 "single_group_recommended": len(control_groups) <= 1,
                 "preprocessing": (
-                    "raw_source_video"
+                    "colored_trajectory_guide"
                     if control_type == "motion_track"
                     else "preprocessed_image_batch"
                 ),
@@ -1175,6 +1175,83 @@ class WeeToddLTX25GeneratedKeyframes:
         return (updated,)
 
 
+class WeeToddLTX25SingleStage:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "config": ("WEETODD_LTX25_CONFIG",),
+                "mode": (["full resolution — 8 real forwards"],),
+            }
+        }
+
+    RETURN_TYPES = ("WEETODD_LTX25_CONFIG", "STRING")
+    RETURN_NAMES = ("config", "single_stage_info")
+    FUNCTION = "apply"
+    CATEGORY = "WeeTodd/LTX 2.5/optimization"
+    DESCRIPTION = (
+        "Run the distilled transformer once at the final resolution without latent upscaling. "
+        "This experimental path supports T2V and reference-conditioned generation."
+    )
+
+    def apply(self, config, mode):
+        del mode
+        updated = replace(
+            config,
+            ic_lora_single_stage=True,
+            stage2_steps=0,
+            stage1_sampler="euler_ancestral",
+            cfg_pp_batched=False,
+            cfg_pp_schedule="full",
+        )
+        updated.validate()
+        return updated, json.dumps(
+            {
+                "mode": "full_resolution_single_stage",
+                "stage1_real_forwards": updated.stage1_steps,
+                "stage2_real_forwards": 0,
+                "spatial_upscaler": "not loaded",
+            },
+            indent=2,
+            sort_keys=True,
+        )
+
+
+class WeeToddLTX25SolAttention:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "config": ("WEETODD_LTX25_CONFIG",),
+                "profile": (["quality", "balanced", "speed", "disabled"],),
+            }
+        }
+
+    RETURN_TYPES = ("WEETODD_LTX25_CONFIG", "STRING")
+    RETURN_NAMES = ("config", "sol_attention_info")
+    FUNCTION = "apply"
+    CATEGORY = "WeeTodd/LTX 2.5/optimization"
+    DESCRIPTION = (
+        "Experimental MLX Sol-style sparse video self-attention for long, resident, "
+        "full-resolution single-stage LTX 2.5 sequences."
+    )
+
+    def apply(self, config, profile):
+        updated = replace(config, sol_attention_profile=str(profile))
+        updated.validate()
+        return updated, json.dumps(
+            {
+                "profile": updated.sol_attention_profile,
+                "minimum_video_tokens": 16000,
+                "scope": "unmasked resident video self-attention only",
+                "audio_and_cross_attention": "dense MLX",
+                "output_preserving": False,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+
+
 class WeeToddLTX25DiffVAEOptimization:
     @classmethod
     def INPUT_TYPES(cls):
@@ -1408,7 +1485,12 @@ class WeeToddLTX25Preflight:
             require_spatial_upscaler=not config.ic_lora_single_stage,
         )
         scale_factors = tuple(int(value) for value in report["video_scale_factors"])
-        config.validate(scale_factors=scale_factors)
+        config.validate(
+            scale_factors=scale_factors,
+            reference_downscale_factor=int(
+                report.get("ic_lora_reference_downscale_factor") or 1
+            ),
+        )
         validate_ltx25_dfr_prebaked_pair(config, report)
         result = {
             "component_contract_ok": True,
@@ -1476,7 +1558,12 @@ class WeeToddLTX25Generate:
             config.pipeline_mode,
             require_spatial_upscaler=not config.ic_lora_single_stage,
         )
-        config.validate(scale_factors=tuple(int(value) for value in report["video_scale_factors"]))
+        config.validate(
+            scale_factors=tuple(int(value) for value in report["video_scale_factors"]),
+            reference_downscale_factor=int(
+                report.get("ic_lora_reference_downscale_factor") or 1
+            ),
+        )
         validate_ltx25_dfr_prebaked_pair(config, report)
         released = _release_h3_stages()
         final = _safe_target(filename_prefix, config.seed)
@@ -2054,6 +2141,8 @@ NODE_CLASS_MAPPINGS = {
     "WeeToddLTX25QualityMode": WeeToddLTX25QualityMode,
     "WeeToddLTX25AutoDuration": WeeToddLTX25AutoDuration,
     "WeeToddLTX25GeneratedKeyframes": WeeToddLTX25GeneratedKeyframes,
+    "WeeToddLTX25SingleStage": WeeToddLTX25SingleStage,
+    "WeeToddLTX25SolAttention": WeeToddLTX25SolAttention,
     "WeeToddLTX25DiffVAEOptimization": WeeToddLTX25DiffVAEOptimization,
     "WeeToddLTX25DFRDetailing": WeeToddLTX25DFRDetailing,
     "WeeToddLTX25DFRTemporalRefinement": WeeToddLTX25DFRTemporalRefinement,
@@ -2078,6 +2167,8 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "WeeToddLTX25QualityMode": "WeeTodd LTX 2.5 Quality Mode",
     "WeeToddLTX25AutoDuration": "WeeTodd LTX 2.5 Automatic Duration",
     "WeeToddLTX25GeneratedKeyframes": "WeeTodd LTX 2.5 Generated Keyframes",
+    "WeeToddLTX25SingleStage": "WeeTodd LTX 2.5 Full-Resolution Single Stage",
+    "WeeToddLTX25SolAttention": "WeeTodd LTX 2.5 Sol Attention (MLX Experimental)",
     "WeeToddLTX25DiffVAEOptimization": "WeeTodd LTX 2.5 Diffusion VAE Optimization",
     "WeeToddLTX25DFRDetailing": "WeeTodd LTX 2.5 DFR Detail Refinement",
     "WeeToddLTX25DFRTemporalRefinement": "WeeTodd LTX 2.5 DFR Temporal Refinement",

@@ -119,6 +119,9 @@ def euler_ancestral_denoise_loop(
         if current_audio is not None and not audio_uniform:
             kwargs["audio_timesteps"] = _timesteps(sigma, current_audio.denoise_mask)
 
+        from .sol_attention import set_ltx25_sol_context
+
+        set_ltx25_sol_context(model, step_index=index, total_steps=total)
         video_denoised, audio_denoised = model(**kwargs)
         for modality, state, denoised in (
             ("video", current_video, video_denoised),
@@ -238,6 +241,9 @@ def euler_ancestral_cfg_pp_denoise_loop(
             shared["audio_timesteps"] = _timesteps(sigma, current_audio.denoise_mask)
         # The unconditional prediction is not consumed by the terminal update.
         use_cfg_pp = sigma_next != 0.0 and index in selected_cfg_steps
+        from .sol_attention import set_ltx25_sol_context
+
+        set_ltx25_sol_context(model, step_index=index, total_steps=total)
 
         if batch_branches and use_cfg_pp:
             batched_started = time.perf_counter()

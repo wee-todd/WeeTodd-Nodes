@@ -555,6 +555,132 @@ def test_ltx25_ic_lora_pipeline_mode_enables_official_single_stage_geometry():
     assert json.loads(raw)["recommended_ingredients_lora_strength"] == 1.2
 
 
+def test_ltx25_sol_attention_requires_resident_single_stage():
+    from wee_todd_nodes.ltx25_nodes import (
+        WeeToddLTX25SingleStage,
+        WeeToddLTX25SolAttention,
+    )
+
+    config = LTX25GenerationConfig(width=1344, height=768, low_memory=False)
+    single_stage, _ = WeeToddLTX25SingleStage().apply(
+        config,
+        "full resolution — 8 real forwards",
+    )
+    configured, raw = WeeToddLTX25SolAttention().apply(single_stage, "speed")
+    assert configured.ic_lora_single_stage is True
+    assert configured.stage2_steps == 0
+    assert configured.sol_attention_profile == "speed"
+    assert json.loads(raw)["minimum_video_tokens"] == 16000
+
+
+def test_ltx25_sol_attention_patches_only_video_self_attention_and_tracks_context():
+    from ltx_core_mlx.model.transformer.attention import Attention
+
+    from ltx25_mlx.sol_attention import (
+        configure_ltx25_sol_attention,
+        set_ltx25_sol_context,
+    )
+    from wee_todd_mlx.sol_attention import SolAttentionConfig
+
+    class Block:
+        def __init__(self):
+            self.attn1 = Attention(128, num_heads=1, head_dim=128)
+            self.attn2 = Attention(128, num_heads=1, head_dim=128)
+
+    class Model:
+        def __init__(self):
+            self.transformer_blocks = [Block(), Block()]
+
+    model = Model()
+    original_cross_class = model.transformer_blocks[0].attn2.__class__
+    report = configure_ltx25_sol_attention(
+        model,
+        SolAttentionConfig(enabled=True, min_tokens=64, start_percent=0.0, dense_blocks=0),
+    )
+    set_ltx25_sol_context(model, step_index=3, total_steps=8, exact_suffix_rows=17)
+    set_ltx25_sol_context(model, step_index=4, total_steps=8)
+
+    assert report["patched_video_self_attention"] == 2
+    assert model.transformer_blocks[0].attn1.__class__.__name__ == "_LTX25SolVideoAttention"
+    assert model.transformer_blocks[0].attn2.__class__ is original_cross_class
+    assert model._weetodd_sol_state.step_index == 4
+    assert model._weetodd_sol_state.total_steps == 8
+    assert model._weetodd_sol_state.exact_suffix_rows == 17
+
+
+def test_ltx25_sol_attention_exact_suffix_matches_dense_attention():
+    import copy
+
+    import mlx.core as mx
+    from ltx_core_mlx.model.transformer.attention import Attention
+    from mlx.utils import tree_map
+
+    from ltx25_mlx.sol_attention import (
+        configure_ltx25_sol_attention,
+        set_ltx25_sol_context,
+    )
+    from wee_todd_mlx.sol_attention import SolAttentionConfig
+
+    class Block:
+        def __init__(self, attention):
+            self.attn1 = attention
+
+    class Model:
+        def __init__(self, attention):
+            self.transformer_blocks = [Block(attention)]
+
+    dense = Attention(128, num_heads=1, head_dim=128)
+    dense.update(tree_map(lambda value: value.astype(mx.bfloat16), dense.parameters()))
+    sparse = copy.deepcopy(dense)
+    model = Model(sparse)
+    configure_ltx25_sol_attention(
+        model,
+        SolAttentionConfig(enabled=True, min_tokens=64, start_percent=0.0, dense_blocks=0),
+    )
+    set_ltx25_sol_context(model, step_index=0, total_steps=1, exact_suffix_rows=64)
+    mx.random.seed(19)
+    inputs = mx.random.normal((1, 64, 128)).astype(mx.bfloat16)
+    expected = dense(inputs)
+    actual = sparse(inputs)
+    mx.eval(expected, actual)
+    delta = actual.astype(mx.float32) - expected.astype(mx.float32)
+    relative_l2 = mx.sqrt(mx.sum(delta * delta) / mx.sum(expected.astype(mx.float32) ** 2))
+    assert float(relative_l2.item()) < 1.0e-4
+
+
+def test_ltx25_sol_attention_casts_fp32_projected_qkv_to_bf16_kernel():
+    import mlx.core as mx
+    from ltx_core_mlx.model.transformer.attention import Attention
+
+    from ltx25_mlx.sol_attention import (
+        configure_ltx25_sol_attention,
+        ltx25_sol_attention_report,
+    )
+    from wee_todd_mlx.sol_attention import SolAttentionConfig
+
+    class Block:
+        def __init__(self):
+            self.attn1 = Attention(128, num_heads=1, head_dim=128)
+
+    class Model:
+        def __init__(self):
+            self.transformer_blocks = [Block()]
+
+    model = Model()
+    report = configure_ltx25_sol_attention(
+        model,
+        SolAttentionConfig(enabled=True, min_tokens=64, start_percent=0.0, dense_blocks=0),
+    )
+    output = model.transformer_blocks[0].attn1(mx.random.normal((1, 64, 128)))
+    mx.eval(output)
+    report = ltx25_sol_attention_report(model, report)
+
+    assert report["sparse_kernel_calls"] == 1
+    assert report["bf16_projection_cast_calls"] == 1
+    assert report["observed_projected_dtype"] == "mlx.core.float32"
+    assert report["observed_kernel_dtype"] == "mlx.core.bfloat16"
+
+
 def test_ltx25_ic_lora_pipeline_mode_allows_explicit_batched_cfg_pp():
     config, raw = WeeToddLTX25ICLoRAPipelineMode().apply(
         LTX25GenerationConfig(width=768, height=448),
@@ -593,6 +719,18 @@ def test_ltx25_ic_lora_pipeline_mode_preserves_eight_forward_fast_option():
     assert config.stage1_sampler == "euler_ancestral"
     assert config.stage1_forward_passes == 8
     assert json.loads(raw)["mode"] == "single_stage_fast"
+
+
+def test_ltx25_two_stage_union_control_requires_reference_grid_alignment():
+    config = LTX25GenerationConfig(width=768, height=448)
+
+    with pytest.raises(ValueError, match="divisible by 128x128"):
+        config.validate(reference_downscale_factor=2)
+
+    replace(config, height=512).validate(reference_downscale_factor=2)
+    replace(config, ic_lora_single_stage=True, stage2_steps=0).validate(
+        reference_downscale_factor=2
+    )
 
 
 def test_ltx25_pipeline_scopes_ic_lora_to_requested_stage(monkeypatch):

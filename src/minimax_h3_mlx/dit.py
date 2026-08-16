@@ -31,6 +31,8 @@ from typing import TYPE_CHECKING
 import mlx.core as mx
 import mlx.nn as nn
 
+from wee_todd_mlx.execution_evidence import ExecutionEvidence
+
 if TYPE_CHECKING:
     from .adaln import ModulationCache
 
@@ -178,13 +180,52 @@ class Attention(nn.Module):
         self.out_proj = nn.Linear(config.inner_dim, config.hidden_size, bias=False)
         self.query_chunk_size: int | None = None
         self.head_chunk_size: int | None = None
+        self.sol_config = None
+        self.sol_evidence: ExecutionEvidence | None = None
+        self.sol_step_index = 0
+        self.sol_total_steps = 1
 
-    def _attend(self, q, k, v, mask):
+    def _attend(self, q, k, v, mask, block_index):
         """Run SDPA with optional independent head groups.
 
         Attention heads do not interact until the output projection.  Splitting that axis bounds
         the SDPA workspace without changing the mathematical operation or the packed sequence.
         """
+        config = self.sol_config
+        evidence = self.sol_evidence
+        if config is not None:
+            if evidence is not None:
+                evidence.record_call()
+            if config.active(
+                step_index=self.sol_step_index,
+                total_steps=self.sol_total_steps,
+                block_index=int(block_index or 0),
+            ):
+                from .sol_attention import sol_attention, supports_sol_attention
+
+                if evidence is not None:
+                    evidence.record_observed(dtype=q.dtype, shape=q.shape)
+                if q.shape != k.shape or q.shape != v.shape:
+                    if evidence is not None:
+                        evidence.record_fallback("non_self_attention_shape")
+                elif not supports_sol_attention(q, mask, config):
+                    if evidence is not None:
+                        reason = (
+                            "attention_mask"
+                            if mask is not None
+                            else "unsupported_dtype"
+                            if q.dtype != mx.bfloat16
+                            else "unsupported_shape"
+                        )
+                        evidence.record_fallback(reason)
+                else:
+                    if evidence is not None:
+                        evidence.record_eligible()
+                        evidence.record_executed(work_units=int(q.shape[-2]))
+                    return sol_attention(q, k, v, scale=self.scale, config=config)
+            elif evidence is not None:
+                evidence.record_dense_policy()
+
         chunk = self.head_chunk_size
         if chunk is None or q.shape[1] <= chunk:
             return mx.fast.scaled_dot_product_attention(q, k, v, scale=self.scale, mask=mask)
@@ -202,7 +243,7 @@ class Attention(nn.Module):
             pieces.append(piece)
         return mx.concatenate(pieces, axis=1)
 
-    def _normal(self, x, rotary, mask):
+    def _normal(self, x, rotary, mask, block_index):
         """Original inference path, kept free of diagnostic callables and synchronization."""
         batch, sequence, _ = x.shape
         qkv = self.qkv_proj(x).reshape(batch, sequence, self.heads, 3, self.head_dim)
@@ -215,7 +256,7 @@ class Attention(nn.Module):
             k = apply_rotary(k, *rotary)
         chunk = self.query_chunk_size
         if chunk is None or q.shape[-2] <= chunk:
-            out = self._attend(q, k, v, mask)
+            out = self._attend(q, k, v, mask, block_index)
         else:
             pieces = []
             for start in range(0, q.shape[-2], chunk):
@@ -223,7 +264,9 @@ class Attention(nn.Module):
                 chunk_mask = mask
                 if mask is not None and mask.shape[-2] == q.shape[-2]:
                     chunk_mask = mask[..., start:stop, :]
-                piece = self._attend(q[..., start:stop, :], k, v, chunk_mask)
+                piece = self._attend(
+                    q[..., start:stop, :], k, v, chunk_mask, block_index
+                )
                 mx.eval(piece)
                 pieces.append(piece)
             out = mx.concatenate(pieces, axis=-2)
@@ -273,7 +316,7 @@ class Attention(nn.Module):
         module_prefix: str = "blocks",
     ) -> mx.array:
         if diagnostics is None:
-            return self._normal(x, rotary, mask)
+            return self._normal(x, rotary, mask, block_index)
         B, S, _ = x.shape
         prefix = f"{module_prefix}.{block_index}.attn"
         # Raw-checkpoint QKV rows are per-head interleaved: (..., heads, 3, head_dim).
@@ -538,7 +581,9 @@ class TransformerBlock(nn.Module):
         if diagnostics is None:
             h = self.norm1(x)
             h = h * (1.0 + scale_msa[adaln_indices]) + shift_msa[adaln_indices]
-            x = x + gate_msa[adaln_indices] * self.attn(h, rotary, mask)
+            x = x + gate_msa[adaln_indices] * self.attn(
+                h, rotary, mask, block_index=block_index
+            )
             h = self.norm2(x)
             h = h * (1.0 + scale_mlp[adaln_indices]) + shift_mlp[adaln_indices]
             return x + gate_mlp[adaln_indices] * self.mlp(h)
@@ -661,6 +706,9 @@ class MiniMaxH3DiT(nn.Module):
 
         # Rotary is a computed buffer, not a parameter (`rope.inv_freq` is recomputed bit-exactly).
         self.rope = RotaryPosEmbed3D(config)
+        self.sol_attention_config = None
+        self.last_sol_attention_config = None
+        self.sol_attention_evidence: ExecutionEvidence | None = None
 
     def set_attention_query_chunk_size(self, chunk_size: int | None) -> None:
         """Select dense attention or memory-bounded query chunks for every attention layer."""
@@ -691,6 +739,45 @@ class MiniMaxH3DiT(nn.Module):
             block.mlp.row_chunk_size = chunk_size
         for block in self.blocks:
             block.mlp.row_chunk_size = chunk_size
+
+    def set_sol_attention_config(self, config) -> None:
+        """Install or clear the opt-in Sol-style sparse-attention policy."""
+        if config is not None:
+            config.validate()
+        self.sol_attention_config = config
+        self.last_sol_attention_config = config
+        self.sol_attention_evidence = (
+            ExecutionEvidence(
+                requested_backend="sol_attention",
+                resolved_backend="mlx_fused_sol_bf16",
+                scope="H3 packed transformer self-attention",
+            )
+            if config is not None
+            else None
+        )
+        for block in self.blocks:
+            block.attn.sol_config = config
+            block.attn.sol_evidence = self.sol_attention_evidence
+        paged = getattr(self, "paged_blocks", None)
+        if paged is not None:
+            paged.sol_config = config
+            paged.sol_evidence = self.sol_attention_evidence
+
+    def sol_attention_report(self) -> dict[str, object] | None:
+        """Return the resolved H3 Sol policy and actual generation dispatch evidence."""
+
+        config = self.last_sol_attention_config
+        evidence = self.sol_attention_evidence
+        if config is None or evidence is None:
+            return None
+        snapshot = evidence.snapshot()
+        return {
+            **config.__dict__,
+            **snapshot,
+            "attention_calls": snapshot["total_calls"],
+            "sparse_kernel_calls": snapshot["executed_calls"],
+            "fallback_calls": snapshot["fallback_calls"],
+        }
 
     def embed_timesteps(self, timesteps: mx.array) -> mx.array:
         """Return original MLP embeddings or linearly interpolated pruned AdaLN coordinates."""
@@ -935,6 +1022,22 @@ class MiniMaxH3DiT(nn.Module):
             target_video_indices = video_indices[terminal_video_row_start:]
             target_audio_indices = audio_indices[terminal_audio_row_start:]
             terminal_query_indices = mx.concatenate((target_video_indices, target_audio_indices))
+        sol_config = self.sol_attention_config
+        if sol_config is not None:
+            # H3 packs target video last. Everything before its first row is the multimodal
+            # prefix and must remain an exact K/V sink with exact query rows.
+            prefix_rows = int(video_indices[terminal_video_row_start].item())
+            active_config = sol_config.with_prefix(prefix_rows)
+            self.last_sol_attention_config = active_config
+            for block in self.blocks:
+                block.attn.sol_config = active_config
+                block.attn.sol_step_index = step_index
+                block.attn.sol_total_steps = total_steps
+            paged_context = getattr(self, "paged_blocks", None)
+            if paged_context is not None:
+                paged_context.sol_config = active_config
+                paged_context.sol_step_index = step_index
+                paged_context.sol_total_steps = total_steps
         if paged is not None:
             if blockcache is not None and hasattr(blockcache, "segment_start"):
                 raise ValueError(

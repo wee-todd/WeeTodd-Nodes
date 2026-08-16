@@ -88,6 +88,7 @@ class LTX25DistilledPipeline:
         diffvae_query_chunk_size: int = 512,
         diffvae_context_width_chunks: int = 4,
         diffvae_stage4_tile_width: int = 0,
+        sol_attention_profile: str = "disabled",
         loras: tuple[tuple[str, float], ...] = (),
         ic_loras: tuple[tuple[str, float], ...] = (),
         verbose: bool = True,
@@ -109,6 +110,8 @@ class LTX25DistilledPipeline:
         self.low_memory = low_memory
         self.low_ram_streaming = low_ram_streaming
         self.feed_forward_backend = feed_forward_backend
+        self.sol_attention_profile = sol_attention_profile
+        self.sol_attention_report: dict[str, object] = {"enabled": False}
         self.loras = tuple(loras)
         self.ic_loras = tuple(ic_loras)
         self.baked_ic_loras = tuple(
@@ -201,6 +204,27 @@ class LTX25DistilledPipeline:
                 feed_forward_backend=self.feed_forward_backend,
                 loras=desired_loras,
             )
+            from wee_todd_mlx.sol_attention import SolAttentionConfig
+
+            from .sol_attention import configure_ltx25_sol_attention
+
+            profiles = {
+                "quality": (0.75, 0.30, 4),
+                "balanced": (1.0, 0.25, 3),
+                "speed": (1.25, 0.20, 2),
+            }
+            sol_config = None
+            sol_profile = getattr(self, "sol_attention_profile", "disabled")
+            if sol_profile != "disabled":
+                tau, start_percent, dense_blocks = profiles[sol_profile]
+                sol_config = SolAttentionConfig(
+                    enabled=True,
+                    tau=tau,
+                    min_tokens=16000,
+                    start_percent=start_percent,
+                    dense_blocks=dense_blocks,
+                )
+            self.sol_attention_report = configure_ltx25_sol_attention(self.dit, sol_config)
             self._loaded_loras = desired_loras
             self._loaded_transformer_path = desired_path
             self.feed_forward_report = getattr(self.dit, "feed_forward_backend_report", None)
@@ -673,8 +697,6 @@ class LTX25DistilledPipeline:
             raise ValueError(f"Unsupported LTX 2.5 stage-two sampler: {stage2_sampler!r}.")
         if ic_lora_single_stage and pipeline_mode != "distilled":
             raise ValueError("LTX 2.5 IC-LoRA single-stage mode requires distilled sampling.")
-        if ic_lora_single_stage and not video_references:
-            raise ValueError("LTX 2.5 IC-LoRA single-stage mode requires a video reference.")
         if ic_lora_single_stage and (dfr_enabled or temporal_upsample_rounds):
             raise ValueError("LTX 2.5 IC-LoRA single-stage mode cannot be combined with DFR.")
         if ic_lora_single_stage and (continuation is not None or return_continuation):
@@ -963,6 +985,16 @@ class LTX25DistilledPipeline:
             )
         mx.eval(video_state.latent, video_state.clean_latent, audio_state.latent)
         model = X0Model(self.dit)
+        if ic_lora_single_stage and self.sol_attention_profile != "disabled":
+            from .sol_attention import set_ltx25_sol_context
+
+            target_tokens = requested_latent_f * latent_h * latent_w
+            set_ltx25_sol_context(
+                model,
+                step_index=0,
+                total_steps=stage1_steps,
+                exact_suffix_rows=max(0, int(video_state.latent.shape[1]) - target_tokens),
+            )
         from .feed_forward import set_mpp_feed_forward_enabled
 
         set_mpp_feed_forward_enabled(self.dit, self.feed_forward_stage_scope in {"all", "stage1"})
@@ -1115,6 +1147,12 @@ class LTX25DistilledPipeline:
             )
             mx.eval(video_latent, audio_latent)
             timings["ic_lora_stage_scope"] = "single_stage_full_resolution"
+            from .sol_attention import ltx25_sol_attention_report
+
+            self.sol_attention_report = ltx25_sol_attention_report(
+                self.dit, self.sol_attention_report
+            )
+            timings["sol_attention"] = dict(self.sol_attention_report)
             timings["latent_upscale_seconds"] = 0.0
             timings["stage2_seconds"] = 0.0
             timings["sampling_total_seconds"] = sum(

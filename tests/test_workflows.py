@@ -8,12 +8,14 @@ from wee_todd_nodes.nodes import NODE_CLASS_MAPPINGS
 
 ROOT = Path(__file__).parents[1]
 CORE_NODES = {
+    "Canny",
     "GetVideoComponents",
     "LoadImage",
     "LoadAudio",
     "LoadVideo",
     "MarkdownNote",
     "Note",
+    "PreviewImage",
     "Video Slice",
 }
 PROFILE_POLICIES = {
@@ -395,6 +397,101 @@ def test_ltx25_ingredients_profiles_pin_the_intended_adapter_and_schedule(
             "ltx-2.3-22b-ic-lora-ingredients-0.9.safetensors",
             1.2,
         ]
+
+
+@pytest.mark.parametrize(
+    ("filename", "control_type", "uses_mlx_canny"),
+    (
+        ("ltx25_union_canny_balanced.json", "canny_edges", True),
+        ("ltx25_union_depth_balanced.json", "depth_map", False),
+        ("ltx25_union_pose_balanced.json", "pose_skeleton", False),
+    ),
+)
+def test_ltx25_union_control_workflows_use_the_official_two_stage_reference_grid(
+    filename, control_type, uses_mlx_canny
+):
+    workflow = json.loads((ROOT / "workflows/balance/ref2va" / filename).read_text())
+    nodes = list(_execution_node_map(workflow).values())
+    loader = next(node for node in nodes if node["type"] == "WeeToddLTX25ComponentLoader")
+    config = next(node for node in nodes if node["type"] == "WeeToddLTX25GenerationConfig")
+    mode = next(node for node in nodes if node["type"] == "WeeToddLTX25ICLoRAPipelineMode")
+    guide = next(node for node in nodes if node["type"] == "WeeToddLTX25ICLoRAControlGuide")
+    videos = [node for node in nodes if node["type"] == "LoadVideo"]
+
+    assert loader["widgets_values"][0] == "ltx-2.5-22b-distilled-union1p0-q8-paged"
+    assert loader["widgets_values"][1] == "gemma4-12b-with-proj-ltx-2.5-q8-paged"
+    assert tuple(config["widgets_values"][1:3]) == (768, 512)
+    assert config["widgets_values"][6:8] == [True, True]
+    assert mode["widgets_values"][0] == "Two stage — 8 low-resolution + 3 clean refinement"
+    assert guide["widgets_values"] == [control_type, 0, 120, 1.0, 1.0]
+    assert len(videos) == 1 and videos[0]["widgets_values"] == [""]
+    assert (
+        any(node["type"] == "WeeToddMLXCannyPreprocessor" for node in nodes)
+        is uses_mlx_canny
+    )
+    assert not any(node["type"] == "Canny" for node in nodes)
+    depth_loaders = [node for node in nodes if node["type"] == "WeeToddMLXVideoDepthLoader"]
+    depth_processors = [
+        node for node in nodes if node["type"] == "WeeToddMLXVideoDepthPreprocessor"
+    ]
+    if control_type == "depth_map":
+        assert len(depth_loaders) == len(depth_processors) == 1
+        assert depth_loaders[0]["widgets_values"] == [
+            "video_depth_anything/video_depth_anything_vits_mlx.safetensors"
+        ]
+        assert depth_processors[0]["widgets_values"] == [
+            518,
+            "float32 quality",
+            4,
+            4,
+            "near white (recommended)",
+            False,
+        ]
+    else:
+        assert not depth_loaders and not depth_processors
+    pose_loaders = [node for node in nodes if node["type"] == "WeeToddMLXDWPoseLoader"]
+    pose_processors = [
+        node for node in nodes if node["type"] == "WeeToddMLXDWPosePreprocessor"
+    ]
+    if control_type == "pose_skeleton":
+        assert len(pose_loaders) == len(pose_processors) == 1
+        assert pose_loaders[0]["widgets_values"] == [
+            "dwpose_mlx/yolox_l",
+            "dwpose_mlx/dw-ll_ucoco_384",
+        ]
+        assert pose_processors[0]["widgets_values"] == [
+            "whole body",
+            0.3,
+            0.3,
+            False,
+        ]
+    else:
+        assert not pose_loaders and not pose_processors
+
+
+def test_ltx25_motion_track_workflow_uses_trajectory_guide_and_dedicated_adapter():
+    workflow = json.loads(
+        (ROOT / "workflows/performance/i2v/ltx25_motion_track_quality.json").read_text()
+    )
+    nodes = list(_execution_node_map(workflow).values())
+    loader = next(node for node in nodes if node["type"] == "WeeToddLTX25ComponentLoader")
+    adapter = next(node for node in nodes if node["type"] == "WeeToddLTX25ICLoRALoader")
+    mode = next(node for node in nodes if node["type"] == "WeeToddLTX25ICLoRAPipelineMode")
+    renderer = next(node for node in nodes if node["type"] == "WeeToddMLXMotionTrackGuide")
+    guide = next(node for node in nodes if node["type"] == "WeeToddLTX25ICLoRAControlGuide")
+    images = [node for node in nodes if node["type"] == "LoadImage"]
+
+    assert loader["widgets_values"][0] == "ltx-2.5-22b-distilled-transformer-q8-paged"
+    assert adapter["widgets_values"] == [
+        "ltx-2.3-22b-ic-lora-motion-track-control-ref0.5.safetensors",
+        1.0,
+    ]
+    assert mode["widgets_values"][0] == "CFG++ quality — 8 steps / 15 real forwards"
+    assert renderer["widgets_values"][1:4] == [768, 512, 121]
+    assert renderer["widgets_values"][4:] == ["normalized", "spline control points", 50]
+    assert guide["widgets_values"] == ["motion_track", 0, 120, 1.0, 1.0]
+    assert len(images) == 1 and images[0]["widgets_values"] == [""]
+    assert any(node["type"] == "PreviewImage" for node in nodes)
 
 
 def test_h3_to_ltx23_upscale_api_preserves_comfy_image_and_audio_contracts():

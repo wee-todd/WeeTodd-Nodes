@@ -1982,6 +1982,7 @@ class WeeToddH3Sample:
                 "easycache": ("WEETODD_H3_EASYCACHE",),
                 "blockcache": ("WEETODD_H3_BLOCKCACHE",),
                 "trajectory_forecast": ("WEETODD_H3_TRAJECTORY_FORECAST",),
+                "sol_attention": ("WEETODD_H3_SOL_ATTENTION",),
                 "continuation": ("WEETODD_H3_CONTINUATION",),
                 "loras": ("WEETODD_H3_LORAS",),
             },
@@ -2005,6 +2006,7 @@ class WeeToddH3Sample:
         easycache=None,
         blockcache=None,
         trajectory_forecast=None,
+        sol_attention=None,
         continuation=None,
         loras=None,
     ):
@@ -2061,6 +2063,7 @@ class WeeToddH3Sample:
             easycache=easycache,
             blockcache=blockcache,
             trajectory_forecast=trajectory_forecast,
+            sol_attention=sol_attention,
             continuation=continuation,
             loras=loras,
             preview_config=preview_config,
@@ -2142,6 +2145,8 @@ class WeeToddH3Sample:
             "trajectory_forecast": (
                 asdict(trajectory_forecast) if trajectory_forecast is not None else None
             ),
+            "sol_attention": getattr(latents, "sol_attention_report", None)
+            or (asdict(sol_attention) if sol_attention is not None else None),
             "loras": loras.metadata() if loras is not None else [],
             "lora_report": list(getattr(latents, "lora_report", ())),
             "seconds_per_evaluation": latents.seconds_per_evaluation,
@@ -2560,6 +2565,98 @@ class WeeToddH3ValidatedSamplingPreset:
             "measurement": selected.get("measurement"),
         }
         return configured, loras, trajectory_forecast, json.dumps(info, indent=2, sort_keys=True)
+
+
+class WeeToddH3SolAttention:
+    """Configure the independently implemented MLX Sol-style attention backend."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "profile": (
+                    ["quality", "balanced", "speed", "manual"],
+                    {"default": "balanced"},
+                ),
+                "tau": (
+                    "FLOAT",
+                    {
+                        "default": 0.75,
+                        "min": 0.0,
+                        "max": 2.0,
+                        "step": 0.05,
+                        "tooltip": (
+                            "Higher values route fewer exact attention blocks. Used only by "
+                            "the manual profile."
+                        ),
+                    },
+                ),
+                "start_percent": (
+                    "FLOAT",
+                    {"default": 0.2, "min": 0.0, "max": 1.0, "step": 0.05},
+                ),
+                "end_percent": (
+                    "FLOAT",
+                    {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.05},
+                ),
+                "dense_blocks": (
+                    "INT",
+                    {"default": 2, "min": 0, "max": 50, "step": 1},
+                ),
+                "min_tokens": (
+                    "INT",
+                    {"default": 16384, "min": 1024, "max": 131072, "step": 1024},
+                ),
+            }
+        }
+
+    RETURN_TYPES = ("WEETODD_H3_SOL_ATTENTION", "STRING")
+    RETURN_NAMES = ("sol_attention", "policy_info")
+    FUNCTION = "configure"
+    CATEGORY = "WeeTodd/H3/sampling"
+    DESCRIPTION = (
+        "Experimental fused MLX Metal sparse attention for long H3 sequences. It preserves the "
+        "complete multimodal prefix exactly and falls back to dense MLX for unsupported calls."
+    )
+
+    def configure(
+        self,
+        profile,
+        tau,
+        start_percent,
+        end_percent,
+        dense_blocks,
+        min_tokens,
+    ):
+        from minimax_h3_mlx.sol_attention import SolAttentionConfig
+
+        presets = {
+            "quality": (0.75, 0.30, 1.0, 4),
+            "balanced": (1.00, 0.25, 1.0, 3),
+            "speed": (1.25, 0.20, 1.0, 2),
+        }
+        if profile in presets:
+            tau, start_percent, end_percent, dense_blocks = presets[profile]
+        config = SolAttentionConfig(
+            enabled=True,
+            tau=float(tau),
+            min_tokens=int(min_tokens),
+            start_percent=float(start_percent),
+            end_percent=float(end_percent),
+            dense_blocks=int(dense_blocks),
+        )
+        config.validate()
+        info = {
+            "profile": profile,
+            "tau": config.tau,
+            "start_percent": config.start_percent,
+            "end_percent": config.end_percent,
+            "dense_blocks": config.dense_blocks,
+            "min_tokens": config.min_tokens,
+            "exact_prefix": "automatic: text + visual references + audio",
+            "status": "experimental",
+        }
+        return config, json.dumps(info, indent=2, sort_keys=True)
 
 
 class WeeToddH3EasyCache:
@@ -3923,6 +4020,7 @@ NODE_CLASS_MAPPINGS = {
     "WeeToddH3LatentHiresFix": WeeToddH3LatentHiresFix,
     "WeeToddH3LoRALoader": WeeToddH3LoRALoader,
     "WeeToddH3ValidatedSamplingPreset": WeeToddH3ValidatedSamplingPreset,
+    "WeeToddH3SolAttention": WeeToddH3SolAttention,
     "WeeToddH3EasyCache": WeeToddH3EasyCache,
     "WeeToddH3TrajectoryForecast": WeeToddH3TrajectoryForecast,
     "WeeToddH3BlockCache": WeeToddH3BlockCache,
@@ -3971,6 +4069,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "WeeToddH3LatentHiresFix": "WeeTodd H3 Latent Hi Res Fix",
     "WeeToddH3LoRALoader": "WeeTodd H3 LoRA Loader (MLX)",
     "WeeToddH3ValidatedSamplingPreset": "WeeTodd H3 Validated Sampling Preset",
+    "WeeToddH3SolAttention": "WeeTodd H3 Sol Attention (MLX Experimental)",
     "WeeToddH3EasyCache": "WeeTodd H3 EasyCache (MLX)",
     "WeeToddH3TrajectoryForecast": "WeeTodd H3 Trajectory Forecast (MLX)",
     "WeeToddH3BlockCache": "WeeTodd H3 BlockCache (MLX)",
@@ -4014,3 +4113,15 @@ from .ltx25_nodes import (  # noqa: E402
 
 NODE_CLASS_MAPPINGS.update(LTX25_NODE_CLASS_MAPPINGS)
 NODE_DISPLAY_NAME_MAPPINGS.update(LTX25_NODE_DISPLAY_NAME_MAPPINGS)
+
+# Control preprocessors use a separate MLX execution layer so their models and
+# intermediate state never become part of either video-generation runtime.
+from .control_preprocessors import (  # noqa: E402
+    NODE_CLASS_MAPPINGS as CONTROL_PREPROCESSOR_NODE_CLASS_MAPPINGS,
+)
+from .control_preprocessors import (  # noqa: E402
+    NODE_DISPLAY_NAME_MAPPINGS as CONTROL_PREPROCESSOR_NODE_DISPLAY_NAME_MAPPINGS,
+)
+
+NODE_CLASS_MAPPINGS.update(CONTROL_PREPROCESSOR_NODE_CLASS_MAPPINGS)
+NODE_DISPLAY_NAME_MAPPINGS.update(CONTROL_PREPROCESSOR_NODE_DISPLAY_NAME_MAPPINGS)

@@ -128,6 +128,7 @@ class H3Latents:
     refinement_audio_preserved: bool = False
     preview_report: tuple[dict[str, Any], ...] = ()
     prepared_state_report: dict[str, int | float | str | None] | None = None
+    sol_attention_report: dict[str, Any] | None = None
 
 
 SamplerFactory = Callable[[H3TransformerSpec], Any]
@@ -178,6 +179,7 @@ class H3TransformerCache:
         easycache=None,
         blockcache=None,
         trajectory_forecast=None,
+        sol_attention=None,
         continuation: H3ContinuationContext | None = None,
         refinement_source: H3Latents | None = None,
         refinement_strength: float = 1.0,
@@ -271,6 +273,7 @@ class H3TransformerCache:
             config.projection_backend,
             config.sampling_method,
             condition_schedule_key,
+            sol_attention,
         )
         loras = loras or H3LoRAStack()
         loras.validate_for_steps(config.steps)
@@ -303,6 +306,11 @@ class H3TransformerCache:
         accelerators = sum(
             value is not None for value in (easycache, blockcache, trajectory_forecast)
         )
+        if sol_attention is not None and accelerators:
+            raise ValueError(
+                "H3 Sol Attention must be validated without EasyCache, BlockCache, or "
+                "Trajectory Forecast. Disconnect the other accelerator."
+            )
         if accelerators > 1:
             raise ValueError(
                 "EasyCache, BlockCache, and Trajectory Forecast are mutually exclusive."
@@ -358,6 +366,16 @@ class H3TransformerCache:
                     raise
             try:
                 self._sampler.dit.set_attention_query_chunk_size(config.attention_query_chunk_size)
+                sol_setter = getattr(self._sampler.dit, "set_sol_attention_config", None)
+                if sol_attention is not None and sol_setter is None:
+                    raise RuntimeError("The active H3 engine does not support MLX Sol Attention.")
+                if sol_attention is not None and config.attention_query_chunk_size is not None:
+                    raise ValueError(
+                        "MLX Sol Attention requires unchunked attention queries. Use normal "
+                        "memory mode or disable attention query chunking."
+                    )
+                if sol_setter is not None:
+                    sol_setter(sol_attention)
                 head_group_size = config.attention_head_group_size
                 row_group_size = config.ffn_row_group_size
                 head_setter = getattr(self._sampler.dit, "set_attention_head_chunk_size", None)
@@ -458,6 +476,8 @@ class H3TransformerCache:
                 from minimax_h3_mlx.projection import mpp_runtime_status
 
                 paged = getattr(self._sampler.dit, "paged_blocks", None)
+                resolved_sol = getattr(self._sampler.dit, "last_sol_attention_config", None)
+                sol_reporter = getattr(self._sampler.dit, "sol_attention_report", None)
 
                 latents = H3Latents(
                     video=result.video_latents,
@@ -534,6 +554,13 @@ class H3TransformerCache:
                         "build_seconds": getattr(result, "prepared_state_build_seconds", 0.0),
                         "key": getattr(result, "prepared_state_key", None),
                     },
+                    sol_attention_report=(
+                        sol_reporter()
+                        if sol_reporter is not None
+                        else asdict(resolved_sol)
+                        if resolved_sol is not None
+                        else None
+                    ),
                     seconds_per_evaluation=result.seconds_per_evaluation,
                     total_seconds=result.total_seconds,
                     transformer_spec=spec,

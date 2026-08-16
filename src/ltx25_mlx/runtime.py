@@ -567,6 +567,7 @@ class LTX25GenerationConfig:
     diffvae_query_chunk_size: int = 512
     diffvae_context_width_chunks: int = 4
     diffvae_stage4_tile_width: int = 0
+    sol_attention_profile: str = "disabled"
 
     @property
     def num_frames(self) -> int:
@@ -587,7 +588,12 @@ class LTX25GenerationConfig:
     def real_forward_passes(self) -> int:
         return self.stage1_forward_passes + self.stage2_steps
 
-    def validate(self, *, scale_factors: tuple[int, int, int] = (8, 32, 32)) -> None:
+    def validate(
+        self,
+        *,
+        scale_factors: tuple[int, int, int] = (8, 32, 32),
+        reference_downscale_factor: int = 1,
+    ) -> None:
         if self.pipeline_mode not in LTX25_CONFIG_MODES:
             raise ValueError(f"Unsupported LTX 2.5 pipeline mode: {self.pipeline_mode!r}.")
         if self.cfg_pp_batched and self.stage1_sampler != "euler_ancestral_cfg_pp":
@@ -611,6 +617,16 @@ class LTX25GenerationConfig:
             raise ValueError(
                 f"Unsupported LTX 2.5 Diffusion VAE optimization: {self.diffvae_optimization!r}."
             )
+        if self.sol_attention_profile not in {"disabled", "quality", "balanced", "speed"}:
+            raise ValueError("Unsupported LTX 2.5 MLX Sol Attention profile.")
+        if self.sol_attention_profile != "disabled" and not self.ic_lora_single_stage:
+            raise ValueError(
+                "LTX 2.5 MLX Sol Attention currently requires full-resolution single-stage mode."
+            )
+        if self.sol_attention_profile != "disabled" and self.low_ram_streaming:
+            raise ValueError(
+                "LTX 2.5 MLX Sol Attention currently requires a resident transformer."
+            )
         if self.diffvae_query_chunk_size < 1:
             raise ValueError("Diffusion VAE query chunk size must be positive.")
         if self.diffvae_context_width_chunks < 1:
@@ -625,9 +641,11 @@ class LTX25GenerationConfig:
                 "block streaming. Select reference_fp32 or disable low_ram_streaming."
             )
         temporal, spatial_h, spatial_w = scale_factors
+        if reference_downscale_factor < 1:
+            raise ValueError("LTX 2.5 IC-LoRA reference downscale factor must be positive.")
         spatial_multiplier = 1 if self.ic_lora_single_stage else 2
-        modulus_h = spatial_h * spatial_multiplier
-        modulus_w = spatial_w * spatial_multiplier
+        modulus_h = spatial_h * spatial_multiplier * reference_downscale_factor
+        modulus_w = spatial_w * spatial_multiplier * reference_downscale_factor
         if self.width < modulus_w or self.height < modulus_h:
             raise ValueError("LTX 2.5 distilled dimensions are below the two-stage latent grid.")
         if self.width % modulus_w or self.height % modulus_h:
@@ -844,7 +862,12 @@ class LTX25RuntimeCache:
             require_spatial_upscaler=not config.ic_lora_single_stage,
         )
         scales = tuple(int(value) for value in report["video_scale_factors"])
-        config.validate(scale_factors=scales)
+        config.validate(
+            scale_factors=scales,
+            reference_downscale_factor=int(
+                report.get("ic_lora_reference_downscale_factor") or 1
+            ),
+        )
         validate_ltx25_dfr_prebaked_pair(config, report)
         key = (
             spec,
@@ -856,6 +879,7 @@ class LTX25RuntimeCache:
             config.diffvae_query_chunk_size,
             config.diffvae_context_width_chunks,
             config.diffvae_stage4_tile_width,
+            config.sol_attention_profile,
             config.dfr_temporal_upsampler_path,
             config.dfr_temporal_rounds,
             config.dfr_prebaked_transformer_path,
@@ -877,6 +901,7 @@ class LTX25RuntimeCache:
                     "diffvae_query_chunk_size": config.diffvae_query_chunk_size,
                     "diffvae_context_width_chunks": config.diffvae_context_width_chunks,
                     "diffvae_stage4_tile_width": config.diffvae_stage4_tile_width,
+                    "sol_attention_profile": config.sol_attention_profile,
                     "temporal_upsampler_path": config.dfr_temporal_upsampler_path,
                     "dfr_stage2_transformer_path": config.dfr_prebaked_transformer_path,
                     "loras": spec.loras,
@@ -918,7 +943,12 @@ class LTX25RuntimeCache:
             require_spatial_upscaler=not config.ic_lora_single_stage,
         )
         scales = tuple(int(value) for value in report["video_scale_factors"])
-        config.validate(scale_factors=scales)
+        config.validate(
+            scale_factors=scales,
+            reference_downscale_factor=int(
+                report.get("ic_lora_reference_downscale_factor") or 1
+            ),
+        )
         dfr_recipe = resolve_ltx25_dfr_recipe(config, report)
         if config.duration_mode == "automatic" and not spec.duration_head_path:
             raise ValueError(
@@ -934,6 +964,12 @@ class LTX25RuntimeCache:
             mx = None
         started = time.perf_counter()
         pipeline = self.get(spec, config)
+        try:
+            from .feed_forward import reset_feed_forward_runtime_status
+
+            reset_feed_forward_runtime_status()
+        except (ImportError, AttributeError):
+            pass
         images = None
         if image_inputs:
             from ltx_pipelines_mlx.utils.args import ImageConditioningInput
@@ -1143,6 +1179,12 @@ class LTX25RuntimeCache:
             mx = None
         started = time.perf_counter()
         pipeline = self.get(spec, config)
+        try:
+            from .feed_forward import reset_feed_forward_runtime_status
+
+            reset_feed_forward_runtime_status()
+        except (ImportError, AttributeError):
+            pass
         succeeded = False
         try:
             with self._lock:
@@ -1163,6 +1205,12 @@ class LTX25RuntimeCache:
             if check_interrupted is not None:
                 check_interrupted()
             succeeded = True
+            try:
+                from .feed_forward import feed_forward_runtime_status
+
+                feed_forward_runtime = feed_forward_runtime_status()
+            except (ImportError, AttributeError):
+                feed_forward_runtime = None
             result = {
                 "prompts": prompts,
                 "video_path": str(result_path),
@@ -1184,6 +1232,7 @@ class LTX25RuntimeCache:
                 ),
                 "resolved_prompt_context": getattr(pipeline, "last_prompt_context", None),
                 "feed_forward_backend": getattr(pipeline, "feed_forward_report", None),
+                "feed_forward_runtime": feed_forward_runtime,
                 "paged_transformer": getattr(pipeline, "paged_transformer_report", None),
                 "paged_text_encoder": getattr(
                     getattr(pipeline, "prompt_encoder", None),
