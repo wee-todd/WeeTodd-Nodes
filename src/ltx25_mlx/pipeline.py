@@ -15,6 +15,7 @@ from .chaining import (
     plan_ltx25_chain,
 )
 from .components import (
+    LTX25AudioConditioner,
     LTX25AudioDecoder,
     LTX25ImageConditioner,
     LTX25LatentNormalizer,
@@ -22,8 +23,11 @@ from .components import (
     load_ltx25_spatial_upsampler,
 )
 from .gemma_encoder import LTX25Gemma4Conditioner, resolve_prompt_context_length
-from .runtime import LTX25_DISTILLED_SIGMAS, LTX25_STAGE2_SIGMAS
-from .sampling import euler_ancestral_denoise_loop
+from .runtime import LTX25_CFG_PP_SCHEDULES, LTX25_DISTILLED_SIGMAS, LTX25_STAGE2_SIGMAS
+from .sampling import (
+    euler_ancestral_cfg_pp_denoise_loop,
+    euler_ancestral_denoise_loop,
+)
 from .transformer import load_ltx25_transformer
 
 
@@ -71,7 +75,7 @@ class LTX25DistilledPipeline:
         text_encoder_path: str,
         video_vae_path: str,
         audio_vae_path: str,
-        spatial_upscaler_path: str,
+        spatial_upscaler_path: str = "",
         duration_head_path: str = "",
         distilled_lora_path: str = "",
         temporal_upsampler_path: str = "",
@@ -85,6 +89,7 @@ class LTX25DistilledPipeline:
         diffvae_context_width_chunks: int = 4,
         diffvae_stage4_tile_width: int = 0,
         loras: tuple[tuple[str, float], ...] = (),
+        ic_loras: tuple[tuple[str, float], ...] = (),
         verbose: bool = True,
     ) -> None:
         self.transformer_path = Path(transformer_path)
@@ -92,7 +97,9 @@ class LTX25DistilledPipeline:
         self.distilled_lora_path = (
             Path(distilled_lora_path) if distilled_lora_path else None
         )
-        self.spatial_upscaler_path = Path(spatial_upscaler_path)
+        self.spatial_upscaler_path = (
+            Path(spatial_upscaler_path) if spatial_upscaler_path else None
+        )
         self.temporal_upsampler_path = (
             Path(temporal_upsampler_path) if temporal_upsampler_path else None
         )
@@ -103,6 +110,7 @@ class LTX25DistilledPipeline:
         self.low_ram_streaming = low_ram_streaming
         self.feed_forward_backend = feed_forward_backend
         self.loras = tuple(loras)
+        self.ic_loras = tuple(ic_loras)
         if feed_forward_stage_scope not in {"all", "stage1", "stage2"}:
             raise ValueError("feed_forward_stage_scope must be all, stage1, or stage2")
         self.feed_forward_stage_scope = feed_forward_stage_scope
@@ -119,6 +127,7 @@ class LTX25DistilledPipeline:
             diffvae_stage4_tile_width=diffvae_stage4_tile_width,
         )
         self.audio_decoder_block = LTX25AudioDecoder(audio_vae_path)
+        self.audio_conditioner = LTX25AudioConditioner(audio_vae_path)
         self.dit = None
         self._loaded_loras = None
         self._loaded_transformer_path: Path | None = None
@@ -132,6 +141,7 @@ class LTX25DistilledPipeline:
         self.last_num_frames: int | None = None
         self.last_predicted_duration_seconds: float | None = None
         self.last_output_frame_rate: float | None = None
+        self.last_passthrough_audio: tuple[mx.array, int] | None = None
 
         from ltx_core_mlx.components.patchifiers import (
             AudioPatchifier,
@@ -141,9 +151,22 @@ class LTX25DistilledPipeline:
         self.video_patchifier = VideoLatentPatchifier()
         self.audio_patchifier = AudioPatchifier()
 
-    def load(self, *, extra_loras: tuple[tuple[str, float], ...] = ()) -> None:
-        self._load_transformer(extra_loras=extra_loras)
-        if self.upsampler is None:
+    def load(
+        self,
+        *,
+        extra_loras: tuple[tuple[str, float], ...] = (),
+        include_ic_loras: bool = False,
+        load_spatial_upscaler: bool = True,
+    ) -> None:
+        self._load_transformer(
+            extra_loras=extra_loras,
+            include_ic_loras=include_ic_loras,
+        )
+        if load_spatial_upscaler and self.upsampler is None:
+            if self.spatial_upscaler_path is None:
+                raise ValueError(
+                    "The two-stage LTX 2.5 pipeline requires a spatial upscaler checkpoint."
+                )
             self.upsampler = load_ltx25_spatial_upsampler(self.spatial_upscaler_path)
 
     def _load_transformer(
@@ -151,9 +174,14 @@ class LTX25DistilledPipeline:
         *,
         extra_loras: tuple[tuple[str, float], ...] = (),
         transformer_path: Path | None = None,
+        include_ic_loras: bool = False,
     ) -> None:
         desired_path = transformer_path or self.transformer_path
-        desired_loras = (*self.loras, *extra_loras)
+        desired_loras = (
+            *self.loras,
+            *(self.ic_loras if include_ic_loras else ()),
+            *extra_loras,
+        )
         if self.dit is not None and (
             self._loaded_loras != desired_loras
             or self._loaded_transformer_path != desired_path
@@ -191,6 +219,7 @@ class LTX25DistilledPipeline:
         self.upsampler = None
         self.temporal_upsampler = None
         self.image_conditioner.free()
+        self.audio_conditioner.free()
         mx.clear_cache()
 
     def _load_temporal_upsampler(self):
@@ -578,8 +607,17 @@ class LTX25DistilledPipeline:
         seed: int = 0,
         image: str | None = None,
         images=None,
+        video_references=None,
+        audio_reference=None,
         stage1_steps: int = 8,
         stage2_steps: int = 3,
+        ic_lora_single_stage: bool = False,
+        stage1_sampler: str = "euler_ancestral",
+        cfg_pp_batched: bool = False,
+        cfg_pp_schedule: str = "full",
+        stage2_sampler: str = "euler",
+        stage1_eta: float = 1.0,
+        stage1_s_noise: float = 1.0,
         ancestral_noise_seed: int | None = None,
         check_interrupted=None,
         step_callback=None,
@@ -613,11 +651,27 @@ class LTX25DistilledPipeline:
         if pipeline_mode not in {"distilled", "guided", "guided_hq"}:
             raise ValueError(f"Unsupported LTX 2.5 pipeline mode: {pipeline_mode!r}.")
         expected_stage1 = {"distilled": 8, "guided": 30, "guided_hq": 15}[pipeline_mode]
-        if stage1_steps != expected_stage1 or stage2_steps != 3:
+        expected_stage2 = 0 if ic_lora_single_stage else 3
+        if stage1_steps != expected_stage1 or stage2_steps != expected_stage2:
             raise ValueError(
                 f"LTX 2.5 {pipeline_mode} generation requires exactly "
-                f"{expected_stage1}+3 sampler iterations."
+                f"{expected_stage1}+{expected_stage2} sampler iterations."
             )
+        if pipeline_mode == "distilled" and stage1_sampler not in {
+            "euler_ancestral",
+            "euler_ancestral_cfg_pp",
+        }:
+            raise ValueError(f"Unsupported distilled stage-one sampler: {stage1_sampler!r}.")
+        if stage2_sampler != "euler":
+            raise ValueError(f"Unsupported LTX 2.5 stage-two sampler: {stage2_sampler!r}.")
+        if ic_lora_single_stage and pipeline_mode != "distilled":
+            raise ValueError("LTX 2.5 IC-LoRA single-stage mode requires distilled sampling.")
+        if ic_lora_single_stage and not video_references:
+            raise ValueError("LTX 2.5 IC-LoRA single-stage mode requires a video reference.")
+        if ic_lora_single_stage and (dfr_enabled or temporal_upsample_rounds):
+            raise ValueError("LTX 2.5 IC-LoRA single-stage mode cannot be combined with DFR.")
+        if ic_lora_single_stage and (continuation is not None or return_continuation):
+            raise ValueError("LTX 2.5 IC-LoRA single-stage mode is not available for chaining.")
         if pipeline_mode != "distilled" and self.distilled_lora_path is None:
             raise ValueError("Guided LTX 2.5 generation requires a stage-two distilled LoRA.")
         if temporal_upsample_rounds not in {0, 1, 2}:
@@ -628,6 +682,8 @@ class LTX25DistilledPipeline:
             raise ValueError(
                 "LTX 2.5 temporal DFR is not yet available for chained timelines."
             )
+        if audio_reference is not None and continuation is not None:
+            raise ValueError("Audio-driven conditioning is not yet available in chained mode.")
         from ltx_core_mlx.components.patchifiers import (
             compute_video_latent_shape,
             snap_output_dimensions,
@@ -653,23 +709,29 @@ class LTX25DistilledPipeline:
                 prompt, prompt_context
             )
             mx.eval(video_embeds, audio_embeds)
-            if pipeline_mode != "distilled":
-                if not negative_prompt.strip():
+            needs_negative_context = (
+                pipeline_mode != "distilled"
+                or stage1_sampler == "euler_ancestral_cfg_pp"
+            )
+            if needs_negative_context:
+                if pipeline_mode != "distilled" and not negative_prompt.strip():
                     raise ValueError("Guided LTX 2.5 generation requires a negative prompt.")
                 negative_video_embeds, negative_audio_embeds, _negative_context = (
                     self.prompt_encoder.encode(negative_prompt, prompt_context)
                 )
                 mx.eval(negative_video_embeds, negative_audio_embeds)
         else:
-            if pipeline_mode != "distilled":
+            if pipeline_mode != "distilled" or stage1_sampler == "euler_ancestral_cfg_pp":
                 raise ValueError(
-                    "Pre-encoded chained prompts currently support distilled mode only."
+                    "Pre-encoded chained prompts currently support the one-forward "
+                    "distilled sampler only."
                 )
             video_embeds, audio_embeds, resolved_context = encoded_prompt
         timings["prompt_encode_seconds"] = (
             time.perf_counter() - prompt_started if encoded_prompt is None else 0.0
         )
         self.last_prompt_context = resolved_context
+        self.last_passthrough_audio = None
         self.last_predicted_duration_seconds = None
         if auto_duration:
             duration_started = time.perf_counter()
@@ -691,18 +753,23 @@ class LTX25DistilledPipeline:
             self.duration_head = None
             aggressive_cleanup()
             timings["prompt_release_seconds"] = time.perf_counter() - release_started
-        sampling_load_started = time.perf_counter()
-        self.load()
-        timings["sampling_component_load_seconds"] = time.perf_counter() - sampling_load_started
-        assert self.dit is not None and self.upsampler is not None
+        resolved_video_references = list(video_references or ())
+        if resolved_video_references and not self.ic_loras:
+            raise ValueError(
+                "LTX 2.5 video-reference conditioning requires a dedicated IC-LoRA loader."
+            )
         requested_num_frames = num_frames
         dfr_slot_frames: tuple[int, ...] = ()
         if dfr_enabled:
             from .dfr import resolve_dfr_canvas
 
             num_frames, _segment, dfr_slot_frames = resolve_dfr_canvas(num_frames)
-        height, width = snap_output_dimensions(height, width, two_stage=True)
-        half_h, half_w = height // 2, width // 2
+        height, width = snap_output_dimensions(
+            height, width, two_stage=not ic_lora_single_stage
+        )
+        half_h, half_w = (
+            (height, width) if ic_lora_single_stage else (height // 2, width // 2)
+        )
         latent_f, latent_h, latent_w = compute_video_latent_shape(num_frames, half_h, half_w)
         requested_latent_f, _requested_h, _requested_w = compute_video_latent_shape(
             requested_num_frames, half_h, half_w
@@ -718,6 +785,28 @@ class LTX25DistilledPipeline:
         )
         audio_positions = compute_audio_positions(audio_tokens)
 
+        audio_reference_tokens = None
+        if audio_reference is not None:
+            from .audio_driven import prepare_audio_driven_conditioning
+
+            audio_reference_tokens, passthrough, audio_report = (
+                prepare_audio_driven_conditioning(
+                    audio=audio_reference,
+                    audio_conditioner=self.audio_conditioner,
+                    audio_patchifier=self.audio_patchifier,
+                    target_tokens=audio_tokens,
+                    duration_seconds=num_frames / frame_rate,
+                )
+            )
+            self.last_passthrough_audio = (
+                passthrough,
+                int(audio_report.source_sample_rate),
+            )
+            timings["audio_driven_conditioning"] = audio_report.as_dict()
+            if self.low_memory:
+                self.audio_conditioner.free()
+                aggressive_cleanup()
+
         resolved_images = list(images) if images else []
         if image is not None and not resolved_images:
             resolved_images = [ImageConditioningInput(path=image, frame_idx=0, strength=1.0)]
@@ -732,6 +821,62 @@ class LTX25DistilledPipeline:
                 video_encoder=encoder,
                 frame_rate=frame_rate,
             )
+        ic_reference_reports = []
+        if resolved_video_references:
+            from .ic_lora import encode_reference_video_conditioning
+
+            encoder = self.image_conditioner.load()
+            from .transformer import inspect_ltx25_lora
+
+            adapter_reports = [inspect_ltx25_lora(path) for path, _ in self.ic_loras]
+            spatial_scales = {
+                int(adapter["reference_downscale_factor"]) for adapter in adapter_reports
+            }
+            temporal_scales = {
+                int(adapter["reference_temporal_scale_factor"]) for adapter in adapter_reports
+            }
+            if len(spatial_scales) != 1 or len(temporal_scales) != 1:
+                raise ValueError(
+                    "Stacked LTX 2.5 IC-LoRAs must use identical reference scale factors."
+                )
+            for reference in resolved_video_references:
+                conditioning, reference_report = encode_reference_video_conditioning(
+                    images=reference["images"],
+                    video_encoder=encoder,
+                    target_height=half_h,
+                    target_width=half_w,
+                    target_num_frames=num_frames,
+                    frame_rate=frame_rate,
+                    start_frame=int(reference["start_frame"]),
+                    end_frame=int(reference["end_frame"]),
+                    strength=float(reference["strength"]),
+                    attention_strength=float(reference["attention_strength"]),
+                    attention_mask=reference.get("mask"),
+                    reference_downscale_factor=next(iter(spatial_scales)),
+                    reference_temporal_scale_factor=next(iter(temporal_scales)),
+                    control_type=str(
+                        reference.get("control_type", "custom_preprocessed")
+                    ),
+                )
+                conditionings.append(conditioning)
+                ic_reference_reports.append(reference_report.as_dict())
+            timings["ic_lora_references"] = ic_reference_reports
+        if self.low_memory and (resolved_images or resolved_video_references):
+            reference_release_started = time.perf_counter()
+            self.image_conditioner.free()
+            aggressive_cleanup()
+            timings["conditioning_encoder_release_seconds"] = (
+                time.perf_counter() - reference_release_started
+            )
+        sampling_load_started = time.perf_counter()
+        self.load(
+            include_ic_loras=bool(resolved_video_references),
+            load_spatial_upscaler=not ic_lora_single_stage,
+        )
+        timings["sampling_component_load_seconds"] = time.perf_counter() - sampling_load_started
+        assert self.dit is not None
+        if not ic_lora_single_stage:
+            assert self.upsampler is not None
         stage1_generated_slot_rows = 0
         if generated_keyframes or dfr_slot_frames:
             from .generated_keyframes import (
@@ -785,16 +930,26 @@ class LTX25DistilledPipeline:
             initial_latent=None,
             legacy_scalar_blend=continuation is None,
         )
-        audio_state = create_noised_state(
-            base_shape=audio_shape,
-            conditionings=audio_conditionings,
-            spatial_dims=(latent_f, latent_h, latent_w),
-            positions=audio_positions,
-            seed=seed + 1,
-            sigma=1.0,
-            initial_latent=None,
-            legacy_scalar_blend=continuation is None,
-        )
+        if audio_reference_tokens is not None:
+            from ltx_core_mlx.conditioning.types.latent_cond import LatentState
+
+            audio_state = LatentState(
+                latent=audio_reference_tokens,
+                clean_latent=audio_reference_tokens,
+                denoise_mask=mx.zeros((1, audio_tokens, 1), dtype=audio_reference_tokens.dtype),
+                positions=audio_positions,
+            )
+        else:
+            audio_state = create_noised_state(
+                base_shape=audio_shape,
+                conditionings=audio_conditionings,
+                spatial_dims=(latent_f, latent_h, latent_w),
+                positions=audio_positions,
+                seed=seed + 1,
+                sigma=1.0,
+                initial_latent=None,
+                legacy_scalar_blend=continuation is None,
+            )
         mx.eval(video_state.latent, video_state.clean_latent, audio_state.latent)
         model = X0Model(self.dit)
         from .feed_forward import set_mpp_feed_forward_enabled
@@ -803,14 +958,9 @@ class LTX25DistilledPipeline:
         stage1_started = time.perf_counter()
         try:
             if pipeline_mode == "distilled":
-                stage1 = euler_ancestral_denoise_loop(
-                    model,
-                    video_state,
-                    audio_state,
-                    video_embeds,
-                    audio_embeds,
-                    sigmas=LTX25_DISTILLED_SIGMAS,
-                    noise_seed=(
+                sampler_kwargs = {
+                    "sigmas": LTX25_DISTILLED_SIGMAS,
+                    "noise_seed": (
                         seed + 10000
                         if ancestral_noise_seed is None
                         else ancestral_noise_seed
@@ -819,10 +969,10 @@ class LTX25DistilledPipeline:
                     # development transformer and uses deterministic Euler in both
                     # spatial stages. Fused distilled checkpoints retain their
                     # ordinary ancestral first stage.
-                    eta=0.0 if dfr_official_recipe else 1.0,
-                    s_noise=1.0,
-                    check_interrupted=check_interrupted,
-                    step_callback=(
+                    "eta": 0.0 if dfr_official_recipe else stage1_eta,
+                    "s_noise": stage1_s_noise,
+                    "check_interrupted": check_interrupted,
+                    "step_callback": (
                         (
                             lambda completed, _total: step_callback(
                                 completed, stage1_steps + stage2_steps
@@ -831,11 +981,57 @@ class LTX25DistilledPipeline:
                         if step_callback is not None
                         else None
                     ),
-                    evaluation_timing_callback=(
+                    "evaluation_timing_callback": (
                         lambda index, elapsed: timings["stage1_evaluations"].append(
                             {"evaluation": index, "seconds": elapsed}
                         )
                     ),
+                }
+                if stage1_sampler == "euler_ancestral_cfg_pp":
+                    assert negative_video_embeds is not None
+                    assert negative_audio_embeds is not None
+                    timings["stage1_forwards"] = []
+                    stage1 = euler_ancestral_cfg_pp_denoise_loop(
+                        model,
+                        video_state,
+                        audio_state,
+                        video_embeds,
+                        audio_embeds,
+                        negative_video_embeds,
+                        negative_audio_embeds,
+                        forward_timing_callback=(
+                            lambda index, kind, elapsed: timings["stage1_forwards"].append(
+                                {
+                                    "forward": index,
+                                    "conditioning": kind,
+                                    "seconds": elapsed,
+                                }
+                            )
+                        ),
+                        batch_branches=cfg_pp_batched,
+                        cfg_pp_step_indices=LTX25_CFG_PP_SCHEDULES[cfg_pp_schedule],
+                        **sampler_kwargs,
+                    )
+                else:
+                    stage1 = euler_ancestral_denoise_loop(
+                        model,
+                        video_state,
+                        audio_state,
+                        video_embeds,
+                        audio_embeds,
+                        **sampler_kwargs,
+                    )
+                timings["stage1_sampler"] = stage1_sampler
+                timings["stage1_sampler_iterations"] = stage1_steps
+                timings["stage1_real_forwards"] = (
+                    stage1_steps + len(LTX25_CFG_PP_SCHEDULES[cfg_pp_schedule])
+                    if stage1_sampler == "euler_ancestral_cfg_pp"
+                    else stage1_steps
+                )
+                timings["stage1_physical_invocations"] = (
+                    stage1_steps
+                    if stage1_sampler == "euler_ancestral_cfg_pp" and cfg_pp_batched
+                    else timings["stage1_real_forwards"]
                 )
             else:
                 from ltx_core_mlx.components.guiders import (
@@ -896,6 +1092,31 @@ class LTX25DistilledPipeline:
                 set_generated_keyframe_marker(self.dit, 0)
         mx.eval(stage1.video_latent, stage1.audio_latent)
         timings["stage1_seconds"] = time.perf_counter() - stage1_started
+
+        if ic_lora_single_stage:
+            target_tokens = requested_latent_f * latent_h * latent_w
+            video_latent = self.video_patchifier.unpatchify(
+                stage1.video_latent[:, :target_tokens, :],
+                (requested_latent_f, latent_h, latent_w),
+            )
+            audio_latent = self.audio_patchifier.unpatchify(
+                stage1.audio_latent[:, :requested_audio_tokens, :]
+            )
+            mx.eval(video_latent, audio_latent)
+            timings["ic_lora_stage_scope"] = "single_stage_full_resolution"
+            timings["latent_upscale_seconds"] = 0.0
+            timings["stage2_seconds"] = 0.0
+            timings["sampling_total_seconds"] = sum(
+                float(timings.get(name, 0.0))
+                for name in (
+                    "prompt_encode_seconds",
+                    "prompt_release_seconds",
+                    "sampling_component_load_seconds",
+                    "stage1_seconds",
+                )
+            )
+            self.last_timings = timings
+            return video_latent, audio_latent
 
         upscale_started = time.perf_counter()
         generated = stage1.video_latent[:, : latent_f * latent_h * latent_w, :]
@@ -1040,15 +1261,25 @@ class LTX25DistilledPipeline:
             initial_latent=video_tokens,
             legacy_scalar_blend=continuation is None,
         )
-        audio_state2 = create_noised_state(
-            base_shape=stage1_audio_generated.shape,
-            conditionings=audio_conditionings2,
-            spatial_dims=(latent_f, full_h, full_w),
-            positions=audio_positions,
-            seed=seed + 2,
-            sigma=start_sigma,
-            initial_latent=stage1_audio_generated,
-        )
+        if audio_reference_tokens is not None:
+            from ltx_core_mlx.conditioning.types.latent_cond import LatentState
+
+            audio_state2 = LatentState(
+                latent=audio_reference_tokens,
+                clean_latent=audio_reference_tokens,
+                denoise_mask=mx.zeros((1, audio_tokens, 1), dtype=audio_reference_tokens.dtype),
+                positions=audio_positions,
+            )
+        else:
+            audio_state2 = create_noised_state(
+                base_shape=stage1_audio_generated.shape,
+                conditionings=audio_conditionings2,
+                spatial_dims=(latent_f, full_h, full_w),
+                positions=audio_positions,
+                seed=seed + 2,
+                sigma=start_sigma,
+                initial_latent=stage1_audio_generated,
+            )
         mx.eval(video_state2.latent, video_state2.clean_latent, audio_state2.latent)
         cleanup_started = time.perf_counter()
         # Stage two owns materialized copies of every value it needs. Drop all
@@ -1072,7 +1303,18 @@ class LTX25DistilledPipeline:
         )
         aggressive_cleanup()
         timings["stage_boundary_cleanup_seconds"] = time.perf_counter() - cleanup_started
-        if pipeline_mode != "distilled":
+        if resolved_video_references:
+            self._load_transformer(
+                extra_loras=(
+                    ((str(self.distilled_lora_path), 1.0),)
+                    if pipeline_mode != "distilled"
+                    else ()
+                ),
+                include_ic_loras=False,
+            )
+            model = X0Model(self.dit)
+            timings["ic_lora_stage_scope"] = "stage_1_only"
+        elif pipeline_mode != "distilled":
             self._load_transformer(
                 extra_loras=((str(self.distilled_lora_path), 1.0),)
             )
@@ -1339,15 +1581,12 @@ class LTX25DistilledPipeline:
     def generate_and_save(self, *, output_path: str, frame_rate: float, **kwargs) -> str:
         from ltx_pipelines_mlx.utils._orchestration import decode_and_save_video
 
-        # The node adapter may pass explicit scheduler names and sigma arrays
-        # after validating them. The pipeline owns the fixed official recipe.
+        # Sigma arrays are fixed by the pipeline. Validated sampler names and
+        # stochastic controls must cross this adapter boundary because the
+        # official Ingredients parity mode selects CFG++ here.
         for ignored in (
             "stage1_sigmas",
             "stage2_sigmas",
-            "stage1_sampler",
-            "stage2_sampler",
-            "stage1_eta",
-            "stage1_s_noise",
         ):
             kwargs.pop(ignored, None)
         generation_started = time.perf_counter()
@@ -1358,15 +1597,36 @@ class LTX25DistilledPipeline:
             self._release_sampling()
             self.last_timings["sampling_release_seconds"] = time.perf_counter() - release_started
         decode_started = time.perf_counter()
-        result = decode_and_save_video(
-            self.video_decoder_block,
-            self.audio_decoder_block,
-            video_latent,
-            audio_latent,
-            output_path,
-            frame_rate=self.last_output_frame_rate or frame_rate,
-            low_memory=self.low_memory,
-        )
+        if self.last_passthrough_audio is None:
+            result = decode_and_save_video(
+                self.video_decoder_block,
+                self.audio_decoder_block,
+                video_latent,
+                audio_latent,
+                output_path,
+                frame_rate=self.last_output_frame_rate or frame_rate,
+                low_memory=self.low_memory,
+            )
+        else:
+            import tempfile
+
+            from ltx_pipelines_mlx.utils._orchestration import save_waveform
+
+            waveform, sample_rate = self.last_passthrough_audio
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temporary:
+                audio_path = Path(temporary.name)
+            try:
+                save_waveform(waveform, str(audio_path), sample_rate=sample_rate)
+                result = self.video_decoder_block.decode_and_stream(
+                    video_latent,
+                    output_path,
+                    frame_rate=self.last_output_frame_rate or frame_rate,
+                    audio_path=str(audio_path),
+                )
+            finally:
+                audio_path.unlink(missing_ok=True)
+            self.last_timings["audio_publication"] = "original_comfy_audio"
+            self.last_passthrough_audio = None
         self.last_timings["decode_publish_seconds"] = time.perf_counter() - decode_started
         if self.low_memory:
             self.video_decoder_block.free()

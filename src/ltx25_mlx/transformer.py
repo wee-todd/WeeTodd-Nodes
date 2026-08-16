@@ -6,6 +6,7 @@ import copy
 import json
 import math
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from threading import RLock
@@ -283,32 +284,104 @@ def transformer_metadata(path: str | Path) -> dict[str, Any]:
 
 
 def inspect_ltx25_lora(path: str | Path) -> dict[str, Any]:
-    """Validate an LTX 2.5 transformer LoRA header without materializing tensors."""
+    """Validate an LTX 2.5-compatible LoRA header without materializing tensors.
+
+    Lightricks ships LTX 2.5 workflows that intentionally pair the 2.5
+    distilled transformer with selected 2.3 22B adapters.  The version label
+    alone is therefore not a compatibility boundary.  Older adapters receive
+    a stricter target-and-shape check before this loader accepts them.
+    """
     source = Path(path).expanduser()
     if not source.is_file() or source.suffix != ".safetensors":
         raise FileNotFoundError(f"LTX 2.5 LoRA is not a safetensors file: {source}")
     with safe_open(source, framework="numpy") as handle:
         metadata = handle.metadata() or {}
         keys = list(handle.keys())
+        shapes = {key: tuple(handle.get_slice(key).get_shape()) for key in keys}
     model_version = str(metadata.get("model_version", ""))
-    if not model_version.startswith("2.5"):
+    version_match = re.match(r"^(\d+)\.(\d+)", model_version)
+    version = (
+        (int(version_match.group(1)), int(version_match.group(2)))
+        if version_match
+        else None
+    )
+    if version is None or version < (2, 3):
         raise ValueError(
-            f"The selected LoRA is not identified as LTX 2.5; model_version={model_version!r}."
+            "The selected LoRA does not declare a supported LTX 2.3-or-newer model version; "
+            f"model_version={model_version!r}."
         )
     try:
         downscale = int(metadata.get("reference_downscale_factor", "1"))
     except (TypeError, ValueError) as exc:
         raise ValueError("LTX 2.5 LoRA has an invalid reference downscale factor.") from exc
-    pairs = sum(key.endswith(".lora_A.weight") for key in keys)
-    if pairs == 0 or pairs != sum(key.endswith(".lora_B.weight") for key in keys):
+    try:
+        temporal_scale = int(metadata.get("reference_temporal_scale_factor", "1"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("LTX 2.5 LoRA has an invalid reference temporal scale factor.") from exc
+    if downscale < 1 or temporal_scale < 1:
+        raise ValueError("LTX 2.5 IC-LoRA reference scale factors must be positive.")
+    a_keys = [key for key in keys if key.endswith(".lora_A.weight")]
+    b_keys = [key for key in keys if key.endswith(".lora_B.weight")]
+    pairs = len(a_keys)
+    if pairs == 0 or pairs != len(b_keys):
         raise ValueError("LTX 2.5 LoRA does not contain balanced A/B adapter pairs.")
+    adapter_ranks: set[int] = set()
+    incompatible_targets: list[str] = []
+    for a_key in a_keys:
+        stem = a_key.removesuffix(".lora_A.weight")
+        b_key = stem + ".lora_B.weight"
+        if b_key not in shapes:
+            incompatible_targets.append(stem)
+            continue
+        a_shape = shapes[a_key]
+        b_shape = shapes[b_key]
+        if len(a_shape) != 2 or len(b_shape) != 2 or a_shape[0] != b_shape[1]:
+            incompatible_targets.append(stem)
+            continue
+        adapter_ranks.add(int(a_shape[0]))
+        if version < (2, 5):
+            target = remap_comfy_transformer_key(stem + ".weight")
+            expected = _ltx25_bridge_target_shape(target)
+            actual = (int(b_shape[0]), int(a_shape[1]))
+            if expected is None or actual != expected:
+                incompatible_targets.append(stem)
+    if incompatible_targets:
+        examples = ", ".join(incompatible_targets[:3])
+        raise ValueError(
+            "The older LTX LoRA does not match the supported LTX 2.5 22B transformer "
+            f"targets; incompatible targets include: {examples}."
+        )
+    compatibility = "native_ltx_2_5" if version >= (2, 5) else "ltx_2_3_22b_bridge"
+    source_name = source.name.lower()
+    if "union-control" in source_name:
+        adapter_family = "union_control"
+    elif "motion-track" in source_name:
+        adapter_family = "motion_track"
+    elif "ingredients" in source_name:
+        adapter_family = "ingredients_reference_sheet"
+    else:
+        adapter_family = "task_specific" if "reference_downscale_factor" in metadata else "standard"
     return {
         "path": source,
         "model_version": model_version,
         "reference_downscale_factor": downscale,
+        "reference_temporal_scale_factor": temporal_scale,
         "adapter_pairs": pairs,
+        "adapter_ranks": sorted(adapter_ranks),
+        "compatibility": compatibility,
+        "compatibility_basis": (
+            "declared LTX 2.5 adapter"
+            if compatibility == "native_ltx_2_5"
+            else "LTX 2.3-or-newer block targets and tensor shapes match the LTX 2.5 22B layout"
+        ),
+        "adapter_family": adapter_family,
         "adapter_role": (
             "ic_lora" if "reference_downscale_factor" in metadata else "transformer_lora"
+        ),
+        "ic_lora_task": (
+            "pixel_spatial_upscaler"
+            if "reference_spatial_scale_factor" in metadata
+            else ("reference_conditioning" if "reference_downscale_factor" in metadata else None)
         ),
         "lora_rank": int(metadata["lora_rank"]) if metadata.get("lora_rank") else None,
         "lora_alpha": int(metadata["lora_alpha"]) if metadata.get("lora_alpha") else None,
@@ -319,6 +392,52 @@ def inspect_ltx25_lora(path: str | Path) -> dict[str, Any]:
 def inspect_ltx25_ic_lora(path: str | Path) -> dict[str, Any]:
     """Backward-compatible alias for generic LTX 2.5 LoRA inspection."""
     return inspect_ltx25_lora(path)
+
+
+def _ltx25_bridge_target_shape(target: str | None) -> tuple[int, int] | None:
+    """Return the LTX 2.5 22B base matrix shape for a compatible block target."""
+    if target is None:
+        return None
+    match = re.fullmatch(r"transformer_blocks\.(\d+)\.(.+)\.weight", target)
+    if match is None or not 0 <= int(match.group(1)) < 48:
+        return None
+    tail = match.group(2)
+    attention_projections = ("to_q", "to_k", "to_v", "to_out")
+    if tail in {
+        *(
+            f"{name}.{projection}"
+            for name in ("attn1", "attn2")
+            for projection in attention_projections
+        ),
+    }:
+        return (4096, 4096)
+    if tail == "ff.proj_in":
+        return (16384, 4096)
+    if tail == "ff.proj_out":
+        return (4096, 16384)
+    if tail in {
+        *(
+            f"{name}.{projection}"
+            for name in ("audio_attn1", "audio_attn2")
+            for projection in attention_projections
+        ),
+    }:
+        return (2048, 2048)
+    if tail == "audio_ff.proj_in":
+        return (8192, 2048)
+    if tail == "audio_ff.proj_out":
+        return (2048, 8192)
+    cross_shapes = {
+        "audio_to_video_attn.to_q": (2048, 4096),
+        "audio_to_video_attn.to_k": (2048, 2048),
+        "audio_to_video_attn.to_v": (2048, 2048),
+        "audio_to_video_attn.to_out": (4096, 2048),
+        "video_to_audio_attn.to_q": (2048, 2048),
+        "video_to_audio_attn.to_k": (2048, 4096),
+        "video_to_audio_attn.to_v": (2048, 4096),
+        "video_to_audio_attn.to_out": (2048, 2048),
+    }
+    return cross_shapes.get(tail)
 
 
 def remap_comfy_transformer_key(key: str) -> str | None:

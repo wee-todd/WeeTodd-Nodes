@@ -57,6 +57,8 @@ Frames** when the graph needs numbered middle frames.
 | --- | --- | --- |
 | Balance | [LTX 2.3 two-stage](workflows/balance/t2v/ltx23_two_stage.json) | Standalone LTX 2.3 synchronized generation. |
 | Balance | [LTX 2.5 768×512](workflows/balance/t2v/ltx25_768x512_two_stage.json) | Recommended LTX 2.5 starting point with the official 8+3 schedule. |
+| Balance | [LTX 2.5 audio-to-video](workflows/balance/ref2va/ltx25_audio_to_video.json) | Freeze one input audio track during both visual stages and publish the original waveform. |
+| Balance | [LTX 2.5 Ingredients reference sheet](workflows/balance/ref2va/ltx25_ingredients_reference_sheet.json) | Ingredients generation with selectable 15-forward quality, 12-forward balanced, 10-forward speed, and eight-forward ancestral modes. |
 | Performance | [LTX 2.5 768×512 guided HQ](workflows/performance/t2v/ltx25_768x512_guided_hq.json) | Development transformer with selectable 30-step guided Euler or 15-step guided `res_2s`, followed by the official distilled-LoRA refinement stage. |
 | Balance | [LTX 2.5 768×512 practical DFR](workflows/balance/t2v/ltx25_768x512_dfr_conv_vae.json) | Exact prebaked Q8 DFR sampling with bounded convolutional-VAE publication. |
 | Performance | [LTX 2.5 768×512 DFR + Diffusion VAE](workflows/performance/t2v/ltx25_768x512_dfr_diffusion_vae.json) | Experimental full-resolution detail generation with exact prebaked Q8 adapters and one-step pixel-diffusion decode. |
@@ -161,6 +163,9 @@ in standard ComfyUI folders.
 | `models/latent_upscale_models/` | Optional DFR temporal refinement: `ltx-2.5-latent-temporal-upscaler-x2-bf16-1.0.safetensors` |
 | `models/model_patches/LTX-2.5/` | Optional automatic duration: `ltx-2.5-duration-head-bf16.safetensors` |
 | `models/loras/LTX-2.5/` | Optional DFR: [`ltx-2.5-22b-ic-lora-pixel-spatial-upscaler-x2-1.0.safetensors`](https://huggingface.co/Lightricks/LTX-2.5-22b-IC-LoRA-Pixel-Spatial-Upscaler) |
+| `models/loras/` | Optional IC control: [`ltx-2.3-22b-ic-lora-union-control-ref0.5.safetensors`](https://huggingface.co/Lightricks/LTX-2.3-22b-IC-LoRA-Union-Control) |
+| `models/loras/` | Optional Motion Track: [`ltx-2.3-22b-ic-lora-motion-track-control-ref0.5.safetensors`](https://huggingface.co/Lightricks/LTX-2.3-22b-IC-LoRA-Motion-Track-Control) |
+| `models/loras/` | Optional Ingredients reference sheet: [`ltx-2.3-22b-ic-lora-ingredients-0.9.safetensors`](https://huggingface.co/Lightricks/LTX-2.3-22b-IC-LoRA-Ingredients) |
 | `models/diffusion_models/` | Derived DFR stage one: `ltx-2.5-22b-dev-distilled450-q8-paged/` |
 | `models/diffusion_models/` | Derived DFR stage two: `ltx-2.5-22b-dev-distilled450-detail2x-q8-paged/` |
 
@@ -172,10 +177,37 @@ the official rank-450 distilled LoRA for the three full-resolution refinement it
 iterations require several transformer predictions, so the displayed iteration count is not a
 claim about total transformer forwards.
 
-**LTX 2.5 Media Conditioning** provides one composable typed stack for future image, video, audio,
-and mask pipelines. Image keyframes execute through the current Generate node. Video-reference,
-audio-reference, and inpaint-mask roles currently stop during validation with an actionable error;
-they do not silently fall back to image conditioning or load model weights.
+**LTX 2.5 Media Conditioning** provides one composable typed stack. Image keyframes execute through
+the current Generate node. Audio-driven input freezes the encoded audio during both visual stages
+and publishes the original source track. General video-reference input requires the dedicated
+**LTX 2.5 IC-LoRA Loader**, which scopes the task adapter to stage one and reloads a clean stage-two
+transformer. Lightricks' official LTX 2.5 workflows use selected LTX 2.3 22B IC-LoRAs. The loader
+therefore accepts an older adapter only when every target and tensor shape matches the LTX 2.5 22B
+block layout. The loader still rejects the specialized Pixel-Spatial upscaler from this path.
+
+Use **LTX 2.5 IC-LoRA Control Guide** for Canny edges, depth maps, pose skeletons, Motion Track, or
+another preprocessed control video. Connect the IMAGE batch from the matching ComfyUI preprocessor.
+Motion Track accepts the source frames directly. Canny preserves edges and composition. Depth
+preserves camera movement and scene geometry. Pose transfers human movement. Use one control group
+at a time as the default memory policy. IC-LoRA requires the distilled model. Combined video and
+audio reference input remains gated as an unvalidated LipDub topology.
+
+Use **LTX 2.5 Ingredients Reference Sheet** when one composite image defines characters, props,
+and a location. The node creates the trained two-part `Reference sheet:` / `Generated video:`
+prompt and repeats the still internally across the complete reference timeline. Connect **LTX 2.5
+IC-LoRA Pipeline Mode** and select **CFG++ quality**. This uses Ingredients LoRA strength 1.2,
+empty negative conditioning, and eight CFG++ sampler steps. It performs **15 useful real
+full-resolution transformer forwards**: each nonterminal step uses conditional and unconditional
+predictions, while the terminal update consumes only the conditional clean estimate. The optional
+CFG++ schedule can reduce this to **12 forwards (balanced)** or **10 forwards (speed)** by applying
+the correction selectively. On the matched 768×448, 121-frame validation, balanced reduced total
+time from 378.9 to 359.5 seconds (5.1%), while speed reduced it to 304.1 seconds (19.7%); neither
+schedule reduced peak memory. Select **Fast single stage** for the distinct eight-forward ancestral
+shortcut. Automatic CFG++ execution selects serial. Experimental batched execution reduced peak
+memory but was slower on the measured system. All single-stage modes keep the IC-LoRA active for
+the complete generation and skip the spatial upscaler. The recommended training bucket is
+768×448, 121 frames, and 24 fps. The reference sheet is context; it is not pasted into the first
+output frame.
 
 The video-refine workflow also requires the
 [pixel-spatial upscaler IC-LoRA](https://huggingface.co/Lightricks/LTX-2.5-22b-IC-LoRA-Pixel-Spatial-Upscaler)
@@ -340,7 +372,8 @@ This table is generated from the registered node contracts. Run
 | LTX 2.3 Upscale + Publish | Upscale decoded H3 or other ComfyUI video frames with the LTX latent upscaler and preserve the supplied audio. | LTX 2.3 — Upscaling | Experimental |
 | LTX 2.3 Unload MLX Runtime | Release the process-local LTX 2.3 pipeline. | LTX 2.3 — Core | Supported |
 | LTX 2.5 Component Loader (MLX) | Select LTX 2.5 split components without loading weights or downloading files. | LTX 2.5 — Loaders | Experimental |
-| LTX 2.5 LoRA Loader (MLX) | Attach a generic LTX 2.5 transformer LoRA, including block and non-block targets. Multiple loader nodes may be chained; IC-LoRA control media still requires its matching conditioning workflow. | LTX 2.5 — Loaders | Supported |
+| LTX 2.5 LoRA Loader (MLX) | Attach a generic LTX 2.5 transformer LoRA, including block and non-block targets. Multiple loader nodes may be chained. Use the dedicated loader for IC-LoRA task adapters. | LTX 2.5 — Loaders | Supported |
+| LTX 2.5 IC-LoRA Loader (MLX) | Attach one LTX 2.5-compatible IC-LoRA for video/reference conditioning. Official LTX 2.3 22B adapters pass an additional shape check. The selected IC-LoRA Pipeline Mode determines whether the adapter runs for stage one or the full generation. | LTX 2.5 — Loaders | Experimental |
 | LTX 2.5 Guided Model Loader (MLX) | Select the LTX 2.5 development transformer for guided stage one and the official rank-450 distilled LoRA for stage two. No weights load in this node. | LTX 2.5 — Loaders | Experimental |
 | LTX 2.5 Generation Config | Configure the official distilled 8+3-evaluation LTX 2.5 two-stage schedule. | LTX 2.5 — Core | Experimental |
 | LTX 2.5 Quality Mode | Choose fast distilled inference, production guided Euler, or the official HQ second-order res_2s recipe without changing the base Generation Config schema. | LTX 2.5 — Core | Experimental |
@@ -351,7 +384,10 @@ This table is generated from the registered node contracts. Run
 | LTX 2.5 DFR Temporal Refinement | Experimentally add one or two learned x2 temporal DFR rounds. Each round preserves stage-one audio, doubles playback frame rate, reapplies one-shot image anchors, and adds four transformer evaluations per temporal tile. Current MLX visual parity is not yet production-validated. | LTX 2.5 — Conditioning | Experimental |
 | LTX 2.5 Preflight | Validate LTX 2.5 component metadata and architecture requirements before allocation. | LTX 2.5 — Loaders | Experimental |
 | LTX 2.5 Timed Keyframe | Append a first, middle, or last image at an exact zero-based pixel-frame index. The image is encoded as reference conditioning; generated keyframe slots are separate. | LTX 2.5 — Conditioning | Supported |
-| LTX 2.5 Media Conditioning | Build a shared LTX 2.5 image, video, audio, or mask conditioning stack. Image keyframes execute now; other roles fail before model loading until their matching IC-LoRA or audio pipeline is connected. | LTX 2.5 — Conditioning | Experimental |
+| LTX 2.5 Media Conditioning | Build a shared LTX 2.5 image, video, audio, or mask conditioning stack. Image keyframes, IC-LoRA video references, and one frozen audio-driven source execute. Standalone inpaint masks remain gated. | LTX 2.5 — Conditioning | Experimental |
+| LTX 2.5 IC-LoRA Control Guide | Add one preprocessed Canny, depth, pose, Motion Track, or custom IC-LoRA guide. Use the LTX 2.5 distilled model and the matching task adapter. | LTX 2.5 — Conditioning | Experimental |
+| LTX 2.5 IC-LoRA Pipeline Mode | Select full or hybrid CFG++, the eight-forward single-stage shortcut, or the existing two-stage stage-one-control pipeline. | LTX 2.5 — Conditioning | Experimental |
+| LTX 2.5 Ingredients Reference Sheet | Condition LTX 2.5 from one Ingredients reference sheet. The image is repeated internally across the full clip and encoded as IC-LoRA reference context. | LTX 2.5 — Conditioning | Experimental |
 | LTX 2.5 Generate Video + Audio | Generate synchronized LTX 2.5 video and audio through the MLX adapter. | LTX 2.5 — Core | Experimental |
 | LTX 2.5 Generate Chained Timeline | Generate two to four overlapping LTX 2.5 windows with timeline-aligned latent guides, causal-aware latent transitions, and one synchronized audio/video decode. | LTX 2.5 — Core | Experimental |
 | LTX 2.5 Video Upscale / Refine | Upscale decoded ComfyUI IMAGE+AUDIO from any movie through LTX 2.5 latent space, optionally adding video-only refinement while preserving the source audio. | LTX 2.5 — Core | Experimental |

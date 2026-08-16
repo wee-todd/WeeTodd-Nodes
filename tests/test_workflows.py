@@ -10,6 +10,7 @@ ROOT = Path(__file__).parents[1]
 CORE_NODES = {
     "GetVideoComponents",
     "LoadImage",
+    "LoadAudio",
     "LoadVideo",
     "MarkdownNote",
     "Note",

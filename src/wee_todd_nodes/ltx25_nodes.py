@@ -85,6 +85,15 @@ LTX25_MEDIA_ROLES = (
     "inpaint_mask",
 )
 
+LTX25_IC_CONTROL_TYPES = (
+    "canny_edges",
+    "depth_map",
+    "pose_skeleton",
+    "motion_track",
+    "ingredients_reference_sheet",
+    "custom_preprocessed",
+)
+
 
 @dataclass(frozen=True)
 class LTX25MediaConditioningItem:
@@ -92,9 +101,11 @@ class LTX25MediaConditioningItem:
     start_frame: int
     end_frame: int
     strength: float
+    attention_strength: float = 1.0
     images: object | None = None
     audio: object | None = None
     mask: object | None = None
+    control_type: str = "custom_preprocessed"
 
 
 @dataclass(frozen=True)
@@ -106,6 +117,8 @@ class LTX25MediaConditioningStack:
             raise ValueError(f"Unsupported LTX 2.5 media role: {item.role!r}.")
         if not 0.0 <= item.strength <= 1.0:
             raise ValueError("LTX 2.5 media strength must be between zero and one.")
+        if not 0.0 <= item.attention_strength <= 1.0:
+            raise ValueError("LTX 2.5 media attention strength must be between zero and one.")
         if item.start_frame < 0 or item.end_frame < item.start_frame:
             raise ValueError("LTX 2.5 media frame range is invalid.")
         if item.role == "image_keyframe":
@@ -118,9 +131,20 @@ class LTX25MediaConditioningStack:
             shape = getattr(item.images, "shape", None)
             if shape is None or len(shape) != 4 or int(shape[0]) < 1:
                 raise ValueError("A video reference requires a ComfyUI IMAGE frame batch.")
+            if item.end_frame == item.start_frame and int(shape[0]) > 1:
+                item = replace(item, end_frame=item.start_frame + int(shape[0]) - 1)
+            if item.control_type not in LTX25_IC_CONTROL_TYPES:
+                raise ValueError(
+                    f"Unsupported LTX 2.5 IC-LoRA control type: {item.control_type!r}."
+                )
         elif item.role == "audio_reference":
             if item.audio is None:
                 raise ValueError("An audio reference requires a ComfyUI AUDIO input.")
+            if item.strength != 1.0:
+                raise ValueError(
+                    "LTX 2.5 audio-driven conditioning freezes and preserves its source; "
+                    "audio strength must be 1.0."
+                )
         elif item.mask is None:
             raise ValueError("An inpaint mask requires a ComfyUI MASK input.")
         if len(self.items) >= 20:
@@ -134,7 +158,7 @@ class LTX25MediaConditioningStack:
                     f"LTX 2.5 media range {item.start_frame}..{item.end_frame} is outside "
                     f"0..{num_frames - 1}."
                 )
-            if item.role != "image_keyframe":
+            if item.role not in {"image_keyframe", "video_reference", "audio_reference"}:
                 raise ValueError(
                     f"LTX 2.5 {item.role} is represented by the shared media contract but "
                     "requires its IC-LoRA or audio pipeline, which is not enabled by the "
@@ -149,6 +173,12 @@ class LTX25MediaConditioningStack:
                     "start_frame": item.start_frame,
                     "end_frame": item.end_frame,
                     "strength": item.strength,
+                    "attention_strength": item.attention_strength,
+                    **(
+                        {"control_type": item.control_type}
+                        if item.role == "video_reference"
+                        else {}
+                    ),
                 }
                 for item in self.items
             ]
@@ -167,6 +197,19 @@ class WeeToddLTX25MediaConditioning:
                     "FLOAT",
                     {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.05},
                 ),
+                "attention_strength": (
+                    "FLOAT",
+                    {
+                        "default": 1.0,
+                        "min": 0.0,
+                        "max": 1.0,
+                        "step": 0.05,
+                        "tooltip": (
+                            "IC-LoRA attention weight. Leave at 1.0 for full reference "
+                            "attention; lower it to relax the control signal."
+                        ),
+                    },
+                ),
             },
             "optional": {
                 "images": ("IMAGE",),
@@ -182,8 +225,8 @@ class WeeToddLTX25MediaConditioning:
     CATEGORY = "WeeTodd/LTX 2.5/conditioning"
     DESCRIPTION = (
         "Build a shared LTX 2.5 image, video, audio, or mask conditioning stack. "
-        "Image keyframes execute now; other roles fail before model loading until their "
-        "matching IC-LoRA or audio pipeline is connected."
+        "Image keyframes, IC-LoRA video references, and one frozen audio-driven source execute. "
+        "Standalone inpaint masks remain gated."
     )
 
     def append(
@@ -192,6 +235,7 @@ class WeeToddLTX25MediaConditioning:
         start_frame,
         end_frame,
         strength,
+        attention_strength=1.0,
         images=None,
         audio=None,
         mask=None,
@@ -204,12 +248,301 @@ class WeeToddLTX25MediaConditioning:
                 start_frame=int(start_frame),
                 end_frame=int(end_frame),
                 strength=float(strength),
+                attention_strength=float(attention_strength),
                 images=images,
                 audio=audio,
                 mask=mask,
             )
         )
         return updated, json.dumps(updated.metadata(), indent=2, sort_keys=True)
+
+
+class WeeToddLTX25ICLoRAControlGuide:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "control_video": ("IMAGE",),
+                "control_type": (
+                    list(LTX25_IC_CONTROL_TYPES),
+                    {
+                        "default": "canny_edges",
+                        "tooltip": (
+                            "Connect preprocessed Canny, depth, or DWPose frames. Motion Track "
+                            "accepts the source video frames directly."
+                        ),
+                    },
+                ),
+                "start_frame": ("INT", {"default": 0, "min": 0, "max": 100000}),
+                "end_frame": ("INT", {"default": 120, "min": 0, "max": 100000}),
+                "strength": (
+                    "FLOAT",
+                    {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.05},
+                ),
+                "attention_strength": (
+                    "FLOAT",
+                    {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.05},
+                ),
+            },
+            "optional": {
+                "attention_mask": ("MASK",),
+                "previous_conditioning": ("WEETODD_LTX25_MEDIA_CONDITIONING",),
+            },
+        }
+
+    RETURN_TYPES = ("WEETODD_LTX25_MEDIA_CONDITIONING", "STRING")
+    RETURN_NAMES = ("conditioning", "guide_info")
+    FUNCTION = "append"
+    CATEGORY = "WeeTodd/LTX 2.5/conditioning"
+    DESCRIPTION = (
+        "Add one preprocessed Canny, depth, pose, Motion Track, or custom IC-LoRA guide. "
+        "Use the LTX 2.5 distilled model and the matching task adapter."
+    )
+
+    def append(
+        self,
+        control_video,
+        control_type,
+        start_frame,
+        end_frame,
+        strength,
+        attention_strength,
+        attention_mask=None,
+        previous_conditioning=None,
+    ):
+        stack = previous_conditioning or LTX25MediaConditioningStack()
+        updated = stack.append(
+            LTX25MediaConditioningItem(
+                role="video_reference",
+                start_frame=int(start_frame),
+                end_frame=int(end_frame),
+                strength=float(strength),
+                attention_strength=float(attention_strength),
+                images=control_video,
+                mask=attention_mask,
+                control_type=str(control_type),
+            )
+        )
+        control_groups = sorted(
+            {
+                item.control_type
+                for item in updated.items
+                if item.role == "video_reference"
+            }
+        )
+        return updated, json.dumps(
+            {
+                **updated.metadata(),
+                "control_groups": control_groups,
+                "single_group_recommended": len(control_groups) <= 1,
+                "preprocessing": (
+                    "raw_source_video"
+                    if control_type == "motion_track"
+                    else "preprocessed_image_batch"
+                ),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+
+
+class WeeToddLTX25ICLoRAPipelineMode:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "config": ("WEETODD_LTX25_CONFIG",),
+                "mode": (
+                    [
+                        "CFG++ quality — 8 steps / 15 real forwards",
+                        "Fast single stage — 8 ancestral steps / 8 real forwards",
+                        "Two stage — 8 low-resolution + 3 clean refinement",
+                    ],
+                    {
+                        "default": "CFG++ quality — 8 steps / 15 real forwards",
+                        "tooltip": (
+                            "CFG++ quality runs both branches where the correction is useful; "
+                            "the terminal step needs only its conditional prediction. Fast "
+                            "single stage uses the distinct ancestral sampler."
+                        ),
+                    },
+                ),
+            },
+            "optional": {
+                "cfg_pp_execution": (
+                    ["automatic", "batched", "serial"],
+                    {
+                        "default": "automatic",
+                        "tooltip": (
+                            "Automatic selects serial, which is fastest on the measured Apple "
+                            "Silicon system. Batched is experimental: it reduces peak memory "
+                            "but was slower at the trained 768x448 bucket."
+                        ),
+                    },
+                ),
+                "cfg_pp_schedule": (
+                    ["full", "balanced", "speed"],
+                    {
+                        "default": "full",
+                        "tooltip": (
+                            "Full uses 15 useful forwards; balanced uses 12; speed uses 10. "
+                            "Hybrid schedules trade some CFG++ influence for real compute savings."
+                        ),
+                    },
+                ),
+            },
+        }
+
+    RETURN_TYPES = ("WEETODD_LTX25_CONFIG", "STRING")
+    RETURN_NAMES = ("config", "mode_info")
+    FUNCTION = "apply"
+    CATEGORY = "WeeTodd/LTX 2.5/conditioning"
+    DESCRIPTION = (
+        "Select full or hybrid CFG++, the eight-forward single-stage shortcut, "
+        "or the existing two-stage stage-one-control pipeline."
+    )
+
+    def apply(self, config, mode, cfg_pp_execution="automatic", cfg_pp_schedule="full"):
+        mode = str(mode)
+        cfg_pp_mode = mode.startswith("CFG++ quality") or mode.startswith(
+            "Official Comfy parity"
+        )
+        fast_single_stage = mode.startswith("Fast single stage")
+        single_stage = cfg_pp_mode or fast_single_stage
+        cfg_pp_batched = cfg_pp_mode and str(cfg_pp_execution) == "batched"
+        updated = replace(
+            config,
+            ic_lora_single_stage=single_stage,
+            stage2_steps=0 if single_stage else 3,
+            stage1_sampler=(
+                "euler_ancestral_cfg_pp" if cfg_pp_mode else "euler_ancestral"
+            ),
+            cfg_pp_batched=cfg_pp_batched,
+            cfg_pp_schedule=str(cfg_pp_schedule) if cfg_pp_mode else "full",
+            negative_prompt="" if cfg_pp_mode else config.negative_prompt,
+        )
+        updated.validate()
+        return updated, json.dumps(
+            {
+                "mode": (
+                    "cfg_pp_single_stage"
+                    if cfg_pp_mode
+                    else "single_stage_fast"
+                    if fast_single_stage
+                    else "two_stage"
+                ),
+                "stage1_steps": updated.stage1_steps,
+                "stage1_real_forwards": updated.stage1_forward_passes,
+                "stage2_steps": updated.stage2_steps,
+                "total_real_forwards": updated.real_forward_passes,
+                "sampler": updated.stage1_sampler,
+                "cfg_pp_execution": "batched" if updated.cfg_pp_batched else "serial",
+                "cfg_pp_schedule": updated.cfg_pp_schedule,
+                "negative_prompt": updated.negative_prompt,
+                "recommended_ingredients_lora_strength": 1.2,
+                "ic_lora_stage_scope": (
+                    "full_resolution_complete_generation"
+                    if single_stage
+                    else "low_resolution_stage_1_only"
+                ),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+
+
+class WeeToddLTX25ReferenceSheetGuide:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "reference_sheet": ("IMAGE",),
+                "reference_description": (
+                    "STRING",
+                    {
+                        "default": "Describe the characters, props, and location panels.",
+                        "multiline": True,
+                    },
+                ),
+                "generated_video": (
+                    "STRING",
+                    {
+                        "default": "Describe the shot, action, camera, and synchronized audio.",
+                        "multiline": True,
+                    },
+                ),
+                "strength": (
+                    "FLOAT",
+                    {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.05},
+                ),
+                "attention_strength": (
+                    "FLOAT",
+                    {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.05},
+                ),
+            },
+            "optional": {
+                "attention_mask": ("MASK",),
+                "previous_conditioning": ("WEETODD_LTX25_MEDIA_CONDITIONING",),
+            },
+        }
+
+    RETURN_TYPES = ("WEETODD_LTX25_MEDIA_CONDITIONING", "STRING", "STRING")
+    RETURN_NAMES = ("conditioning", "prompt", "reference_info")
+    FUNCTION = "append"
+    CATEGORY = "WeeTodd/LTX 2.5/conditioning"
+    DESCRIPTION = (
+        "Condition LTX 2.5 from one Ingredients reference sheet. The image is repeated "
+        "internally across the full clip and encoded as IC-LoRA reference context."
+    )
+
+    def append(
+        self,
+        reference_sheet,
+        reference_description,
+        generated_video,
+        strength,
+        attention_strength,
+        attention_mask=None,
+        previous_conditioning=None,
+    ):
+        shape = getattr(reference_sheet, "shape", None)
+        if shape is None or len(shape) != 4 or int(shape[0]) != 1 or int(shape[-1]) < 3:
+            raise ValueError("An LTX 2.5 Ingredients reference sheet requires one RGB image.")
+        reference_description = str(reference_description).strip()
+        generated_video = str(generated_video).strip()
+        if not reference_description or not generated_video:
+            raise ValueError(
+                "Ingredients prompting requires both a reference-sheet description and a "
+                "generated-video description."
+            )
+        stack = (previous_conditioning or LTX25MediaConditioningStack()).append(
+            LTX25MediaConditioningItem(
+                role="video_reference",
+                start_frame=0,
+                end_frame=0,
+                strength=float(strength),
+                attention_strength=float(attention_strength),
+                images=reference_sheet,
+                mask=attention_mask,
+                control_type="ingredients_reference_sheet",
+            )
+        )
+        prompt = (
+            f"Reference sheet: {reference_description}\n\n"
+            f"Generated video: {generated_video}"
+        )
+        return stack, prompt, json.dumps(
+            {
+                **stack.metadata(),
+                "conditioning_mode": "static_reference_sheet_repeated_to_target",
+                "recommended_canvas": "768x448",
+                "recommended_frames": 121,
+                "recommended_frame_rate": 24,
+                "recommended_pipeline": "single_stage_full_resolution",
+            },
+            indent=2,
+            sort_keys=True,
+        )
 
 
 class WeeToddLTX25Keyframe:
@@ -365,6 +698,16 @@ class WeeToddLTX25ComponentLoader:
             if duration_head.strip()
             else ""
         )
+        optional_spatial_upscaler = (
+            str(
+                _resolve_component(
+                    spatial_upscaler,
+                    ("latent_upscale_models", "ltx25"),
+                )
+            )
+            if spatial_upscaler.strip()
+            else ""
+        )
         return (
             LTX25ComponentSpec(
                 transformer_path=str(
@@ -373,9 +716,7 @@ class WeeToddLTX25ComponentLoader:
                 text_encoder_path=str(_resolve_component(text_encoder, ("text_encoders", "ltx25"))),
                 video_vae_path=str(_resolve_component(video_vae, ("vae", "ltx25"))),
                 audio_vae_path=str(_resolve_component(audio_vae, ("vae", "ltx25"))),
-                spatial_upscaler_path=str(
-                    _resolve_component(spatial_upscaler, ("latent_upscale_models", "ltx25"))
-                ),
+                spatial_upscaler_path=optional_spatial_upscaler,
                 duration_head_path=optional_duration,
             ),
         )
@@ -401,8 +742,8 @@ class WeeToddLTX25LoRALoader:
     CATEGORY = "WeeTodd/LTX 2.5/loaders"
     DESCRIPTION = (
         "Attach a generic LTX 2.5 transformer LoRA, including block and non-block targets. "
-        "Multiple loader nodes may be chained; IC-LoRA control media still requires its "
-        "matching conditioning workflow."
+        "Multiple loader nodes may be chained. Use the dedicated loader for IC-LoRA task "
+        "adapters."
     )
 
     def attach(self, model, lora, strength):
@@ -410,6 +751,11 @@ class WeeToddLTX25LoRALoader:
         from ltx25_mlx.transformer import inspect_ltx25_lora
 
         report = inspect_ltx25_lora(resolved)
+        if report["adapter_role"] == "ic_lora":
+            raise ValueError(
+                "This checkpoint declares IC-LoRA reference metadata. Use the dedicated "
+                "LTX 2.5 IC-LoRA Loader so it is scoped to the reference-conditioned stage."
+            )
         attached = replace(
             model,
             loras=(*model.loras, (str(resolved), float(strength))),
@@ -422,6 +768,65 @@ class WeeToddLTX25LoRALoader:
         )
 
 
+class WeeToddLTX25ICLoRALoader:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "model": ("WEETODD_LTX25_MODEL",),
+                "ic_lora": ("STRING", {"default": ""}),
+                "strength": (
+                    "FLOAT",
+                    {"default": 1.0, "min": 0.01, "max": 2.0, "step": 0.05},
+                ),
+            }
+        }
+
+    RETURN_TYPES = ("WEETODD_LTX25_MODEL", "STRING")
+    RETURN_NAMES = ("model", "ic_lora_info")
+    FUNCTION = "attach"
+    CATEGORY = "WeeTodd/LTX 2.5/loaders"
+    DESCRIPTION = (
+        "Attach one LTX 2.5-compatible IC-LoRA for video/reference conditioning. "
+        "Official LTX 2.3 22B adapters pass an additional shape check. The selected IC-LoRA "
+        "Pipeline Mode determines whether the adapter runs for stage one or the full generation."
+    )
+
+    def attach(self, model, ic_lora, strength):
+        if model.ic_loras:
+            raise ValueError(
+                "Only one IC-LoRA adapter may be active. Remove the existing IC-LoRA "
+                "loader before attaching another adapter."
+            )
+        resolved = _resolve_component(ic_lora, ("loras", "ltx25"))
+        from ltx25_mlx.transformer import inspect_ltx25_lora
+
+        report = inspect_ltx25_lora(resolved)
+        if report["adapter_role"] != "ic_lora":
+            raise ValueError(
+                "The selected checkpoint is a transformer LoRA, not an IC-LoRA with "
+                "reference scale metadata."
+            )
+        if report["ic_lora_task"] == "pixel_spatial_upscaler":
+            raise ValueError(
+                "The selected IC-LoRA is the Pixel-Spatial Upscaler, not a general "
+                "video/reference adapter. Use LTX 2.5 Video Upscale / Refine for it."
+            )
+        attached = replace(
+            model,
+            ic_loras=(*model.ic_loras, (str(resolved), float(strength))),
+        )
+        report["path"] = str(report["path"])
+        return attached, json.dumps(
+            {
+                **report,
+                "strength": float(strength),
+                "stack_size": len(attached.ic_loras),
+                "stage_scope": "selected_by_ic_lora_pipeline_mode",
+            },
+            indent=2,
+            sort_keys=True,
+        )
 class WeeToddLTX25GuidedModelLoader:
     @classmethod
     def INPUT_TYPES(cls):
@@ -587,7 +992,8 @@ class WeeToddLTX25GenerationConfig:
             **asdict(config),
             "num_frames": config.num_frames,
             "delivered_duration_seconds": config.delivered_duration_seconds,
-            "real_evaluations": config.stage1_steps + config.stage2_steps,
+            "sampler_steps": config.stage1_steps + config.stage2_steps,
+            "real_forward_passes": config.real_forward_passes,
         }
         return config, json.dumps(info, indent=2, sort_keys=True)
 
@@ -993,7 +1399,10 @@ class WeeToddLTX25Preflight:
     CATEGORY = "WeeTodd/LTX 2.5/loaders"
 
     def check(self, model, config):
-        report = model.validate(config.pipeline_mode)
+        report = model.validate(
+            config.pipeline_mode,
+            require_spatial_upscaler=not config.ic_lora_single_stage,
+        )
         scale_factors = tuple(int(value) for value in report["video_scale_factors"])
         config.validate(scale_factors=scale_factors)
         validate_ltx25_dfr_prebaked_pair(config, report)
@@ -1051,14 +1460,18 @@ class WeeToddLTX25Generate:
             media_conditioning.validate_for_generation(config.num_frames)
             media_keyframes = LTX25KeyframeStack()
             for item in media_conditioning.items:
-                media_keyframes = media_keyframes.append(
-                    LTX25Keyframe(item.images, item.start_frame, item.strength)
-                )
+                if item.role == "image_keyframe":
+                    media_keyframes = media_keyframes.append(
+                        LTX25Keyframe(item.images, item.start_frame, item.strength)
+                    )
             if keyframes is not None:
                 for item in keyframes.keyframes:
                     media_keyframes = media_keyframes.append(item)
-            keyframes = media_keyframes
-        report = model.validate(config.pipeline_mode)
+            keyframes = media_keyframes if media_keyframes.keyframes else None
+        report = model.validate(
+            config.pipeline_mode,
+            require_spatial_upscaler=not config.ic_lora_single_stage,
+        )
         config.validate(scale_factors=tuple(int(value) for value in report["video_scale_factors"]))
         validate_ltx25_dfr_prebaked_pair(config, report)
         released = _release_h3_stages()
@@ -1084,6 +1497,92 @@ class WeeToddLTX25Generate:
                 image_path = final.with_name(f".{final.stem}.input.partial.png")
                 Image.fromarray((np.clip(frame, 0.0, 1.0) * 255).astype(np.uint8)).save(image_path)
             image_inputs = []
+            video_references = []
+            audio_reference = None
+            if media_conditioning is not None:
+                video_references = [
+                    {
+                        "images": item.images,
+                        "start_frame": item.start_frame,
+                        "end_frame": (
+                            config.num_frames - 1
+                            if item.control_type == "ingredients_reference_sheet"
+                            else item.end_frame
+                        ),
+                        "strength": item.strength,
+                        "attention_strength": item.attention_strength,
+                        "mask": item.mask,
+                        "control_type": item.control_type,
+                    }
+                    for item in media_conditioning.items
+                    if item.role == "video_reference"
+                ]
+                if video_references and not model.ic_loras:
+                    raise ValueError(
+                        "Connect the LTX 2.5 IC-LoRA Loader before generating with a "
+                        "video_reference media item."
+                    )
+                if video_references:
+                    ic_components = [
+                        item
+                        for item in report["components"]
+                        if str(item.get("component", "")).startswith("ic_lora_")
+                    ]
+                    adapter_family = (
+                        ic_components[0].get("adapter_family") if ic_components else None
+                    )
+                    control_types = {
+                        str(item["control_type"]) for item in video_references
+                    }
+                    required_family = {
+                        "ingredients_reference_sheet": "ingredients_reference_sheet",
+                        "motion_track": "motion_track",
+                        "canny_edges": "union_control",
+                        "depth_map": "union_control",
+                        "pose_skeleton": "union_control",
+                    }
+                    mismatches = {
+                        control: family
+                        for control, family in required_family.items()
+                        if control in control_types and adapter_family != family
+                    }
+                    if mismatches:
+                        expected = ", ".join(sorted(set(mismatches.values())))
+                        raise ValueError(
+                            "The selected IC-LoRA does not match the reference guide. "
+                            f"Expected adapter family: {expected}; found: {adapter_family}."
+                        )
+                    if any(
+                        item["control_type"] == "ingredients_reference_sheet"
+                        for item in video_references
+                    ) and not config.ic_lora_single_stage:
+                        raise ValueError(
+                            "Ingredients reference sheets require the IC-LoRA Pipeline Mode "
+                            "node set to Official single stage."
+                        )
+                audio_items = [
+                    item
+                    for item in media_conditioning.items
+                    if item.role == "audio_reference"
+                ]
+                if len(audio_items) > 1:
+                    raise ValueError(
+                        "LTX 2.5 currently accepts one audio-driven conditioning source."
+                    )
+                if audio_items:
+                    audio_item = audio_items[0]
+                    if audio_item.start_frame != 0 or audio_item.end_frame != 0:
+                        raise ValueError(
+                            "Audio-driven conditioning currently spans the complete output; "
+                            "leave start_frame and end_frame at zero."
+                        )
+                    audio_reference = audio_item.audio
+                if video_references and audio_reference is not None:
+                    raise ValueError(
+                        "Combined video-reference plus audio-reference is a LipDub topology. "
+                        "No compatible LTX 2.5 LipDub IC-LoRA is currently validated; use "
+                        "either video-reference or audio-driven conditioning in this node."
+                    )
             if keyframes is not None:
                 keyframes.validate(config.num_frames)
                 if first_frame is not None and any(
@@ -1122,6 +1621,8 @@ class WeeToddLTX25Generate:
                 partial,
                 image_path=str(image_path) if image_path is not None else None,
                 image_inputs=image_inputs,
+                video_references=video_references,
+                audio_reference=audio_reference,
                 unload_after=unload_after_generate,
                 check_interrupted=_check_interrupted(),
                 step_callback=_comfy_progress(config.stage1_steps + config.stage2_steps),
@@ -1541,6 +2042,7 @@ class WeeToddLTX25Unload:
 NODE_CLASS_MAPPINGS = {
     "WeeToddLTX25ComponentLoader": WeeToddLTX25ComponentLoader,
     "WeeToddLTX25LoRALoader": WeeToddLTX25LoRALoader,
+    "WeeToddLTX25ICLoRALoader": WeeToddLTX25ICLoRALoader,
     "WeeToddLTX25GuidedModelLoader": WeeToddLTX25GuidedModelLoader,
     "WeeToddLTX25GenerationConfig": WeeToddLTX25GenerationConfig,
     "WeeToddLTX25QualityMode": WeeToddLTX25QualityMode,
@@ -1552,6 +2054,9 @@ NODE_CLASS_MAPPINGS = {
     "WeeToddLTX25Preflight": WeeToddLTX25Preflight,
     "WeeToddLTX25Keyframe": WeeToddLTX25Keyframe,
     "WeeToddLTX25MediaConditioning": WeeToddLTX25MediaConditioning,
+    "WeeToddLTX25ICLoRAControlGuide": WeeToddLTX25ICLoRAControlGuide,
+    "WeeToddLTX25ICLoRAPipelineMode": WeeToddLTX25ICLoRAPipelineMode,
+    "WeeToddLTX25ReferenceSheetGuide": WeeToddLTX25ReferenceSheetGuide,
     "WeeToddLTX25Generate": WeeToddLTX25Generate,
     "WeeToddLTX25GenerateChained": WeeToddLTX25GenerateChained,
     "WeeToddLTX25VideoUpscale": WeeToddLTX25VideoUpscale,
@@ -1561,6 +2066,7 @@ NODE_CLASS_MAPPINGS = {
 NODE_DISPLAY_NAME_MAPPINGS = {
     "WeeToddLTX25ComponentLoader": "WeeTodd LTX 2.5 Component Loader (MLX)",
     "WeeToddLTX25LoRALoader": "WeeTodd LTX 2.5 LoRA Loader (MLX)",
+    "WeeToddLTX25ICLoRALoader": "WeeTodd LTX 2.5 IC-LoRA Loader (MLX)",
     "WeeToddLTX25GuidedModelLoader": "WeeTodd LTX 2.5 Guided Model Loader (MLX)",
     "WeeToddLTX25GenerationConfig": "WeeTodd LTX 2.5 Generation Config",
     "WeeToddLTX25QualityMode": "WeeTodd LTX 2.5 Quality Mode",
@@ -1572,6 +2078,9 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "WeeToddLTX25Preflight": "WeeTodd LTX 2.5 Preflight",
     "WeeToddLTX25Keyframe": "WeeTodd LTX 2.5 Timed Keyframe",
     "WeeToddLTX25MediaConditioning": "WeeTodd LTX 2.5 Media Conditioning",
+    "WeeToddLTX25ICLoRAControlGuide": "WeeTodd LTX 2.5 IC-LoRA Control Guide",
+    "WeeToddLTX25ICLoRAPipelineMode": "WeeTodd LTX 2.5 IC-LoRA Pipeline Mode",
+    "WeeToddLTX25ReferenceSheetGuide": "WeeTodd LTX 2.5 Ingredients Reference Sheet",
     "WeeToddLTX25Generate": "WeeTodd LTX 2.5 Generate Video + Audio",
     "WeeToddLTX25GenerateChained": "WeeTodd LTX 2.5 Generate Chained Timeline",
     "WeeToddLTX25VideoUpscale": "WeeTodd LTX 2.5 Video Upscale / Refine",

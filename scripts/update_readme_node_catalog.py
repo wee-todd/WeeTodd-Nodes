@@ -77,6 +77,10 @@ EXPERIMENTAL = {
     "WeeToddLTX25DFRTemporalRefinement",
     "WeeToddLTX25DiffVAEOptimization",
     "WeeToddLTX25MediaConditioning",
+    "WeeToddLTX25ICLoRALoader",
+    "WeeToddLTX25ICLoRAControlGuide",
+    "WeeToddLTX25ICLoRAPipelineMode",
+    "WeeToddLTX25ReferenceSheetGuide",
 }
 CONVENIENCE = {
     "WeeToddH3ModelLoader",

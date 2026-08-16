@@ -236,7 +236,7 @@ def test_hires_fix_resolves_target_and_preserves_audio_contract(monkeypatch):
 
 
 def test_expected_nodes_are_registered():
-    assert len(NODE_CLASS_MAPPINGS) == 70
+    assert len(NODE_CLASS_MAPPINGS) == 74
     assert "WeeToddH3ComponentLoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3QuantizedTransformerLoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3Preflight" in NODE_CLASS_MAPPINGS
@@ -258,6 +258,10 @@ def test_expected_nodes_are_registered():
     assert "WeeToddLTX25GeneratedKeyframes" in NODE_CLASS_MAPPINGS
     assert "WeeToddLTX25DFRTemporalRefinement" in NODE_CLASS_MAPPINGS
     assert "WeeToddLTX25LoRALoader" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX25ICLoRALoader" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX25ICLoRAControlGuide" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX25ICLoRAPipelineMode" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX25ReferenceSheetGuide" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3KeyframeEncode" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3TimedKeyframeEncode" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3ReferenceEncode" in NODE_CLASS_MAPPINGS
@@ -307,6 +311,26 @@ def test_continuation_context_defaults_to_quality_first_22_frames():
 
     assert specification[0] == ["5", "22", "39", "56"]
     assert specification[1]["default"] == "22"
+
+
+def test_ltx25_component_loader_preserves_empty_optional_paths(monkeypatch):
+    node_class = NODE_CLASS_MAPPINGS["WeeToddLTX25ComponentLoader"]
+    monkeypatch.setattr(
+        "wee_todd_nodes.ltx25_nodes._resolve_component",
+        lambda value, _categories: f"/models/{value}",
+    )
+
+    (spec,) = node_class().specify(
+        "transformer.safetensors",
+        "text_encoder.safetensors",
+        "video_vae.safetensors",
+        "audio_vae.safetensors",
+        "",
+        "",
+    )
+
+    assert spec.spatial_upscaler_path == ""
+    assert spec.duration_head_path == ""
 
 
 def test_lora_loader_exposes_qkv_layout_and_staged_activation(tmp_path):

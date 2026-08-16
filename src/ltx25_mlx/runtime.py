@@ -39,6 +39,11 @@ LTX25_GENERATION_PRESETS = (
 )
 LTX25_DISTILLED_SIGMAS = (1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875, 0.0)
 LTX25_STAGE2_SIGMAS = (0.909375, 0.725, 0.421875, 0.0)
+LTX25_CFG_PP_SCHEDULES = {
+    "full": (0, 1, 2, 3, 4, 5, 6),
+    "balanced": (0, 2, 4, 6),
+    "speed": (0, 4),
+}
 LTX25_DEFAULT_NEGATIVE_PROMPT = (
     "blurry, out of focus, overexposed, underexposed, low contrast, washed out colors, "
     "excessive noise, grainy texture, poor lighting, flickering, motion blur, distorted "
@@ -232,22 +237,40 @@ class LTX25ComponentSpec:
     duration_head_path: str = ""
     distilled_lora_path: str = ""
     loras: tuple[tuple[str, float], ...] = ()
+    ic_loras: tuple[tuple[str, float], ...] = ()
 
     def paths(self) -> dict[str, Path]:
         values = asdict(self)
         values.pop("loras", None)
+        values.pop("ic_loras", None)
         return {name: Path(value).expanduser() for name, value in values.items() if value}
 
-    def validate(self, mode: str = "distilled") -> dict[str, object]:
+    def validate(
+        self,
+        mode: str = "distilled",
+        *,
+        require_spatial_upscaler: bool = True,
+    ) -> dict[str, object]:
         if mode not in LTX25_CONFIG_MODES:
             raise ValueError(f"Unsupported LTX 2.5 pipeline mode: {mode!r}.")
+        if self.ic_loras and mode != "distilled":
+            raise ValueError(
+                "LTX 2.5 IC-LoRA requires the distilled transformer. Select a distilled "
+                "Quality Mode or remove the IC-LoRA."
+            )
+        if len(self.ic_loras) > 1:
+            raise ValueError(
+                "LTX 2.5 supports one active IC-LoRA adapter per generation. Remove the "
+                "additional IC-LoRA loaders; standard style LoRAs may remain separate."
+            )
         required = {
             "transformer_path",
             "text_encoder_path",
             "video_vae_path",
             "audio_vae_path",
-            "spatial_upscaler_path",
         }
+        if require_spatial_upscaler:
+            required.add("spatial_upscaler_path")
         paths = self.paths()
         if mode == "distilled" and "distilled_lora_path" in paths:
             raise ValueError(
@@ -279,6 +302,24 @@ class LTX25ComponentSpec:
                 raise FileNotFoundError(f"LTX 2.5 LoRA file not found: {resolved}")
             if strength <= 0:
                 raise ValueError("LTX 2.5 LoRA strength must be positive.")
+        for lora_path, strength in self.ic_loras:
+            resolved = Path(lora_path).expanduser()
+            if not resolved.is_file() or resolved.suffix != ".safetensors":
+                raise FileNotFoundError(f"LTX 2.5 IC-LoRA file not found: {resolved}")
+            if strength <= 0:
+                raise ValueError("LTX 2.5 IC-LoRA strength must be positive.")
+            from .transformer import inspect_ltx25_lora
+
+            ic_report = inspect_ltx25_lora(resolved)
+            if ic_report["adapter_role"] != "ic_lora":
+                raise ValueError(
+                    f"The dedicated IC-LoRA stack requires reference metadata: {resolved}"
+                )
+            if ic_report["ic_lora_task"] == "pixel_spatial_upscaler":
+                raise ValueError(
+                    "The Pixel-Spatial IC-LoRA belongs to the Video Upscale / Refine node, "
+                    "not the general video-reference stack."
+                )
         missing = [
             name for name in sorted(required) if name not in paths or not paths[name].exists()
         ]
@@ -371,9 +412,45 @@ class LTX25ComponentSpec:
                         "strength": float(strength),
                         "adapter_role": report["adapter_role"],
                         "adapter_pairs": report["adapter_pairs"],
+                        "compatibility": report["compatibility"],
+                        "adapter_family": report["adapter_family"],
                         "lora_rank": report["lora_rank"],
                         "lora_alpha": report["lora_alpha"],
                     }
+                )
+        if self.ic_loras:
+            from .transformer import inspect_ltx25_lora
+
+            downscales: set[int] = set()
+            temporal_scales: set[int] = set()
+            for index, (lora_path, strength) in enumerate(self.ic_loras, start=1):
+                report = inspect_ltx25_lora(lora_path)
+                downscales.add(int(report["reference_downscale_factor"]))
+                temporal_scales.add(int(report["reference_temporal_scale_factor"]))
+                size = int(report["bytes"])
+                total += size
+                inventory.append(
+                    {
+                        "component": f"ic_lora_{index}",
+                        "file": Path(lora_path).name,
+                        "bytes": size,
+                        "strength": float(strength),
+                        "adapter_role": "ic_lora",
+                        "adapter_pairs": report["adapter_pairs"],
+                        "compatibility": report["compatibility"],
+                        "adapter_family": report["adapter_family"],
+                        "reference_downscale_factor": report[
+                            "reference_downscale_factor"
+                        ],
+                        "reference_temporal_scale_factor": report[
+                            "reference_temporal_scale_factor"
+                        ],
+                    }
+                )
+            if len(downscales) != 1 or len(temporal_scales) != 1:
+                raise ValueError(
+                    "Stacked LTX 2.5 IC-LoRAs must declare identical spatial and temporal "
+                    "reference scale factors."
                 )
         return {
             "model_version": str(model_version),
@@ -385,6 +462,12 @@ class LTX25ComponentSpec:
             "transformer_baked_loras": transformer_meta.get("weetodd_baked_loras", []),
             "components": inventory,
             "checkpoint_bytes": total,
+            "ic_lora_reference_downscale_factor": (
+                next(iter(downscales)) if self.ic_loras else None
+            ),
+            "ic_lora_reference_temporal_scale_factor": (
+                next(iter(temporal_scales)) if self.ic_loras else None
+            ),
         }
 
 
@@ -403,7 +486,10 @@ class LTX25GenerationConfig:
     seed: int = 0
     stage1_steps: int = 8
     stage2_steps: int = 3
+    ic_lora_single_stage: bool = False
     stage1_sampler: str = "euler_ancestral"
+    cfg_pp_batched: bool = False
+    cfg_pp_schedule: str = "full"
     stage2_sampler: str = "euler"
     stage1_eta: float = 1.0
     stage1_s_noise: float = 1.0
@@ -441,9 +527,23 @@ class LTX25GenerationConfig:
     def delivered_duration_seconds(self) -> float:
         return (self.num_frames - 1) / self.frame_rate
 
+    @property
+    def stage1_forward_passes(self) -> int:
+        if self.stage1_sampler != "euler_ancestral_cfg_pp":
+            return self.stage1_steps
+        return self.stage1_steps + len(LTX25_CFG_PP_SCHEDULES[self.cfg_pp_schedule])
+
+    @property
+    def real_forward_passes(self) -> int:
+        return self.stage1_forward_passes + self.stage2_steps
+
     def validate(self, *, scale_factors: tuple[int, int, int] = (8, 32, 32)) -> None:
         if self.pipeline_mode not in LTX25_CONFIG_MODES:
             raise ValueError(f"Unsupported LTX 2.5 pipeline mode: {self.pipeline_mode!r}.")
+        if self.cfg_pp_batched and self.stage1_sampler != "euler_ancestral_cfg_pp":
+            raise ValueError("Batched CFG++ requires the Euler ancestral CFG++ sampler.")
+        if self.cfg_pp_schedule not in LTX25_CFG_PP_SCHEDULES:
+            raise ValueError(f"Unsupported CFG++ schedule: {self.cfg_pp_schedule!r}.")
         if self.duration_mode not in {"manual", "automatic"}:
             raise ValueError("LTX 2.5 duration mode must be manual or automatic.")
         if not 0.25 <= self.auto_duration_min_seconds <= self.auto_duration_max_seconds <= 30.0:
@@ -475,8 +575,9 @@ class LTX25GenerationConfig:
                 "block streaming. Select reference_fp32 or disable low_ram_streaming."
             )
         temporal, spatial_h, spatial_w = scale_factors
-        modulus_h = spatial_h * 2
-        modulus_w = spatial_w * 2
+        spatial_multiplier = 1 if self.ic_lora_single_stage else 2
+        modulus_h = spatial_h * spatial_multiplier
+        modulus_w = spatial_w * spatial_multiplier
         if self.width < modulus_w or self.height < modulus_h:
             raise ValueError("LTX 2.5 distilled dimensions are below the two-stage latent grid.")
         if self.width % modulus_w or self.height % modulus_h:
@@ -541,13 +642,20 @@ class LTX25GenerationConfig:
         if self.pipeline_mode == "distilled":
             if (
                 self.stage1_steps != 8
-                or self.stage2_steps != 3
-                or self.stage1_sampler != "euler_ancestral"
+                or self.stage2_steps != (0 if self.ic_lora_single_stage else 3)
+                or self.stage1_sampler
+                not in {"euler_ancestral", "euler_ancestral_cfg_pp"}
                 or self.stage2_sampler != "euler"
             ):
                 raise ValueError(
-                    "The LTX 2.5 distilled path requires eight stage-one and three stage-two "
-                    "steps with the official samplers."
+                    "The LTX 2.5 distilled path requires eight stage-one steps and either "
+                    "zero single-stage or three two-stage refinement steps with Euler "
+                    "ancestral or Euler ancestral CFG++ sampling."
+                )
+            if self.stage1_sampler == "euler_ancestral_cfg_pp" and not self.ic_lora_single_stage:
+                raise ValueError(
+                    "Euler ancestral CFG++ is currently validated for the official "
+                    "single-stage IC-LoRA workflow only."
                 )
             if self.stage1_eta != 1.0 or self.stage1_s_noise != 1.0:
                 raise ValueError("LTX 2.5 distilled stage one requires eta=1.0 and s_noise=1.0.")
@@ -580,6 +688,11 @@ class LTX25GenerationConfig:
                 "DFR currently uses its own distilled recipe and cannot be stacked on a "
                 "guided mode."
             )
+        if self.ic_lora_single_stage:
+            if self.pipeline_mode != "distilled":
+                raise ValueError("LTX 2.5 IC-LoRA single-stage mode requires distilled sampling.")
+            if self.dfr_enabled or self.dfr_temporal_rounds:
+                raise ValueError("LTX 2.5 IC-LoRA single-stage mode cannot be combined with DFR.")
         if (self.num_frames - 1) % temporal:
             raise ValueError(
                 f"LTX 2.5 frame count must align to temporal compression factor {temporal}."
@@ -676,7 +789,10 @@ class LTX25RuntimeCache:
             return self._pipeline is not None
 
     def get(self, spec: LTX25ComponentSpec, config: LTX25GenerationConfig):
-        report = spec.validate(config.pipeline_mode)
+        report = spec.validate(
+            config.pipeline_mode,
+            require_spatial_upscaler=not config.ic_lora_single_stage,
+        )
         scales = tuple(int(value) for value in report["video_scale_factors"])
         config.validate(scale_factors=scales)
         validate_ltx25_dfr_prebaked_pair(config, report)
@@ -714,6 +830,7 @@ class LTX25RuntimeCache:
                     "temporal_upsampler_path": config.dfr_temporal_upsampler_path,
                     "dfr_stage2_transformer_path": config.dfr_prebaked_transformer_path,
                     "loras": spec.loras,
+                    "ic_loras": spec.ic_loras,
                 }
                 signature = inspect.signature(pipeline_class)
                 accepted = {
@@ -738,13 +855,18 @@ class LTX25RuntimeCache:
         *,
         image_path: str | None = None,
         image_inputs: list[dict[str, object]] | None = None,
+        video_references: list[dict[str, object]] | None = None,
+        audio_reference: dict[str, object] | None = None,
         unload_after: bool = True,
         check_interrupted=None,
         step_callback=None,
     ) -> dict[str, object]:
         if not prompt.strip():
             raise ValueError("LTX 2.5 prompt must not be empty.")
-        report = spec.validate(config.pipeline_mode)
+        report = spec.validate(
+            config.pipeline_mode,
+            require_spatial_upscaler=not config.ic_lora_single_stage,
+        )
         scales = tuple(int(value) for value in report["video_scale_factors"])
         config.validate(scale_factors=scales)
         dfr_recipe = resolve_ltx25_dfr_recipe(config, report)
@@ -784,11 +906,16 @@ class LTX25RuntimeCache:
             "seed": config.seed,
             "image": image_path,
             "images": images,
+            "video_references": video_references or [],
+            "audio_reference": audio_reference,
             "stage1_steps": config.stage1_steps,
             "stage2_steps": config.stage2_steps,
+            "ic_lora_single_stage": config.ic_lora_single_stage,
             "stage1_sigmas": LTX25_DISTILLED_SIGMAS,
             "stage2_sigmas": LTX25_STAGE2_SIGMAS,
             "stage1_sampler": config.stage1_sampler,
+            "cfg_pp_batched": config.cfg_pp_batched,
+            "cfg_pp_schedule": config.cfg_pp_schedule,
             "stage2_sampler": config.stage2_sampler,
             "stage1_eta": config.stage1_eta,
             "stage1_s_noise": config.stage1_s_noise,
@@ -856,6 +983,13 @@ class LTX25RuntimeCache:
                 "prompt": prompt,
                 "video_path": str(result_path),
                 "generation": asdict(config),
+                "sampling": {
+                    "stage1_steps": config.stage1_steps,
+                    "stage1_real_forwards": config.stage1_forward_passes,
+                    "stage2_steps": config.stage2_steps,
+                    "total_real_forwards": config.real_forward_passes,
+                    "stage1_sampler": config.stage1_sampler,
+                },
                 "num_frames": resolved_num_frames,
                 "frame_rate": resolved_frame_rate,
                 "delivered_duration_seconds": (resolved_num_frames - 1) / resolved_frame_rate,
@@ -885,6 +1019,22 @@ class LTX25RuntimeCache:
                     None,
                 ),
                 "runtime_cached": not unload_after,
+                "conditioning": {
+                    "video_reference_count": len(video_references or ()),
+                    "audio_driven": audio_reference is not None,
+                    "audio_output": (
+                        "original_comfy_audio" if audio_reference is not None else "generated"
+                    ),
+                    "ic_lora_stage_scope": (
+                        (
+                            "single_stage_full_resolution"
+                            if config.ic_lora_single_stage
+                            else "stage_1_only"
+                        )
+                        if video_references
+                        else None
+                    ),
+                },
             }
             try:
                 from wee_todd_nodes.process_memory import complete_process_memory
