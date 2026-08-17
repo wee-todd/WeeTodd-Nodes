@@ -129,7 +129,8 @@
         "Describe every character, prop, and location panel visible in the reference sheet. Keep identities distinct.",
         "Describe one continuous five-second shot, physical action, camera behavior, dialogue, ambience, and sound effects.",
         1.0,
-        1.0
+        1.0,
+        "quality"
       ]
     },
     {

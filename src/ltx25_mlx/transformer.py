@@ -298,6 +298,18 @@ def inspect_ltx25_lora(path: str | Path) -> dict[str, Any]:
         metadata = handle.metadata() or {}
         keys = list(handle.keys())
         shapes = {key: tuple(handle.get_slice(key).get_shape()) for key in keys}
+    msr_slot_prefix = next(
+        (
+            prefix
+            for prefix in (
+                "diffusion_model.reference_slot_embedding.",
+                "reference_slot_embedding.",
+            )
+            if any(key.startswith(prefix) for key in keys)
+        ),
+        None,
+    )
+    is_msr = msr_slot_prefix is not None
     model_version = str(metadata.get("model_version", ""))
     version_match = re.match(r"^(\d+)\.(\d+)", model_version)
     version = (
@@ -305,7 +317,7 @@ def inspect_ltx25_lora(path: str | Path) -> dict[str, Any]:
         if version_match
         else None
     )
-    if version is None or version < (2, 3):
+    if (version is None and not is_msr) or (version is not None and version < (2, 3)):
         raise ValueError(
             "The selected LoRA does not declare a supported LTX 2.3-or-newer model version; "
             f"model_version={model_version!r}."
@@ -339,7 +351,7 @@ def inspect_ltx25_lora(path: str | Path) -> dict[str, Any]:
             incompatible_targets.append(stem)
             continue
         adapter_ranks.add(int(a_shape[0]))
-        if version < (2, 5):
+        if version is None or version < (2, 5):
             target = remap_comfy_transformer_key(stem + ".weight")
             expected = _ltx25_bridge_target_shape(target)
             actual = (int(b_shape[0]), int(a_shape[1]))
@@ -351,9 +363,17 @@ def inspect_ltx25_lora(path: str | Path) -> dict[str, Any]:
             "The older LTX LoRA does not match the supported LTX 2.5 22B transformer "
             f"targets; incompatible targets include: {examples}."
         )
-    compatibility = "native_ltx_2_5" if version >= (2, 5) else "ltx_2_3_22b_bridge"
+    compatibility = (
+        "native_ltx_2_5_msr_slot_contract"
+        if is_msr and version is None
+        else "native_ltx_2_5"
+        if version >= (2, 5)
+        else "ltx_2_3_22b_bridge"
+    )
     source_name = source.name.lower()
-    if "union-control" in source_name:
+    if is_msr:
+        adapter_family = "multi_subject_reference"
+    elif "union-control" in source_name:
         adapter_family = "union_control"
     elif "motion-track" in source_name:
         adapter_family = "motion_track"
@@ -372,21 +392,108 @@ def inspect_ltx25_lora(path: str | Path) -> dict[str, Any]:
         "compatibility_basis": (
             "declared LTX 2.5 adapter"
             if compatibility == "native_ltx_2_5"
+            else "exact LTX 2.5 MSR learned-slot and 22B transformer target contract"
+            if compatibility == "native_ltx_2_5_msr_slot_contract"
             else "LTX 2.3-or-newer block targets and tensor shapes match the LTX 2.5 22B layout"
         ),
         "adapter_family": adapter_family,
         "adapter_role": (
-            "ic_lora" if "reference_downscale_factor" in metadata else "transformer_lora"
+            "ic_lora"
+            if is_msr or "reference_downscale_factor" in metadata
+            else "transformer_lora"
         ),
         "ic_lora_task": (
             "pixel_spatial_upscaler"
             if "reference_spatial_scale_factor" in metadata
+            else "multi_subject_reference"
+            if is_msr
             else ("reference_conditioning" if "reference_downscale_factor" in metadata else None)
         ),
         "lora_rank": int(metadata["lora_rank"]) if metadata.get("lora_rank") else None,
         "lora_alpha": int(metadata["lora_alpha"]) if metadata.get("lora_alpha") else None,
         "bytes": source.stat().st_size,
     }
+
+
+_LTX25_MSR_SLOT_SHAPES = {
+    "frequencies": (16,),
+    "net.0.weight": (256, 33),
+    "net.0.bias": (256,),
+    "net.2.weight": (128, 256),
+    "net.2.bias": (128,),
+}
+
+
+def _validate_ltx25_msr_header(
+    metadata: dict[str, str],
+    shapes: dict[str, tuple[int, ...]],
+    base: dict[str, Any],
+) -> dict[str, Any]:
+    prefix = next(
+        (
+            prefix
+            for prefix in (
+                "diffusion_model.reference_slot_embedding.",
+                "reference_slot_embedding.",
+            )
+            if any(key.startswith(prefix) for key in shapes)
+        ),
+        None,
+    )
+    if prefix is None or base["adapter_family"] != "multi_subject_reference":
+        raise ValueError(
+            "The selected adapter has no reference_slot_embedding tensors and is not an "
+            "LTX 2.5 multi-subject reference checkpoint."
+        )
+    missing = []
+    incompatible = []
+    for name, expected in _LTX25_MSR_SLOT_SHAPES.items():
+        key = prefix + name
+        if key not in shapes:
+            missing.append(name)
+        elif shapes[key] != expected:
+            incompatible.append(f"{name}: {shapes[key]} != {expected}")
+    if missing or incompatible:
+        detail = [*(f"missing {name}" for name in missing), *incompatible]
+        raise ValueError("Invalid LTX 2.5 MSR slot embedding: " + "; ".join(detail))
+    if metadata.get("reference_slot_embedding_type") != "fourier_mlp":
+        raise ValueError("LTX 2.5 MSR requires reference_slot_embedding_type=fourier_mlp.")
+    if metadata.get("reference_token_order") != "prepend":
+        raise ValueError("LTX 2.5 MSR requires reference_token_order=prepend.")
+    if metadata.get("reference_slot_time_offsets") != "pic1_based_negative_time":
+        raise ValueError(
+            "LTX 2.5 MSR requires reference_slot_time_offsets=pic1_based_negative_time."
+        )
+    if base["adapter_pairs"] != 480 or base["adapter_ranks"] != [128]:
+        raise ValueError(
+            "LTX 2.5 MSR requires 480 balanced rank-128 transformer adapter pairs."
+        )
+    return {
+        **base,
+        "slot_prefix": prefix,
+        "slot_shapes": dict(_LTX25_MSR_SLOT_SHAPES),
+        "slot_embedding_type": "fourier_mlp",
+        "slot_output_dim": 128,
+        "maximum_references": 5,
+        "reference_token_order": "prepend",
+        "reference_slot_time_offsets": "pic1_based_negative_time",
+        "reference_scale_factors_variable": str(
+            metadata.get("reference_scale_factors_variable", "False")
+        ).lower()
+        in {"1", "true", "yes"},
+    }
+
+
+def inspect_ltx25_msr_lora(path: str | Path) -> dict[str, Any]:
+    """Validate the learned-slot and LoRA contract of an LTX 2.5 MSR adapter."""
+
+    source = Path(path).expanduser()
+    base = inspect_ltx25_lora(source)
+    with safe_open(source, framework="numpy") as handle:
+        metadata = handle.metadata() or {}
+        keys = list(handle.keys())
+        shapes = {key: tuple(handle.get_slice(key).get_shape()) for key in keys}
+    return _validate_ltx25_msr_header(metadata, shapes, base)
 
 
 def inspect_ltx25_ic_lora(path: str | Path) -> dict[str, Any]:
@@ -480,6 +587,13 @@ def remap_comfy_transformer_weights(weights: dict[str, mx.array]) -> dict[str, m
 def _remap_comfy_lora_weights(weights: dict[str, mx.array]) -> dict[str, mx.array]:
     mapped: dict[str, mx.array] = {}
     for key, value in weights.items():
+        if key.startswith(
+            (
+                "diffusion_model.reference_slot_embedding.",
+                "reference_slot_embedding.",
+            )
+        ):
+            continue
         mapped_key = remap_comfy_transformer_key(key)
         if mapped_key is not None:
             mapped[mapped_key] = value
@@ -899,6 +1013,7 @@ __all__ = [
     "LTX25TransformerConfig",
     "inspect_ltx25_ic_lora",
     "inspect_ltx25_lora",
+    "inspect_ltx25_msr_lora",
     "load_ltx25_transformer",
     "remap_comfy_transformer_key",
     "remap_comfy_transformer_weights",

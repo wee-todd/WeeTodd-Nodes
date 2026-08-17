@@ -28,6 +28,7 @@ class SolAttentionConfig:
     min_tokens: int = 16384
     exact_prefix_rows: int = 0
     exact_suffix_rows: int = 0
+    exact_suffix_groups: tuple[int, ...] = ()
     start_percent: float = 0.2
     end_percent: float = 1.0
     dense_blocks: int = 2
@@ -41,6 +42,10 @@ class SolAttentionConfig:
             raise ValueError("Sol attention exact_prefix_rows must be non-negative")
         if self.exact_suffix_rows < 0:
             raise ValueError("Sol attention exact_suffix_rows must be non-negative")
+        if any(rows <= 0 for rows in self.exact_suffix_groups):
+            raise ValueError("Sol attention exact suffix groups must contain positive row counts")
+        if self.exact_suffix_groups and sum(self.exact_suffix_groups) != self.exact_suffix_rows:
+            raise ValueError("Sol attention exact suffix groups must sum to exact_suffix_rows")
         if not 0.0 <= self.start_percent <= self.end_percent <= 1.0:
             raise ValueError("Sol attention requires 0 <= start_percent <= end_percent <= 1")
         if self.dense_blocks < 0:
@@ -62,12 +67,19 @@ class SolAttentionConfig:
             min_tokens=self.min_tokens,
             exact_prefix_rows=rows,
             exact_suffix_rows=self.exact_suffix_rows,
+            exact_suffix_groups=self.exact_suffix_groups,
             start_percent=self.start_percent,
             end_percent=self.end_percent,
             dense_blocks=self.dense_blocks,
         )
 
-    def with_exact_rows(self, *, prefix: int = 0, suffix: int = 0) -> SolAttentionConfig:
+    def with_exact_rows(
+        self,
+        *,
+        prefix: int = 0,
+        suffix: int = 0,
+        suffix_groups: tuple[int, ...] = (),
+    ) -> SolAttentionConfig:
         """Return a policy with exact conditioning rows at either sequence boundary."""
 
         return SolAttentionConfig(
@@ -76,6 +88,7 @@ class SolAttentionConfig:
             min_tokens=self.min_tokens,
             exact_prefix_rows=prefix,
             exact_suffix_rows=suffix,
+            exact_suffix_groups=tuple(suffix_groups),
             start_percent=self.start_percent,
             end_percent=self.end_percent,
             dense_blocks=self.dense_blocks,
@@ -414,14 +427,62 @@ def _sparse_body() -> str:
 
 
 _SPARSE_BODY = _sparse_body()
-_KERNELS: dict[tuple[int, int, int], object] = {}
+_MASK_NONE = 0
+_MASK_FULL = 1
+_MASK_COMPACT_SUFFIX = 2
+_KERNELS: dict[tuple[int, int, int, int, int, tuple[int, ...]], object] = {}
 
 
-def _kernel(prefix_blocks: int, suffix_blocks: int, summary_blocks: int):
-    key = (prefix_blocks, suffix_blocks, summary_blocks)
+def _kernel(
+    prefix_blocks: int,
+    suffix_blocks: int,
+    summary_blocks: int,
+    *,
+    mask_mode: int,
+    exact_suffix_rows: int,
+    suffix_groups: tuple[int, ...],
+):
+    key = (
+        prefix_blocks,
+        suffix_blocks,
+        summary_blocks,
+        mask_mode,
+        exact_suffix_rows,
+        suffix_groups,
+    )
     kernel = _KERNELS.get(key)
     if kernel is not None:
         return kernel
+    masked = mask_mode != _MASK_NONE
+    if mask_mode == _MASK_FULL:
+        mask_params_declaration = (
+            "AttnMaskParams mask_params_value{{"
+            "attention_mask_strides[0], 0, attention_mask_strides[1]}};"
+        )
+        mask_pointer = "attention_mask"
+    elif mask_mode == _MASK_COMPACT_SUFFIX:
+        mask_params_declaration = (
+            "AttnMaskParams mask_params_value{{"
+            "attention_mask_strides[0], 0, 0}};"
+        )
+        boundaries = []
+        running = 0
+        for index, rows in enumerate(suffix_groups, start=1):
+            running += rows
+            boundaries.append((index, running))
+        query = "threadgroup_position_in_grid.x * BQ"
+        template_index = "0"
+        for index, boundary in reversed(boundaries):
+            template_index = (
+                f"({query} < TARGET_ROWS + {boundary} ? {index} : {template_index})"
+            )
+        template_index = f"({query} < TARGET_ROWS ? 0 : {template_index})"
+        mask_pointer = (
+            f"attention_mask + ({template_index}) * attention_mask_strides[1]"
+        )
+    else:
+        mask_params_declaration = ""
+        mask_pointer = "nullptr"
     source = f"""
 using namespace mlx::steel;
 using T = bfloat;
@@ -436,9 +497,10 @@ constexpr int SUMMARY_SIZE = 64;
 constexpr int PREFIX_BLOCKS = {prefix_blocks};
 constexpr int SUFFIX_BLOCKS = {suffix_blocks};
 constexpr int SUMMARY_BLOCKS = {summary_blocks};
+constexpr int TARGET_ROWS = ROWS - {exact_suffix_rows};
 constexpr bool align_Q = (ROWS % BQ) == 0;
 constexpr bool align_K = (ROWS % BK) == 0;
-constexpr bool has_mask = false;
+constexpr bool has_mask = {"true" if masked else "false"};
 constexpr bool do_causal = false;
 constexpr bool has_sinks = false;
 
@@ -470,8 +532,9 @@ AttnParams params_value{{
     {{ROWS * HEADS * BD, BD, HEADS * BD}}
 }};
 thread const AttnParams* params = &params_value;
-thread const AttnMaskParams* mask_params = nullptr;
-const device MaskType* mask = nullptr;
+{mask_params_declaration}
+thread const AttnMaskParams* mask_params = {"&mask_params_value" if masked else "nullptr"};
+const device MaskType* mask = {mask_pointer};
 const device T* sinks = nullptr;
 uint simd_lane_id = thread_index_in_simdgroup;
 uint simd_group_id = simdgroup_index_in_threadgroup;
@@ -489,8 +552,18 @@ if (simd_group_id == 0 && simd_lane_id == 0) {{
     kernel = mx.fast.metal_kernel(
         name=(
             f"wee_todd_sol_attention_p{prefix_blocks}_s{suffix_blocks}_n{summary_blocks}"
+            f"_m{mask_mode}_g{'_'.join(str(rows) for rows in suffix_groups) or '0'}"
         ),
-        input_names=["q", "k", "v", "qc", "kc", "vc", "thresholds"],
+        input_names=[
+            "q",
+            "k",
+            "v",
+            "qc",
+            "kc",
+            "vc",
+            "thresholds",
+            *(["attention_mask"] if masked else []),
+        ],
         output_names=["output", "route_counts"],
         source=source,
         header=_STEEL_HEADER,
@@ -543,6 +616,7 @@ def sol_attention(
     *,
     scale: float,
     config: SolAttentionConfig,
+    mask: mx.array | None = None,
     return_route_counts: bool = False,
 ) -> mx.array | tuple[mx.array, mx.array]:
     """Return sparse H3 attention in logical ``[B, H, L, D]`` layout."""
@@ -559,8 +633,42 @@ def sol_attention(
     if q.dtype != mx.bfloat16 or k.dtype != mx.bfloat16 or v.dtype != mx.bfloat16:
         raise TypeError("Sol attention currently requires BF16 Q, K, and V")
     batch, heads, rows, head_dim = q.shape
+    mask_mode = _MASK_NONE
+    suffix_groups = tuple(config.exact_suffix_groups)
+    if mask is not None:
+        if mask.ndim == 3 and tuple(mask.shape) == (batch, rows, rows):
+            mask_mode = _MASK_FULL
+        elif mask.ndim == 3 and mask.shape[0] == batch and mask.shape[2] == rows:
+            mask_mode = _MASK_COMPACT_SUFFIX
+        else:
+            raise ValueError(
+                "Masked Sol attention requires a full [batch, rows, rows] mask or a compact "
+                "suffix mask shaped [batch, 2, rows]."
+            )
+        if config.exact_suffix_rows <= 0 and config.exact_prefix_rows <= 0:
+            raise ValueError(
+                "Masked Sol attention requires exact conditioning rows at a sequence boundary."
+            )
+        if mask_mode == _MASK_COMPACT_SUFFIX and not suffix_groups:
+            suffix_groups = (config.exact_suffix_rows,)
+        if mask_mode == _MASK_COMPACT_SUFFIX and (
+            config.exact_prefix_rows > 0
+            or not suffix_groups
+            or any(group % _BLOCK for group in suffix_groups)
+            or mask.shape[1] != len(suffix_groups) + 1
+        ):
+            raise ValueError(
+                "Compact Sol masks require one template per 64-row-aligned suffix group, "
+                "one target template, and no exact prefix."
+            )
+        mask = mask.astype(mx.bfloat16)
     if rows < config.min_tokens:
-        return mx.fast.scaled_dot_product_attention(q, k, v, scale=scale)
+        dense_mask = (
+            materialize_compact_attention_mask(mask, suffix_groups)
+            if mask_mode == _MASK_COMPACT_SUFFIX
+            else mask
+        )
+        return mx.fast.scaled_dot_product_attention(q, k, v, scale=scale, mask=dense_mask)
     blocks = math.ceil(rows / _BLOCK)
     prefix_blocks = min(blocks, math.ceil(config.exact_prefix_rows / _BLOCK))
     suffix_blocks = min(
@@ -571,8 +679,15 @@ def sol_attention(
     thresholds = _thresholds(qc, kc, scale=scale, tau=config.tau)
     threadgroup = (32, 4, 1)
     query_tiles = math.ceil(rows / 32)
-    physical, route_counts = _kernel(prefix_blocks, suffix_blocks, blocks)(
-        inputs=[q, k, v, qc, kc, vc, thresholds],
+    physical, route_counts = _kernel(
+        prefix_blocks,
+        suffix_blocks,
+        blocks,
+        mask_mode=mask_mode,
+        exact_suffix_rows=config.exact_suffix_rows,
+        suffix_groups=suffix_groups,
+    )(
+        inputs=[q, k, v, qc, kc, vc, thresholds, *([mask] if mask is not None else [])],
         template=[
             ("BATCH", batch),
             ("HEADS", heads),
@@ -597,12 +712,84 @@ def supports_sol_attention(q: mx.array, mask: mx.array | None, config: SolAttent
 
     return bool(
         config.enabled
-        and mask is None
+        and (
+            mask is None
+            or (
+                mask.ndim == 3
+                and (
+                    (
+                        tuple(mask.shape) == (q.shape[0], q.shape[-2], q.shape[-2])
+                        and (config.exact_prefix_rows > 0 or config.exact_suffix_rows > 0)
+                    )
+                    or (
+                        mask.shape[0] == q.shape[0]
+                        and mask.shape[2] == q.shape[-2]
+                        and mask.shape[1]
+                        == len(
+                            config.exact_suffix_groups or (config.exact_suffix_rows,)
+                        )
+                        + 1
+                        and config.exact_prefix_rows == 0
+                        and config.exact_suffix_rows > 0
+                        and all(
+                            rows % _BLOCK == 0
+                            for rows in (
+                                config.exact_suffix_groups or (config.exact_suffix_rows,)
+                            )
+                        )
+                    )
+                )
+            )
+        )
         and q.ndim == 4
         and q.dtype == mx.bfloat16
         and q.shape[-1] == 128
         and q.shape[-2] >= config.min_tokens
     )
+
+
+def materialize_compact_attention_mask(
+    mask: mx.array,
+    suffix_groups: tuple[int, ...] = (),
+) -> mx.array:
+    """Expand target/reference templates for a dense fallback."""
+
+    if mask.ndim != 3 or mask.shape[1] < 2:
+        return mask
+    rows = int(mask.shape[2])
+    if suffix_groups:
+        if len(suffix_groups) + 1 != int(mask.shape[1]):
+            raise ValueError("Compact attention template count does not match suffix groups.")
+        target_rows = rows - sum(suffix_groups)
+        if target_rows <= 0:
+            raise ValueError("Compact attention suffix groups leave no target rows.")
+        query_templates = mx.concatenate(
+            [
+                mx.zeros((target_rows,), dtype=mx.int32),
+                *(
+                    mx.full((count,), index, dtype=mx.int32)
+                    for index, count in enumerate(suffix_groups, start=1)
+                ),
+            ]
+        )
+        return mx.take_along_axis(
+            mask,
+            query_templates[None, :, None],
+            axis=1,
+        )
+    if int(mask.shape[1]) != 2:
+        raise ValueError("Grouped compact attention masks require explicit suffix row counts.")
+    differs = mask[:, 0, :] != mask[:, 0, :1]
+    transition = mx.argmax(differs.astype(mx.int32), axis=1)
+    mx.eval(transition)
+    starts = [int(value) for value in transition.tolist()]
+    if any(value <= 0 or value >= rows for value in starts):
+        raise ValueError("Compact attention mask does not contain a valid suffix boundary.")
+    query_rows = mx.arange(rows)[None, :, None]
+    boundary = mx.array(starts, dtype=mx.int32)[:, None, None]
+    target_template = mask[:, 0, :][:, None, :]
+    reference_template = mask[:, 1, :][:, None, :]
+    return mx.where(query_rows < boundary, target_template, reference_template)
 
 
 def route_telemetry_report(
@@ -659,6 +846,7 @@ def route_telemetry_report(
 
 __all__ = [
     "SolAttentionConfig",
+    "materialize_compact_attention_mask",
     "route_telemetry_report",
     "sol_attention",
     "supports_sol_attention",

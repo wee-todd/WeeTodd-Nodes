@@ -249,7 +249,7 @@ def test_hires_fix_resolves_target_and_preserves_audio_contract(monkeypatch):
 
 
 def test_expected_nodes_are_registered():
-    assert len(NODE_CLASS_MAPPINGS) == 91
+    assert len(NODE_CLASS_MAPPINGS) == 93
     assert "WeeToddH3ComponentLoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3QuantizedTransformerLoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3Preflight" in NODE_CLASS_MAPPINGS
@@ -272,6 +272,8 @@ def test_expected_nodes_are_registered():
     assert "WeeToddLTX25DFRTemporalRefinement" in NODE_CLASS_MAPPINGS
     assert "WeeToddLTX25LoRALoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddLTX25ICLoRALoader" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX25MSRLoader" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX25MSRReferenceStack" in NODE_CLASS_MAPPINGS
     assert "WeeToddLTX25ICLoRAControlGuide" in NODE_CLASS_MAPPINGS
     assert "WeeToddLTX25ICLoRAPipelineMode" in NODE_CLASS_MAPPINGS
     assert "WeeToddLTX25ReferenceSheetGuide" in NODE_CLASS_MAPPINGS

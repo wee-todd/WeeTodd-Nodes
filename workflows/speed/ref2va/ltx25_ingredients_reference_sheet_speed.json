@@ -1,6 +1,6 @@
 {
-  "last_node_id": 9,
-  "last_link_id": 9,
+  "last_node_id": 10,
+  "last_link_id": 10,
   "nodes": [
     {
       "id": 1,
@@ -75,8 +75,8 @@
       },
       "widgets_values": [
         "Custom",
+        1344,
         768,
-        448,
         5.0,
         24.0,
         42,
@@ -112,8 +112,7 @@
           "name": "config",
           "type": "WEETODD_LTX25_CONFIG",
           "links": [
-            4,
-            6
+            10
           ],
           "slot_index": 0
         },
@@ -128,9 +127,54 @@
         "Node name for S&R": "WeeToddLTX25ICLoRAPipelineMode"
       },
       "widgets_values": [
-        "CFG++ quality — 8 steps / 15 real forwards",
+        "Fast single stage — 8 ancestral steps / 8 real forwards",
         "automatic",
-        "speed"
+        "full"
+      ]
+    },
+    {
+      "id": 10,
+      "type": "WeeToddLTX25SolAttention",
+      "pos": [
+        550,
+        680
+      ],
+      "size": [
+        470,
+        120
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "config",
+          "type": "WEETODD_LTX25_CONFIG",
+          "link": 10
+        }
+      ],
+      "outputs": [
+        {
+          "name": "config",
+          "type": "WEETODD_LTX25_CONFIG",
+          "links": [
+            4,
+            6
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "sol_attention_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddLTX25SolAttention"
+      },
+      "widgets_values": [
+        "paged_speed"
       ]
     },
     {
@@ -233,7 +277,8 @@
         "Describe every character, prop, and location panel visible in the reference sheet. Keep identities distinct.",
         "Describe one continuous five-second shot, physical action, camera behavior, dialogue, ambience, and sound effects.",
         1.0,
-        1.0
+        1.0,
+        "speed"
       ]
     },
     {
@@ -370,7 +415,7 @@
       "title": "Setup and model downloads",
       "properties": {},
       "widgets_values": [
-        "## LTX 2.5 Ingredients reference sheet\n\n1. Install WeeTodd Nodes and restart ComfyUI.\n2. Accept the model licenses and place the LTX 2.5 split components under `ComfyUI/models/` or a shared root from `extra_model_paths.yaml`.\n3. Download the Ingredients IC-LoRA into `ComfyUI/models/loras/`.\n4. Select one clean composite reference sheet. Leave workflow image paths empty when sharing.\n5. Describe the sheet panels separately from the generated action.\n6. Queue the workflow after **LTX 2.5 Preflight** succeeds.\n\nThe speed profile uses Ingredients LoRA strength 1.2, empty negative conditioning, and eight CFG++ sampler steps. It performs 10 real forwards by retaining CFG++ correction at two nonterminal steps. This workflow selects the speed 10-forward CFG++ schedule. Choose the quality 15-forward or balanced 12-forward schedule for measured compute savings, or **Fast single stage** for the distinct eight-forward ancestral shortcut. Automatic CFG++ execution selects serial; batched execution is an experimental lower-memory option. The reference image is repeated internally across all 121 frames and is not used as the first generated frame.\n\n### Downloads\n\n- [LTX 2.5 model components](https://huggingface.co/Lightricks/LTX-2.5)\n- [Ingredients IC-LoRA](https://huggingface.co/Lightricks/LTX-2.3-22b-IC-LoRA-Ingredients)\n\n### Baked Q8 setup\n\nFollow the README baked-Q8 instructions to convert the transformer and Gemma pack, then bake the Ingredients adapter once:\n\n`$COMFYUI_ROOT/.venv/bin/python $COMFYUI_ROOT/custom_nodes/WeeTodd-Nodes/scripts/fuse_ltx25_paged_lora.py $COMFYUI_ROOT/models/diffusion_models/ltx-2.5-22b-distilled-transformer-q8-paged $COMFYUI_ROOT/models/loras/ltx-2.3-22b-ic-lora-ingredients-0.9.safetensors $COMFYUI_ROOT/models/diffusion_models/ltx-2.5-22b-distilled-ingredients1p2-q8-paged --strength 1.2`\n\nThe baked checkpoint is self-describing. Do not connect a separate IC-LoRA Loader or the adapter will be applied twice."
+        "## LTX 2.5 Ingredients + Sol speed\n\n1. Install WeeTodd Nodes and restart ComfyUI.\n2. Accept the model licenses and place the LTX 2.5 split components under `ComfyUI/models/` or a shared root from `extra_model_paths.yaml`.\n3. Download the Ingredients IC-LoRA into `ComfyUI/models/loras/`.\n4. Select one clean composite reference sheet. Leave workflow image paths empty when sharing.\n5. Describe the sheet panels separately from the generated action.\n6. Queue the workflow only after **LTX 2.5 Preflight** succeeds.\n\nThis speed workflow uses the baked Q8 Ingredients transformer, eight real ancestral forwards, paged-speed Sol Attention, and the `speed` reference policy. The source sheet is center-cropped on a 32-pixel grid to at most about 384x224 before VAE encoding. This reduces persistent attention rows; use `balanced` or `quality` when tiny facial or accessory details matter more than speed. Sol changes the generated trajectory and is only useful when telemetry reports sparse kernel calls; small canvases may remain below its 16,000-row threshold.\n\n### Downloads\n\n- [LTX 2.5 model components](https://huggingface.co/Lightricks/LTX-2.5)\n- [Ingredients IC-LoRA](https://huggingface.co/Lightricks/LTX-2.3-22b-IC-LoRA-Ingredients)\n\n### Baked Q8 setup\n\nFollow the README baked-Q8 instructions to convert the transformer and Gemma pack, then bake the Ingredients adapter once:\n\n`$COMFYUI_ROOT/.venv/bin/python $COMFYUI_ROOT/custom_nodes/WeeTodd-Nodes/scripts/fuse_ltx25_paged_lora.py $COMFYUI_ROOT/models/diffusion_models/ltx-2.5-22b-distilled-transformer-q8-paged $COMFYUI_ROOT/models/loras/ltx-2.3-22b-ic-lora-ingredients-0.9.safetensors $COMFYUI_ROOT/models/diffusion_models/ltx-2.5-22b-distilled-ingredients1p2-q8-paged --strength 1.2`\n\nThe baked checkpoint is self-describing. Do not connect a separate IC-LoRA Loader or the adapter will be applied twice."
       ],
       "color": "#243447",
       "bgcolor": "#15202b"
@@ -395,7 +440,7 @@
     ],
     [
       4,
-      4,
+      10,
       0,
       7,
       1,
@@ -411,7 +456,7 @@
     ],
     [
       6,
-      4,
+      10,
       0,
       8,
       1,
@@ -440,6 +485,14 @@
       8,
       2,
       "STRING"
+    ],
+    [
+      10,
+      4,
+      0,
+      10,
+      0,
+      "WEETODD_LTX25_CONFIG"
     ]
   ],
   "groups": [],

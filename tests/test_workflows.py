@@ -365,7 +365,7 @@ def test_ltx25_any_video_upscale_workflow_uses_native_movie_components():
         (
             "speed",
             "ltx25_ingredients_reference_sheet_speed.json",
-            "speed",
+            "full",
             True,
         ),
     ),
@@ -388,7 +388,12 @@ def test_ltx25_ingredients_profiles_pin_the_intended_adapter_and_schedule(
         assert loader["widgets_values"][1] == "gemma4-12b-with-proj-ltx-2.5-q8-paged"
         assert config["widgets_values"][7] is True
         assert live_adapters == []
-    else:
+    if profile == "speed":
+        sol = next(node for node in nodes if node["type"] == "WeeToddLTX25SolAttention")
+        assert mode["widgets_values"][0].startswith("Fast single stage")
+        assert sol["widgets_values"] == ["paged_speed"]
+        assert config["widgets_values"][1:3] == [1344, 768]
+    if not uses_baked_q8:
         assert loader["widgets_values"][0].endswith("transformer-bf16.safetensors")
         assert loader["widgets_values"][1].endswith("bf16.safetensors")
         assert config["widgets_values"][7] is False

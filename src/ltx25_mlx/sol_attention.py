@@ -12,6 +12,7 @@ from ltx_core_mlx.model.transformer.rope import apply_rope_interleaved, apply_ro
 from wee_todd_mlx.execution_evidence import ExecutionEvidence
 from wee_todd_mlx.sol_attention import (
     SolAttentionConfig,
+    materialize_compact_attention_mask,
     route_telemetry_report,
     sol_attention,
     supports_sol_attention,
@@ -26,6 +27,7 @@ class _LTX25SolState:
     step_index: int = 0
     total_steps: int = 1
     exact_suffix_rows: int = 0
+    exact_suffix_groups: tuple[int, ...] = ()
     bf16_projection_cast_calls: int = 0
     observed_projected_dtype: str | None = None
     observed_kernel_dtype: str | None = None
@@ -36,6 +38,7 @@ class _LTX25SolState:
     last_route_counts: mx.array | None = None
     reinstall_compiled: Callable[[], None] | None = None
     compiled_exact_suffix_rows: int = 0
+    compiled_exact_suffix_groups: tuple[int, ...] = ()
     last_step_index: int | None = None
 
 
@@ -85,19 +88,36 @@ class _LTX25SolVideoAttention(Attention):
     ) -> mx.array:
         state = self._weetodd_sol_state
         evidence = state.evidence
+        compact_mask = bool(
+            attention_mask is not None
+            and attention_mask.ndim == 3
+            and attention_mask.shape[1] >= 2
+            and attention_mask.shape[2] == x.shape[1]
+        )
+
+        def dense_mask():
+            return (
+                materialize_compact_attention_mask(
+                    attention_mask,
+                    state.exact_suffix_groups,
+                )
+                if compact_mask
+                else attention_mask
+            )
+
         if not state.streaming_compiled:
             evidence.record_call()
-        config = state.config.with_exact_rows(suffix=state.exact_suffix_rows)
+        config = state.config.with_exact_rows(
+            suffix=state.exact_suffix_rows,
+            suffix_groups=state.exact_suffix_groups,
+        )
         if (
             encoder_hidden_states is not None
-            or attention_mask is not None
             or perturbation_mask is not None
         ):
             reason = (
                 "non_self_attention"
                 if encoder_hidden_states is not None
-                else "attention_mask"
-                if attention_mask is not None
                 else "perturbation_mask"
             )
             evidence.record_fallback(reason)
@@ -106,7 +126,7 @@ class _LTX25SolVideoAttention(Attention):
                 encoder_hidden_states=encoder_hidden_states,
                 rope_freqs=rope_freqs,
                 rope_freqs_k=rope_freqs_k,
-                attention_mask=attention_mask,
+                attention_mask=dense_mask(),
                 perturbation_mask=perturbation_mask,
             )
         if not config.active(
@@ -120,7 +140,7 @@ class _LTX25SolVideoAttention(Attention):
                 encoder_hidden_states=encoder_hidden_states,
                 rope_freqs=rope_freqs,
                 rope_freqs_k=rope_freqs_k,
-                attention_mask=attention_mask,
+                attention_mask=dense_mask(),
                 perturbation_mask=perturbation_mask,
             )
 
@@ -151,16 +171,22 @@ class _LTX25SolVideoAttention(Attention):
                 state.bf16_projection_cast_calls += 1
         state.observed_kernel_dtype = str(q.dtype)
         evidence.record_observed(dtype=q.dtype, shape=q.shape)
+        if attention_mask is not None and attention_mask.dtype != q.dtype:
+            attention_mask = attention_mask.astype(q.dtype)
 
         if state.force_dense_bf16:
             if not state.streaming_compiled:
                 evidence.record_eligible()
                 evidence.record_executed(work_units=0)
-            out = mx.fast.scaled_dot_product_attention(q, k, v, scale=self.scale)
-        elif not supports_sol_attention(q, None, config):
+            out = mx.fast.scaled_dot_product_attention(
+                q, k, v, scale=self.scale, mask=dense_mask()
+            )
+        elif not supports_sol_attention(q, attention_mask, config):
             reason = "unsupported_dtype" if q.dtype != mx.bfloat16 else "unsupported_shape"
             evidence.record_fallback(reason)
-            out = mx.fast.scaled_dot_product_attention(q, k, v, scale=self.scale)
+            out = mx.fast.scaled_dot_product_attention(
+                q, k, v, scale=self.scale, mask=dense_mask()
+            )
         else:
             if not state.streaming_compiled:
                 evidence.record_eligible()
@@ -171,6 +197,7 @@ class _LTX25SolVideoAttention(Attention):
                 v,
                 scale=self.scale,
                 config=config,
+                mask=attention_mask,
                 return_route_counts=True,
             )
             if state.streaming_compiled:
@@ -240,9 +267,9 @@ def configure_ltx25_sol_attention(
         "end_percent": config.end_percent,
         "dense_blocks": config.dense_blocks,
         "scope": (
-            "unmasked compiled paged video self-attention only"
+            "compiled paged video self-attention; IC masks require exact reference rows"
             if streaming
-            else "unmasked resident video self-attention only"
+            else "resident video self-attention; IC masks require exact reference rows"
         ),
         "kernel": "dense_bf16_control" if force_dense_bf16 else "sol_sparse_bf16",
         "streaming_compiled": streaming,
@@ -253,9 +280,9 @@ def configure_ltx25_sol_attention(
             "mlx_dense_bf16_control" if force_dense_bf16 else "mlx_fused_sol_bf16"
         ),
         scope=(
-            "unmasked compiled paged video self-attention only"
+            "compiled paged video self-attention; IC masks require exact reference rows"
             if streaming
-            else "unmasked resident video self-attention only"
+            else "resident video self-attention; IC masks require exact reference rows"
         ),
     )
     state = _LTX25SolState(
@@ -286,6 +313,7 @@ def configure_ltx25_sol_attention(
                     tuple(_CompiledSolBlock(block, state) for block in shared_blocks),
                 )
             state.compiled_exact_suffix_rows = state.exact_suffix_rows
+            state.compiled_exact_suffix_groups = state.exact_suffix_groups
 
         state.reinstall_compiled = reinstall_compiled
         reinstall_compiled()
@@ -324,6 +352,7 @@ def ltx25_sol_attention_report(model, policy: dict[str, object] | None = None) -
         "observed_kernel_dtype": state.observed_kernel_dtype,
         "observed_query_tokens": observed_query_tokens,
         "exact_suffix_rows": state.exact_suffix_rows,
+        "exact_suffix_groups": list(state.exact_suffix_groups),
         "approximation_candidate_rows": (
             None
             if observed_query_tokens is None
@@ -331,6 +360,9 @@ def ltx25_sol_attention_report(model, policy: dict[str, object] | None = None) -
         ),
         "compiled_exact_suffix_rows": (
             state.compiled_exact_suffix_rows if state.streaming_compiled else None
+        ),
+        "compiled_exact_suffix_groups": (
+            list(state.compiled_exact_suffix_groups) if state.streaming_compiled else None
         ),
         **(state.route_report or {}),
     }
@@ -342,6 +374,7 @@ def set_ltx25_sol_context(
     step_index: int,
     total_steps: int,
     exact_suffix_rows: int | None = None,
+    exact_suffix_groups: tuple[int, ...] | None = None,
 ) -> None:
     """Update schedule and exact reference-row state before one transformer evaluation."""
 
@@ -365,9 +398,15 @@ def set_ltx25_sol_context(
     if exact_suffix_rows is not None:
         resolved_suffix = max(0, int(exact_suffix_rows))
         state.exact_suffix_rows = resolved_suffix
+        state.exact_suffix_groups = tuple(
+            int(rows) for rows in (exact_suffix_groups or ())
+        )
         if (
             state.streaming_compiled
-            and resolved_suffix != state.compiled_exact_suffix_rows
+            and (
+                resolved_suffix != state.compiled_exact_suffix_rows
+                or state.exact_suffix_groups != state.compiled_exact_suffix_groups
+            )
             and state.reinstall_compiled is not None
         ):
             state.reinstall_compiled()

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -25,6 +26,11 @@ class LTX25ICReferenceReport:
     attention_strength: float
     control_type: str
     conditioning_mode: str
+    reference_size_policy: str
+    reference_token_count: int
+    target_token_count: int
+    dense_attention_multiplier_vs_target: float
+    attention_mask_layout: str
 
     def as_dict(self) -> dict[str, object]:
         return self.__dict__.copy()
@@ -95,6 +101,98 @@ def _resize_center_crop(video, height: int, width: int):
     return output
 
 
+LTX25_INGREDIENTS_REFERENCE_SIZE_POLICIES = {
+    "quality": None,
+    "balanced": 512 * 288,
+    "speed": 384 * 224,
+}
+
+
+class _CompactAttentionStrengthWrapper:
+    """Append one reference group with a two-row structured attention mask.
+
+    The first row describes target queries and the second describes reference
+    queries. The Sol kernel selects one row per query tile. Dense fallbacks can
+    expand the representation only when they execute.
+    """
+
+    def __init__(self, conditioning: object, *, attention_strength: float) -> None:
+        self.conditioning = conditioning
+        self.attention_strength = float(attention_strength)
+
+    def apply(self, state, spatial_dims: tuple[int, int, int]):
+        from ltx_core_mlx.conditioning.types.latent_cond import LatentState
+
+        if state.attention_mask is not None:
+            raise ValueError(
+                "Compact Ingredients attention requires the reference sheet to be the only "
+                "attention-strength conditioning group."
+            )
+        conditioned = self.conditioning.apply(state, spatial_dims)
+        target_tokens = int(state.latent.shape[1])
+        total_tokens = int(conditioned.latent.shape[1])
+        reference_tokens = total_tokens - target_tokens
+        if reference_tokens <= 0:
+            return conditioned
+        batch = int(conditioned.latent.shape[0])
+        dtype = conditioned.latent.dtype
+        strength = mx.full((batch, reference_tokens), self.attention_strength, dtype=dtype)
+        target_ones = mx.ones((batch, target_tokens), dtype=dtype)
+        reference_ones = mx.ones((batch, reference_tokens), dtype=dtype)
+        target_cross = mx.concatenate([target_ones, strength], axis=1)
+        reference_cross = mx.concatenate(
+            [
+                mx.full((batch, target_tokens), self.attention_strength, dtype=dtype),
+                reference_ones,
+            ],
+            axis=1,
+        )
+        compact_mask = mx.stack([target_cross, reference_cross], axis=1)
+        return LatentState(
+            latent=conditioned.latent,
+            clean_latent=conditioned.clean_latent,
+            denoise_mask=conditioned.denoise_mask,
+            positions=conditioned.positions,
+            attention_mask=compact_mask,
+        )
+
+
+def plan_ingredients_reference_grid(
+    *,
+    source_height: int,
+    source_width: int,
+    target_height: int,
+    target_width: int,
+    policy: str,
+) -> tuple[int, int]:
+    """Choose the largest bounded 32-pixel grid for one Ingredients sheet."""
+
+    if policy not in LTX25_INGREDIENTS_REFERENCE_SIZE_POLICIES:
+        raise ValueError(f"Unsupported Ingredients reference size policy: {policy!r}.")
+    max_height = min(target_height, (source_height // 32) * 32)
+    max_width = min(target_width, (source_width // 32) * 32)
+    if max_height < 32 or max_width < 32:
+        raise ValueError("An Ingredients reference sheet must be at least 32 by 32 pixels.")
+    budget = LTX25_INGREDIENTS_REFERENCE_SIZE_POLICIES[policy]
+    if budget is None or max_height * max_width <= budget:
+        return max_height, max_width
+
+    source_ratio = source_width / source_height
+    candidates = [
+        (height, width)
+        for height in range(32, max_height + 1, 32)
+        for width in range(32, max_width + 1, 32)
+        if height * width <= budget
+    ]
+    return max(
+        candidates,
+        key=lambda item: (
+            item[0] * item[1],
+            -abs(math.log((item[1] / item[0]) / source_ratio)),
+        ),
+    )
+
+
 def _reference_mask(mask: Any, *, frames: int, latent_f: int, latent_h: int, latent_w: int):
     if mask is None:
         return None
@@ -138,6 +236,8 @@ def encode_reference_video_conditioning(
     reference_downscale_factor: int = 1,
     reference_temporal_scale_factor: int = 1,
     control_type: str = "custom_preprocessed",
+    reference_size_policy: str = "quality",
+    compact_attention_mask: bool = False,
 ):
     """Encode a Comfy IMAGE batch and return an appendable IC-LoRA conditioning."""
     from ltx_core_mlx.conditioning.types.attention_strength_wrapper import (
@@ -166,8 +266,13 @@ def encode_reference_video_conditioning(
         # Reference sheets describe identity rather than the output canvas. Avoid
         # inventing source detail when a high-resolution generation would otherwise
         # enlarge a smaller sheet. The VAE still requires a 32-pixel grid.
-        ref_height = min(ref_height, (source_h // 32) * 32)
-        ref_width = min(ref_width, (source_w // 32) * 32)
+        ref_height, ref_width = plan_ingredients_reference_grid(
+            source_height=source_h,
+            source_width=source_w,
+            target_height=ref_height,
+            target_width=ref_width,
+            policy=reference_size_policy,
+        )
         if source_frames != 1:
             raise ValueError("An Ingredients reference sheet requires exactly one image.")
         if target_num_frames < 121:
@@ -205,6 +310,11 @@ def encode_reference_video_conditioning(
     mx.eval(encoded)
     latent_f, latent_h, latent_w = map(int, encoded.shape[2:])
     tokens = encoded.transpose(0, 2, 3, 4, 1).reshape(1, -1, 128)
+    target_latent_f = (target_num_frames - 1) // 8 + 1
+    target_token_count = (
+        target_latent_f * (target_height // 32) * (target_width // 32)
+    )
+    reference_token_count = int(tokens.shape[1])
     positions = compute_video_positions(
         latent_f,
         latent_h,
@@ -238,10 +348,16 @@ def encode_reference_video_conditioning(
             attention_mask=latent_mask * attention_strength,
         )
     elif attention_strength < 1.0:
-        conditioning = ConditioningItemAttentionStrengthWrapper(
-            conditioning=conditioning,
-            attention_mask=attention_strength,
-        )
+        if static_reference_sheet and compact_attention_mask:
+            conditioning = _CompactAttentionStrengthWrapper(
+                conditioning=conditioning,
+                attention_strength=attention_strength,
+            )
+        else:
+            conditioning = ConditioningItemAttentionStrengthWrapper(
+                conditioning=conditioning,
+                attention_mask=attention_strength,
+            )
     report = LTX25ICReferenceReport(
         source_frames=source_frames,
         encoded_frames=int(pixels.shape[2]),
@@ -262,8 +378,30 @@ def encode_reference_video_conditioning(
             if static_reference_sheet
             else "reference_video"
         ),
+        reference_size_policy=reference_size_policy,
+        reference_token_count=reference_token_count,
+        target_token_count=target_token_count,
+        dense_attention_multiplier_vs_target=(
+            (target_token_count + reference_token_count) ** 2
+            / target_token_count**2
+        ),
+        attention_mask_layout=(
+            "compact_two_row_suffix"
+            if static_reference_sheet
+            and compact_attention_mask
+            and latent_mask is None
+            and attention_strength < 1.0
+            else "full_matrix"
+            if latent_mask is not None or attention_strength < 1.0
+            else "none"
+        ),
     )
     return conditioning, report
 
 
-__all__ = ["LTX25ICReferenceReport", "encode_reference_video_conditioning"]
+__all__ = [
+    "LTX25ICReferenceReport",
+    "LTX25_INGREDIENTS_REFERENCE_SIZE_POLICIES",
+    "encode_reference_video_conditioning",
+    "plan_ingredients_reference_grid",
+]

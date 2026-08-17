@@ -238,11 +238,15 @@ class LTX25ComponentSpec:
     distilled_lora_path: str = ""
     loras: tuple[tuple[str, float], ...] = ()
     ic_loras: tuple[tuple[str, float], ...] = ()
+    msr_lora_path: str = ""
+    msr_lora_strength: float = 1.0
 
     def paths(self) -> dict[str, Path]:
         values = asdict(self)
         values.pop("loras", None)
         values.pop("ic_loras", None)
+        values.pop("msr_lora_path", None)
+        values.pop("msr_lora_strength", None)
         return {name: Path(value).expanduser() for name, value in values.items() if value}
 
     def validate(
@@ -263,6 +267,22 @@ class LTX25ComponentSpec:
                 "LTX 2.5 supports one active IC-LoRA adapter per generation. Remove the "
                 "additional IC-LoRA loaders; standard style LoRAs may remain separate."
             )
+        if self.msr_lora_path:
+            from .transformer import inspect_ltx25_msr_lora
+
+            resolved_msr = Path(self.msr_lora_path).expanduser()
+            if not resolved_msr.is_file():
+                raise FileNotFoundError(f"LTX 2.5 MSR LoRA file not found: {resolved_msr}")
+            if self.msr_lora_strength <= 0:
+                raise ValueError("LTX 2.5 MSR LoRA strength must be positive.")
+            if (
+                len(self.ic_loras) != 1
+                or Path(self.ic_loras[0][0]).resolve() != resolved_msr.resolve()
+            ):
+                raise ValueError(
+                    "The dedicated MSR loader must own the single active IC-LoRA adapter."
+                )
+            inspect_ltx25_msr_lora(resolved_msr)
         required = {
             "transformer_path",
             "text_encoder_path",
@@ -917,6 +937,7 @@ class LTX25RuntimeCache:
                     "dfr_stage2_transformer_path": config.dfr_prebaked_transformer_path,
                     "loras": spec.loras,
                     "ic_loras": spec.ic_loras,
+                    "msr_lora_path": spec.msr_lora_path,
                 }
                 signature = inspect.signature(pipeline_class)
                 accepted = {
@@ -942,6 +963,7 @@ class LTX25RuntimeCache:
         image_path: str | None = None,
         image_inputs: list[dict[str, object]] | None = None,
         video_references: list[dict[str, object]] | None = None,
+        msr_references: list[dict[str, object]] | None = None,
         audio_reference: dict[str, object] | None = None,
         unload_after: bool = True,
         check_interrupted=None,
@@ -1004,6 +1026,7 @@ class LTX25RuntimeCache:
             "image": image_path,
             "images": images,
             "video_references": video_references or [],
+            "msr_references": msr_references or [],
             "audio_reference": audio_reference,
             "stage1_steps": config.stage1_steps,
             "stage2_steps": config.stage2_steps,
@@ -1118,6 +1141,7 @@ class LTX25RuntimeCache:
                 "runtime_cached": not unload_after,
                 "conditioning": {
                     "video_reference_count": len(video_references or ()),
+                    "msr_reference_count": len(msr_references or ()),
                     "audio_driven": audio_reference is not None,
                     "audio_output": (
                         "original_comfy_audio" if audio_reference is not None else "generated"
@@ -1160,7 +1184,10 @@ class LTX25RuntimeCache:
         """Generate an exact latent-native LTX 2.5 chained timeline."""
         from .chaining import plan_ltx25_chain
 
-        report = spec.validate(config.pipeline_mode)
+        report = spec.validate(
+            config.pipeline_mode,
+            require_spatial_upscaler=not config.ic_lora_single_stage,
+        )
         scales = tuple(int(value) for value in report["video_scale_factors"])
         config.validate(scale_factors=scales)
         if config.duration_mode != "manual":
@@ -1212,6 +1239,12 @@ class LTX25RuntimeCache:
                     check_interrupted=check_interrupted,
                     step_callback=step_callback,
                     prompt_context=config.prompt_context,
+                    ic_lora_single_stage=config.ic_lora_single_stage,
+                    stage1_sampler=config.stage1_sampler,
+                    cfg_pp_batched=config.cfg_pp_batched,
+                    cfg_pp_schedule=config.cfg_pp_schedule,
+                    stage1_steps=config.stage1_steps,
+                    stage2_steps=config.stage2_steps,
                 )
             if check_interrupted is not None:
                 check_interrupted()
@@ -1244,6 +1277,7 @@ class LTX25RuntimeCache:
                 "resolved_prompt_context": getattr(pipeline, "last_prompt_context", None),
                 "feed_forward_backend": getattr(pipeline, "feed_forward_report", None),
                 "feed_forward_runtime": feed_forward_runtime,
+                "sol_attention": getattr(pipeline, "sol_attention_report", None),
                 "paged_transformer": getattr(pipeline, "paged_transformer_report", None),
                 "paged_text_encoder": getattr(
                     getattr(pipeline, "prompt_encoder", None),

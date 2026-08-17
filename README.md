@@ -57,10 +57,11 @@ Frames** when the graph needs numbered middle frames.
 | --- | --- | --- |
 | Balance | [LTX 2.3 two-stage](workflows/balance/t2v/ltx23_two_stage.json) | Standalone LTX 2.3 synchronized generation. |
 | Balance | [LTX 2.5 768×512](workflows/balance/t2v/ltx25_768x512_two_stage.json) | Recommended LTX 2.5 starting point with the official 8+3 schedule. |
+| Speed | [LTX 2.5 1344×768 Sol paged speed](workflows/speed/t2v/ltx25_1344x768_sol_paged_speed.json) | Eight-forward full-resolution T2V with Q8 paging and fused Sol Attention; verify sparse calls in metadata. |
 | Balance | [LTX 2.5 audio-to-video](workflows/balance/ref2va/ltx25_audio_to_video.json) | Freeze one input audio track during both visual stages and publish the original waveform. |
 | Performance | [LTX 2.5 Ingredients quality](workflows/performance/ref2va/ltx25_ingredients_reference_sheet_quality.json) | Full 15-forward CFG++ Ingredients generation. |
 | Balance | [LTX 2.5 Ingredients balanced](workflows/balance/ref2va/ltx25_ingredients_reference_sheet_balanced.json) | Hybrid 12-forward CFG++ Ingredients generation. |
-| Speed | [LTX 2.5 Ingredients speed](workflows/speed/ref2va/ltx25_ingredients_reference_sheet_speed.json) | Hybrid 10-forward CFG++ Ingredients generation. |
+| Speed | [LTX 2.5 Ingredients + Sol speed](workflows/speed/ref2va/ltx25_ingredients_reference_sheet_speed.json) | Eight-forward Q8 Ingredients generation with compact reference sizing and paged-speed Sol Attention. |
 | Balance | [LTX 2.5 Union Canny](workflows/balance/ref2va/ltx25_union_canny_balanced.json) | MLX-native Canny preprocessing with baked Q8 Union Control. |
 | Balance | [LTX 2.5 Union Depth](workflows/balance/ref2va/ltx25_union_depth_balanced.json) | MLX Video Depth Anything preprocessing with baked Q8 Union Control. |
 | Balance | [LTX 2.5 Union Pose](workflows/balance/ref2va/ltx25_union_pose_balanced.json) | Preprocessed pose-video control with baked Q8 Union Control. |
@@ -172,11 +173,14 @@ in standard ComfyUI folders.
 | `models/loras/` | Optional IC control: [`ltx-2.3-22b-ic-lora-union-control-ref0.5.safetensors`](https://huggingface.co/Lightricks/LTX-2.3-22b-IC-LoRA-Union-Control) |
 | `models/loras/` | Optional Motion Track: [`ltx-2.3-22b-ic-lora-motion-track-control-ref0.5.safetensors`](https://huggingface.co/Lightricks/LTX-2.3-22b-IC-LoRA-Motion-Track-Control) |
 | `models/loras/` | Optional Ingredients reference sheet: [`ltx-2.3-22b-ic-lora-ingredients-0.9.safetensors`](https://huggingface.co/Lightricks/LTX-2.3-22b-IC-LoRA-Ingredients) |
+| `models/loras/LTX-2.5/` | Optional multi-subject reference: [`LTX-2.5-Licon-MSR-V1.safetensors`](https://huggingface.co/LiconStudio/LTX-2.5-Multiple-Subject-Reference) |
 | `models/diffusion_models/` | Derived DFR stage one: `ltx-2.5-22b-dev-distilled450-q8-paged/` |
 | `models/diffusion_models/` | Derived DFR stage two: `ltx-2.5-22b-dev-distilled450-detail2x-q8-paged/` |
 
-The default 8+3 distilled workflow remains the fastest path. For guided generation, connect **LTX
-2.5 Guided Model Loader** and **LTX 2.5 Quality Mode**. **Production guided** runs 30 guided Euler
+The official 8+3 distilled workflow remains the recommended compatibility baseline. For eligible
+long full-resolution clips, the experimental eight-forward single-stage Sol workflow can be faster,
+but it changes the attention path and must report fused calls in generation metadata. For guided
+generation, connect **LTX 2.5 Guided Model Loader** and **LTX 2.5 Quality Mode**. **Production guided** runs 30 guided Euler
 iterations with CFG, STG, and audio-video modality guidance. **HQ guided** runs 15 second-order
 `res_2s` iterations with CFG and modality guidance. Both reload the development transformer with
 the official rank-450 distilled LoRA for the three full-resolution refinement iterations. Guided
@@ -199,6 +203,20 @@ spline control points, and explicit per-frame coordinates. Canny preserves edges
 Depth preserves camera movement and scene geometry. Pose transfers human movement. Use one control
 group at a time as the default memory policy. IC-LoRA requires the distilled model. Combined video
 and audio reference input remains gated as an unvalidated LipDub topology.
+
+For separate character, object, clothing, and background images, attach **LTX 2.5 MSR Loader**
+and chain one to five **LTX 2.5 MSR Reference Stack** nodes. The stack preserves connection order,
+moves the optional background to the final learned slot, and emits `Image 1` through `Image 5`
+prompt guidance. MSR currently uses the full-resolution single-stage distilled path and cannot be
+combined with another IC-LoRA, video-reference stack, or audio-reference stack. Each reference is
+encoded independently; subject and object images are fitted without cropping, while the optional
+background is center-cropped. The default 33-frame quality policy matches the target canvas;
+balanced and speed are explicit lower-density experiments. Use 25 reference frames with Sol
+Attention when the resolved reference grid produces 64-row-aligned groups; the standard
+1,152-by-640 quality grid then produces 2,880 rows per subject and stays on the fused path. A
+33-frame reference at that grid produces 3,600 rows and safely falls back to dense attention. The
+loader validates the learned Fourier-slot tensors and all 480 rank-128 adapter pairs before
+execution, and reads the five BF16 slot tensors through MLX without evaluating the full adapter.
 
 The Union Control checkpoint covers Canny, Depth, and Pose and declares `ref0.5`, so its reference
 video is encoded at half of the active generation stage. The official two-stage workflow applies
@@ -366,6 +384,23 @@ the complete generation and skip the spatial upscaler. The recommended training 
 768×448, 121 frames, and 24 fps. The reference sheet is context; it is not pasted into the first
 output frame.
 
+Reference sizing is independent from the output canvas. **Quality** retains the largest source and
+target-compatible 32-pixel grid, **balanced** caps the sheet near 512×288, and **speed** caps it
+near 384×224. The effective size, reference rows, target rows, and dense-attention multiplier are
+recorded in generation metadata. In a matched 1344×768 Q8 Ingredients sweep, reducing the same
+768×448 sheet to 512×288 cut sampling from 492.83 to 376.67 seconds (23.6%); 384×224 cut it to
+323.46 seconds (34.4%). All three retained both test identities, while the smaller grids changed
+framing and motion and can weaken tiny facial or accessory details. Peak MLX allocation remained
+about 18.30 GiB, so this is a speed policy rather than a demonstrated memory reduction.
+
+Full-resolution single-stage chaining can also use Sol. In a two-window 1344×768 validation, both
+windows completed 384 fused calls with zero fallbacks. Window one used 16,128 target rows and
+avoided 72.5% of dense key-row work; window two used 20,160 rows including 4,032 exact continuation
+rows and avoided 47.3%. The nine-second workflow completed in 701.8 seconds at a 34.02 GB MLX peak.
+Frame and audio-spectrum review found a continuous join. The unguided first window duplicated one
+subject before the seam, so this validates execution and continuity—not strict character-count
+adherence.
+
 The video-refine workflow also requires the
 [pixel-spatial upscaler IC-LoRA](https://huggingface.co/Lightricks/LTX-2.5-22b-IC-LoRA-Pixel-Spatial-Upscaler)
 under `models/loras/LTX-2.5/`.
@@ -480,7 +515,8 @@ work. Results apply to the stated workflow and hardware conditions.
 | H3 head and FFN row chunking | Sampling memory | Unmeasured; bounded by construction | Independently limits SDPA head groups and packed-row SwiGLU intermediates through the Low-Memory Tuning node. | Same operations and ordering within each independent chunk; checkpoint parity tests are still required before claiming bit identity. |
 | H3 token and workspace budget | Preflight | Diagnostic | Reports target, conditioning, packed-token, attention-score, and bounded-workspace estimates before allocation. | Reporting only. |
 | LTX 2.5 Q8 paging | Memory and speed | Very high | 9.90 GB and 78.38 s versus 31.60 GB and 102.13 s for matched BF16 one-block streaming at 768×512. | Q8 changes the numerical trajectory. |
-| LTX 2.5 fused Sol attention | Long-sequence sampling speed | Experimental | Matched 1344×768 five-second quality, balanced, and speed runs completed in 306.98, 294.49, and 289.45 seconds while avoiding 65.17%, 69.46%, and 72.95% of dense key-row work. Q8 `paged_speed` T2V completed in 287.38 seconds at a 27.70 GiB MLX peak and 29.57 GiB complete-Comfy peak. A real Ingredients reference run preserved all 5,376 appended reference rows as exact context, used 21,504 total video rows, completed sampling in 492.83 seconds, and peaked at 19.71 GiB for complete ComfyUI. | Requires at least 16,000 video tokens. It casts eligible FP32 Q/K/V projections to BF16 and uses approximate routing only for target rows, so composition and trajectory can change while reference rows remain exact. Use `paged_speed` only with low-RAM Q8 streaming. |
+| LTX 2.5 fused Sol attention | Long-sequence sampling speed | Experimental | In the matched compact Ingredients test, paged-speed Sol reduced sampling from 358.94 to 323.46 seconds (9.9%) and total time from 379.15 to 343.74 seconds (9.3%). At 17,472 rows, mask storage fell from 610,541,568 to 69,888 BF16 bytes. A matched two-subject MSR run used two exact 2,880-row groups, executed all 384 fused calls, reduced sampling from 411.19 to 390.29 seconds, and reduced MLX peak from 16.05 to 14.58 GB. | Requires at least 16,000 video tokens. It casts eligible FP32 Q/K/V projections to BF16 and uses approximate routing only for target rows, so composition and trajectory can change while reference rows remain exact. Every grouped suffix must align to 64 rows; incompatible grids safely fall back. Use `paged_speed` only with low-RAM Q8 streaming. |
+| LTX 2.5 Ingredients reference sizing | Reference-conditioning speed | High | On the matched 1344×768 run, balanced 512×288 and speed 384×224 reference grids reduced sampling by 23.6% and 34.4% versus the 768×448 quality grid. | Does not change the source file. It changes encoded reference density and may change fine identity, framing, and motion. Effective rows are recorded in metadata. |
 | LTX 2.5 temporal VAE tiling | Decode memory | High for long clips | Activates from an explicit decode-memory budget and grows in value with duration. | Preserves the synchronized output contract. |
 | LTX 2.5 generated-keyframe slots | Motion allocation | Experimental | Adds evenly distributed learned interior slots during stage one without changing existing workflow schemas. | Changes the latent token sequence and output. |
 | LTX 2.5 Diffusion VAE | Decode quality | Experimental | On a matched fast-motion 512×512 latent, the reference decode took 66.41 s at an 8.41 GB MLX peak. | Runs the official one-step pixel-diffusion decoder and changes decoded pixels. Conv VAE remains the speed and low-memory default. |
@@ -495,12 +531,12 @@ work. Results apply to the stated workflow and hardware conditions.
 
 | Rank | Candidate | Potential gain | Confidence |
 | ---: | --- | --- | --- |
-| 1 | Exact LTX 2.5 reference-context compaction or reuse | High IC-LoRA speed potential | Medium-low; the trained reference topology must remain intact |
+| 1 | Exact reusable LTX 2.5 reference K/V state | High IC-LoRA speed potential beyond density reduction | Medium-low; projections and attention depend on every denoise-step hidden state |
 | 2 | H3-specific W4A8 projection kernel | Very high checkpoint and resident-memory reduction | Low |
 | 3 | Complete-process BF16 one-block paging validation | Very high BF16 peak-memory reduction | Medium; q8 remains faster with four-block windows |
-| 4 | Sol attention with masked references and continuation | Medium-to-high long-sequence speed potential | Medium; unmasked T2V and exact IC-LoRA suffixes are validated |
+| 4 | Extend real LTX 2.5 MSR validation from two references to three through five | High reference feature value | Medium; real two-subject identity, BF16 loading, dense masks, and 384-call grouped Metal execution pass |
 | 5 | Ref2VA automatic-density quality validation | High Ref2VA speed and memory reduction | Medium; full density remains the default |
-| 6 | LTX 2.5 temporal image-conditioning and chain parity | Medium feature completeness | Medium |
+| 6 | LTX 2.5 temporal image-conditioning and longer-chain parity | Medium feature completeness | Medium |
 
 ## Memory guidance
 
@@ -587,13 +623,14 @@ This table is generated from the registered node contracts. Run
 | LTX 2.5 Component Loader (MLX) | Select LTX 2.5 split components without loading weights or downloading files. Self-describing paged transformers may contain one prebaked IC-LoRA. | LTX 2.5 — Loaders | Experimental |
 | LTX 2.5 LoRA Loader (MLX) | Attach a generic LTX 2.5 transformer LoRA, including block and non-block targets. Multiple loader nodes may be chained. Use the dedicated loader for IC-LoRA task adapters. | LTX 2.5 — Loaders | Supported |
 | LTX 2.5 IC-LoRA Loader (MLX) | Attach one LTX 2.5-compatible IC-LoRA for video/reference conditioning. Official LTX 2.3 22B adapters pass an additional shape check. The selected IC-LoRA Pipeline Mode determines whether the adapter runs for stage one or the full generation. Do not use this node with a transformer that already bakes the same IC-LoRA. | LTX 2.5 — Loaders | Experimental |
+| LTX 2.5 MSR Loader (MLX) | Attach one LTX 2.5 MSR adapter after validating all learned Fourier-slot tensors and 480 rank-128 transformer pairs. The slot tensors load only when references execute. | LTX 2.5 — Loaders | Supported |
 | LTX 2.5 Guided Model Loader (MLX) | Select the LTX 2.5 development transformer for guided stage one and the official rank-450 distilled LoRA for stage two. No weights load in this node. | LTX 2.5 — Loaders | Experimental |
 | LTX 2.5 Generation Config | Configure the official distilled 8+3-evaluation LTX 2.5 two-stage schedule. | LTX 2.5 — Core | Experimental |
 | LTX 2.5 Quality Mode | Choose fast distilled inference, production guided Euler, or the official HQ second-order res_2s recipe without changing the base Generation Config schema. | LTX 2.5 — Core | Experimental |
 | LTX 2.5 Automatic Duration | Predict one-shot duration from the prompt with the official LTX 2.5 duration head. The manual duration remains unchanged when this modifier is not connected. | LTX 2.5 — Core | Supported |
 | LTX 2.5 Generated Keyframes | Apply LTX 2.5 generated interior keyframe slots as a composable config modifier. | LTX 2.5 — Conditioning | Supported |
 | LTX 2.5 Full-Resolution Single Stage | Run the distilled transformer once at the final resolution without latent upscaling. This experimental path supports T2V and reference-conditioned generation. | LTX 2.5 — Optimization | Experimental |
-| LTX 2.5 Sol Attention (MLX Experimental) | Experimental MLX Sol-style sparse video self-attention for long, full-resolution single-stage LTX 2.5 sequences, including Q8 paged mode. | LTX 2.5 — Optimization | Experimental |
+| LTX 2.5 Sol Attention (MLX Experimental) | Experimental MLX Sol-style sparse video self-attention for long, full-resolution single-stage LTX 2.5 sequences, including Q8 paged mode, exact reference suffixes, compatible structured IC masks, and latent continuation. | LTX 2.5 — Optimization | Experimental |
 | LTX 2.5 Diffusion VAE Optimization | Select an MLX Diffusion VAE execution layout. It does not affect the convolutional VAE. | LTX 2.5 — Optimization | Experimental |
 | LTX 2.5 DFR Detail Refinement | Enable MLX Diffusion Fidelity Rendering: segment-grid generated keyframes, stage-one latent reference conditioning, stage-two-only Pixel-Spatial IC-LoRA, optional exact prebaked Q8 adapter pages, and untouched stage-one audio publication. | LTX 2.5 — Conditioning | Experimental |
 | LTX 2.5 DFR Temporal Refinement | Experimentally add one or two learned x2 temporal DFR rounds. Each round preserves stage-one audio, doubles playback frame rate, reapplies one-shot image anchors, and adds four transformer evaluations per temporal tile. Current MLX visual parity is not yet production-validated. | LTX 2.5 — Conditioning | Experimental |
@@ -602,9 +639,10 @@ This table is generated from the registered node contracts. Run
 | LTX 2.5 Media Conditioning | Build a shared LTX 2.5 image, video, audio, or mask conditioning stack. Image keyframes, IC-LoRA video references, and one frozen audio-driven source execute. Standalone inpaint masks remain gated. | LTX 2.5 — Conditioning | Experimental |
 | LTX 2.5 IC-LoRA Control Guide | Add one preprocessed Canny, depth, pose, Motion Track, or custom IC-LoRA guide. Use the LTX 2.5 distilled model and the matching task adapter. | LTX 2.5 — Conditioning | Experimental |
 | LTX 2.5 IC-LoRA Pipeline Mode | Select full or hybrid CFG++, the eight-forward single-stage shortcut, or the existing two-stage stage-one-control pipeline. | LTX 2.5 — Conditioning | Experimental |
-| LTX 2.5 Ingredients Reference Sheet | Condition LTX 2.5 from one Ingredients reference sheet. The image is repeated internally across the full clip and encoded as IC-LoRA reference context. | LTX 2.5 — Conditioning | Experimental |
+| LTX 2.5 Ingredients Reference Sheet | Condition LTX 2.5 from one Ingredients reference sheet. The image is repeated internally across the full clip and encoded as IC-LoRA reference context. Quality, balanced, and speed policies control the encoded reference grid independently of the output canvas. | LTX 2.5 — Conditioning | Experimental |
+| LTX 2.5 MSR Reference Stack | Build an ordered one-to-five-image LTX 2.5 MSR stack. Subject and object references stay in connection order; one optional background is always assigned the final slot. | LTX 2.5 — Conditioning | Supported |
 | LTX 2.5 Generate Video + Audio | Generate synchronized LTX 2.5 video and audio through the MLX adapter. | LTX 2.5 — Core | Experimental |
-| LTX 2.5 Generate Chained Timeline | Generate two to four overlapping LTX 2.5 windows with timeline-aligned latent guides, causal-aware latent transitions, and one synchronized audio/video decode. | LTX 2.5 — Core | Experimental |
+| LTX 2.5 Generate Chained Timeline | Generate two to four overlapping LTX 2.5 windows with timeline-aligned latent guides, causal-aware latent transitions, and one synchronized audio/video decode. Supports the two-stage path and full-resolution single-stage Sol configurations. | LTX 2.5 — Core | Experimental |
 | LTX 2.5 Video Upscale / Refine | Upscale decoded ComfyUI IMAGE+AUDIO from any movie through LTX 2.5 latent space, optionally adding video-only refinement while preserving the source audio. | LTX 2.5 — Core | Experimental |
 | LTX 2.5 Unload MLX Runtime | Release process-local LTX 2.5 state. | LTX 2.5 — Core | Supported |
 | Canny Preprocessor (MLX) | Create temporally aligned Canny control frames with MLX. The defaults match ComfyUI's current normalized-threshold Canny contract. | MLX preprocessors — Edges | Experimental |

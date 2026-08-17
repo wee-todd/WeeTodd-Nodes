@@ -91,6 +91,7 @@ class LTX25DistilledPipeline:
         sol_attention_profile: str = "disabled",
         loras: tuple[tuple[str, float], ...] = (),
         ic_loras: tuple[tuple[str, float], ...] = (),
+        msr_lora_path: str = "",
         verbose: bool = True,
     ) -> None:
         self.transformer_path = Path(transformer_path)
@@ -114,6 +115,7 @@ class LTX25DistilledPipeline:
         self.sol_attention_report: dict[str, object] = {"enabled": False}
         self.loras = tuple(loras)
         self.ic_loras = tuple(ic_loras)
+        self.msr_lora_path = Path(msr_lora_path) if msr_lora_path else None
         self.baked_ic_loras = tuple(
             item
             for item in transformer_metadata(self.transformer_path).get(
@@ -645,6 +647,7 @@ class LTX25DistilledPipeline:
         image: str | None = None,
         images=None,
         video_references=None,
+        msr_references=None,
         audio_reference=None,
         stage1_steps: int = 8,
         stage2_steps: int = 3,
@@ -705,8 +708,6 @@ class LTX25DistilledPipeline:
             raise ValueError("LTX 2.5 IC-LoRA single-stage mode requires distilled sampling.")
         if ic_lora_single_stage and (dfr_enabled or temporal_upsample_rounds):
             raise ValueError("LTX 2.5 IC-LoRA single-stage mode cannot be combined with DFR.")
-        if ic_lora_single_stage and (continuation is not None or return_continuation):
-            raise ValueError("LTX 2.5 IC-LoRA single-stage mode is not available for chaining.")
         if pipeline_mode != "distilled" and self.distilled_lora_path is None:
             raise ValueError("Guided LTX 2.5 generation requires a stage-two distilled LoRA.")
         if temporal_upsample_rounds not in {0, 1, 2}:
@@ -789,6 +790,16 @@ class LTX25DistilledPipeline:
             aggressive_cleanup()
             timings["prompt_release_seconds"] = time.perf_counter() - release_started
         resolved_video_references = list(video_references or ())
+        resolved_msr_references = list(msr_references or ())
+        if resolved_msr_references:
+            if self.msr_lora_path is None:
+                raise ValueError("LTX 2.5 MSR references require the dedicated MSR loader.")
+            if resolved_video_references:
+                raise ValueError("Use either MSR references or an ordinary IC-LoRA guide.")
+            if not ic_lora_single_stage:
+                raise ValueError(
+                    "LTX 2.5 MSR currently requires full-resolution single-stage mode."
+                )
         if resolved_video_references and not (self.ic_loras or self.baked_ic_loras):
             raise ValueError(
                 "LTX 2.5 video-reference conditioning requires a dedicated IC-LoRA loader."
@@ -857,6 +868,7 @@ class LTX25DistilledPipeline:
                 frame_rate=frame_rate,
             )
         ic_reference_reports = []
+        msr_group_rows: tuple[int, ...] = ()
         if resolved_video_references:
             from .ic_lora import encode_reference_video_conditioning
 
@@ -896,11 +908,36 @@ class LTX25DistilledPipeline:
                     control_type=str(
                         reference.get("control_type", "custom_preprocessed")
                     ),
+                    reference_size_policy=str(
+                        reference.get("reference_size_policy", "quality")
+                    ),
+                    compact_attention_mask=(
+                        ic_lora_single_stage
+                        and self.sol_attention_profile != "disabled"
+                    ),
                 )
                 conditionings.append(conditioning)
                 ic_reference_reports.append(reference_report.as_dict())
             timings["ic_lora_references"] = ic_reference_reports
-        if self.low_memory and (resolved_images or resolved_video_references):
+        if resolved_msr_references:
+            from .msr import encode_ltx25_msr_references
+
+            encoder = self.image_conditioner.load()
+            msr_conditioning, msr_reports = encode_ltx25_msr_references(
+                references=tuple(resolved_msr_references),
+                video_encoder=encoder,
+                slot_checkpoint=self.msr_lora_path,
+                target_height=half_h,
+                target_width=half_w,
+                frame_rate=frame_rate,
+                compact_attention_mask=self.sol_attention_profile != "disabled",
+            )
+            conditionings.append(msr_conditioning)
+            msr_group_rows = msr_conditioning.group_rows
+            timings["msr_references"] = [report.as_dict() for report in msr_reports]
+        if self.low_memory and (
+            resolved_images or resolved_video_references or resolved_msr_references
+        ):
             reference_release_started = time.perf_counter()
             self.image_conditioner.free()
             aggressive_cleanup()
@@ -909,7 +946,7 @@ class LTX25DistilledPipeline:
             )
         sampling_load_started = time.perf_counter()
         self.load(
-            include_ic_loras=bool(resolved_video_references),
+            include_ic_loras=bool(resolved_video_references or resolved_msr_references),
             load_spatial_upscaler=not ic_lora_single_stage,
         )
         timings["sampling_component_load_seconds"] = time.perf_counter() - sampling_load_started
@@ -1000,6 +1037,7 @@ class LTX25DistilledPipeline:
                 step_index=0,
                 total_steps=stage1_steps,
                 exact_suffix_rows=max(0, int(video_state.latent.shape[1]) - target_tokens),
+                exact_suffix_groups=msr_group_rows,
             )
         from .feed_forward import set_mpp_feed_forward_enabled
 
@@ -1144,12 +1182,14 @@ class LTX25DistilledPipeline:
 
         if ic_lora_single_stage:
             target_tokens = requested_latent_f * latent_h * latent_w
+            generated_stage1 = stage1.video_latent[:, :target_tokens, :]
+            generated_audio = stage1.audio_latent[:, :requested_audio_tokens, :]
             video_latent = self.video_patchifier.unpatchify(
-                stage1.video_latent[:, :target_tokens, :],
+                generated_stage1,
                 (requested_latent_f, latent_h, latent_w),
             )
             audio_latent = self.audio_patchifier.unpatchify(
-                stage1.audio_latent[:, :requested_audio_tokens, :]
+                generated_audio
             )
             mx.eval(video_latent, audio_latent)
             timings["ic_lora_stage_scope"] = "single_stage_full_resolution"
@@ -1171,6 +1211,31 @@ class LTX25DistilledPipeline:
                 )
             )
             self.last_timings = timings
+            if return_continuation:
+                if not output_video_context_frames or not output_audio_context_tokens:
+                    raise ValueError(
+                        "LTX 2.5 continuation output requires positive video and audio context."
+                    )
+                tail_tokens = output_video_context_frames * latent_h * latent_w
+                if tail_tokens >= generated_stage1.shape[1]:
+                    raise ValueError("LTX 2.5 continuation context is invalid for this window.")
+                if output_audio_context_tokens >= generated_audio.shape[1]:
+                    raise ValueError(
+                        "LTX 2.5 audio continuation is longer than its source window."
+                    )
+                stage1_tail = mx.contiguous(generated_stage1[:, -tail_tokens:, :])
+                audio_tail = mx.contiguous(
+                    generated_audio[:, -output_audio_context_tokens:, :]
+                )
+                mx.eval(stage1_tail, audio_tail)
+                continuation_result = LTX25LatentContinuation(
+                    stage1_video_tokens=stage1_tail,
+                    stage2_video_tokens=stage1_tail,
+                    audio_tokens=audio_tail,
+                    video_latent_frames=output_video_context_frames,
+                    audio_token_count=output_audio_context_tokens,
+                )
+                return video_latent, audio_latent, continuation_result
             return video_latent, audio_latent
 
         upscale_started = time.perf_counter()
@@ -1521,6 +1586,12 @@ class LTX25DistilledPipeline:
         check_interrupted=None,
         step_callback=None,
         prompt_context: str = "official_1024",
+        ic_lora_single_stage: bool = False,
+        stage1_sampler: str = "euler_ancestral",
+        cfg_pp_batched: bool = False,
+        cfg_pp_schedule: str = "full",
+        stage1_steps: int = 8,
+        stage2_steps: int = 3,
     ) -> str:
         """Generate, assemble, decode, and publish an exact latent-native chain."""
         if len(prompts) != window_count:
@@ -1541,7 +1612,13 @@ class LTX25DistilledPipeline:
         audio_windows = []
         continuation = None
         window_timings = []
-        total_evaluations = window_count * 11
+        stage1_forwards = (
+            stage1_steps
+            if stage1_sampler != "euler_ancestral_cfg_pp"
+            else stage1_steps + len(LTX25_CFG_PP_SCHEDULES[cfg_pp_schedule])
+        )
+        forwards_per_window = stage1_forwards + stage2_steps
+        total_evaluations = window_count * forwards_per_window
         for index, (prompt, encoded) in enumerate(zip(prompts, encoded_prompts, strict=True)):
             if check_interrupted is not None:
                 check_interrupted()
@@ -1558,7 +1635,7 @@ class LTX25DistilledPipeline:
                 check_interrupted=check_interrupted,
                 step_callback=(
                     (
-                        lambda completed, _total, offset=index * 11: step_callback(
+                        lambda completed, _total, offset=index * forwards_per_window: step_callback(
                             offset + completed, total_evaluations
                         )
                     )
@@ -1567,6 +1644,12 @@ class LTX25DistilledPipeline:
                 ),
                 prompt_context=prompt_context,
                 encoded_prompt=encoded,
+                ic_lora_single_stage=ic_lora_single_stage,
+                stage1_sampler=stage1_sampler,
+                cfg_pp_batched=cfg_pp_batched,
+                cfg_pp_schedule=cfg_pp_schedule,
+                stage1_steps=stage1_steps,
+                stage2_steps=stage2_steps,
                 continuation=continuation,
                 continuation_strength=LTX25_CHAIN_CONTINUATION_STRENGTH,
                 output_video_context_frames=plan.video_overlap_latent_frames,
