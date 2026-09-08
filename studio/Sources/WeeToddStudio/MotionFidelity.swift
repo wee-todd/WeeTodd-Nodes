@@ -32,7 +32,7 @@ struct MotionFidelityInspector: View {
               Text($0.name).tag($0.id)
             }
           }
-          Text("Requires a plain H3 recipe with at least 16 steps. Accelerators, LoRAs and additional conditioning are not qualified.")
+          Text("Requires an H3 T2VA recipe with at least 16 steps. Standard LoRAs active for the full schedule are supported. Turbo, distilled, or staged LoRAs, accelerators, and additional conditioning are not qualified.")
             .font(.caption).foregroundStyle(.secondary)
           Button {
             Task { await store.openMotionPromptEditor() }

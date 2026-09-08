@@ -150,7 +150,7 @@ NOTE_OVERRIDES = {
     ),
     "WeeToddH3MotionRefine": (
         "Analyze or refine a native 24 fps H3 movie in an isolated process; retain original audio "
-        "and recover original frame timing. Plain T2VA recipe only."
+        "and recover original frame timing. Optional standard full-schedule repair LoRA."
     ),
     "WeeToddH3FastH3ProductionProfile": (
         "Native FastH3 VSA profile with fail-closed schedule, attention, and checkpoint wiring. "

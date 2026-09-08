@@ -36,9 +36,10 @@ MP4. Add a modifier or conditioning node only when the feature is needed.
 Studio clips, movie/clip headless jobs and the **H3 Motion Fidelity Settings / Refine** nodes now
 support optional De-Roping. The shared native renderer expands source motion, partially refines
 joint video/audio latents, and recovers original frame timing with the source soundtrack. The
-original is retained. Use a plain H3 T2VA repair recipe; the feature is off by default and has strict
-native-frame and memory budgets. A real MLX render establishes execution and timing, while broad
-visual improvement remains unqualified. See [Studio controls and limits](studio/README.md#motion-fidelity-de-roping--experimental-h3).
+original is retained. Use a full-schedule H3 T2VA repair recipe, optionally with an explicitly
+selected standard LoRA; the feature is off by default and has strict native-frame and memory
+budgets. Repair LoRAs affect refinement only, not base generation. A real MLX render establishes
+execution and timing, while broad visual improvement remains unqualified. See [Studio controls and limits](studio/README.md#motion-fidelity-de-roping--experimental-h3).
 Refinement strength and evaluation count can be set independently for equal-budget comparisons;
 older projects and graphs retain their automatic evaluation counts.
 Each Studio clip can also override its repair recipe prompt in a full-window editor. The editor
@@ -1330,7 +1331,7 @@ This table is generated from the registered node contracts. Run
 | Florence-2 Text Auto Mask (MLX) | Ground a text description with Florence-2 on sparse video frames, interpolate its location, and emit either a guided subject silhouette or a fast rectangular mask. | MLX preprocessors — Segmentation | Experimental |
 | Unload Florence-2 (MLX) | Release Florence-2 MLX state without changing CorridorKey, H3, or LTX state. | MLX preprocessors — Segmentation | Experimental |
 | H3 Motion Fidelity Settings (Experimental) | Experimental adaptive or uniform temporal expansion, partial-denoise strength, optional independent refinement evaluations, seed and frame budget. | H3 — Sampling and acceleration | Experimental |
-| H3 Motion Fidelity Refine (Experimental) | Analyze or refine a native 24 fps H3 movie in an isolated process; retain original audio and recover original frame timing. Plain T2VA recipe only. | H3 — Output | Experimental |
+| H3 Motion Fidelity Refine (Experimental) | Analyze or refine a native 24 fps H3 movie in an isolated process; retain original audio and recover original frame timing. Optional standard full-schedule repair LoRA. | H3 — Output | Experimental |
 <!-- END GENERATED NODE CATALOG -->
 
 ## Troubleshooting

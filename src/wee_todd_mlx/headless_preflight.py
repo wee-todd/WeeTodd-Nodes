@@ -12,7 +12,7 @@ def preflight_recipe(recipe):
     engine = recipe["engine"]
     adapters = []
     if engine == "h3":
-        from wee_todd_nodes.lora import H3LoRASpec, H3LoRAStack
+        from wee_todd_nodes.lora import H3LoRAStack
         from wee_todd_nodes.preflight import (
             H3ComponentSetSpec,
             H3PreflightRequest,
@@ -44,9 +44,7 @@ def preflight_recipe(recipe):
                 H3ReferenceInput, "validate"
             ):
                 raise ValueError("Installed H3 runtime cannot consume Ref2VA continuation media")
-        stack = H3LoRAStack()
-        for value in recipe.get("loras", {}).get("adapters", []):
-            stack = stack.append(H3LoRASpec(**value))
+        stack = H3LoRAStack.from_recipe(recipe)
         stack.validate_for_steps(config.steps)
         adapters = stack.metadata()
         if recipe.get("vdn"):

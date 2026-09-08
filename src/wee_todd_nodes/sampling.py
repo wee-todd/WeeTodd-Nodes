@@ -248,12 +248,13 @@ class H3TransformerCache:
                     sol_attention,
                     fastvideo,
                     vdn,
-                    loras,
                     fun_control_spec,
                     refinement_learned_upscaler,
                 )
             ):
-                raise ValueError("Motion refinement requires a plain H3 recipe without adapters.")
+                raise ValueError("Motion refinement does not support conditioning or accelerators.")
+            if loras is not None:
+                loras.validate_for_motion(config.steps)
         if (fun_control_spec is None) != (fun_control_latent is None):
             raise ValueError("H3 Fun ControlNet requires both a checkpoint spec and control latent")
         fun_control_key = None

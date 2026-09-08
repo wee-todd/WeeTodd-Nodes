@@ -67,6 +67,7 @@ def _execute(request, target, analyze_only=False):
         aligned_frames,
         audio_filter,
         expansion_indices,
+        motion_lora_stack,
         plan_motion,
     )
 
@@ -183,6 +184,7 @@ def _execute(request, target, analyze_only=False):
 
     components = H3ComponentSetSpec(**dict(recipe["components"], preview_override=None))
     config = H3GenerationConfig(**recipe["config"])
+    loras = motion_lora_stack(recipe)
     video_spec = H3VideoVAESpec.from_components(components)
     audio_spec = H3AudioVAESpec.from_components(components)
     transformer_spec = H3TransformerSpec.from_components(components)
@@ -290,12 +292,21 @@ def _execute(request, target, analyze_only=False):
                 refinement_mode="motion",
                 refinement_strength=settings.strength,
                 refinement_evaluations=settings.evaluations,
+                loras=loras if loras.adapters else None,
                 step_callback=lambda completed, total: bridge.emit(
                     event="progress",
                     message=f"Refining H3 motion: {completed}/{total} evaluations",
                 ),
                 unload_after=True,
             )
+            adapter_report = [dict(item) for item in refined.lora_report]
+            if len(adapter_report) != len(loras.adapters):
+                raise RuntimeError(
+                    "Motion refinement adapter application report does not match the request."
+                )
+            if adapter_report:
+                plan["loras"] = adapter_report
+                atomic_json(target / "plan.json", plan)
             del initial, video_latents, audio_latents, waveform, conditioning
             bridge.emit(event="progress", message="Recovering original frame timing")
             silent = target / "recovered.mp4"
@@ -331,6 +342,7 @@ def _execute(request, target, analyze_only=False):
                 "report": str(target / "plan.json"),
                 "evaluations": refined.transformer_evaluations,
                 "experimental": True,
+                **({"loras": adapter_report} if adapter_report else {}),
             }
         if file_hash(clip["sourcePath"]) != source_hash:
             raise ValueError("Source movie changed during refinement; result was not accepted.")
