@@ -192,6 +192,14 @@ enhancement stale. It does not invalidate the base generation.
   recipe may include standard LoRAs active for the full schedule; they apply only to refinement and
   their application is recorded in the result. Turbo/distilled or staged LoRAs, FastH3/VDN, cache
   accelerators and extra conditioning are rejected before weighted work.
+  Check the adapter's fused attention layout separately from its tensor shapes. For a
+  ComfyUI-exported adapter whose Q, K and V rows are contiguous, set the recipe adapter's
+  `qkv_layout` to `contiguous_qkv`. The native engine uses per-head interleaved rows; choosing
+  `native_interleaved` for contiguous weights applies the wrong attention deltas even when every
+  target shape passes validation. `auto` uses declared layout metadata when present, otherwise
+  it currently defaults standard adapters to the native layout. An undeclared export layout must
+  be established before rendering. The result records `qkv_permuted_targets` alongside the
+  applied target count. Adapter strength and refinement noise strength are separate controls.
 - Input is constant 24 fps, with frame-aligned trims, 32-pixel-grid dimensions and 60–345 source
   frames. Expansion is padded to H3's `17k+5` geometry and must fit the configured budget, at most
   345 frames. The current RGB conversion also limits expanded width × height × frames to
@@ -237,6 +245,21 @@ Studio Enhance added a separate Clip Asset; toggling the source comparison reuse
 suite passed 1,349 Python tests (one skip) and 13 Swift tests for this checkpoint.
 LTX, imported-movie UI support, regional editing, overlapping long-clip windows, side-by-side viewing,
 per-stage latent resume and broad dialogue/identity qualification remain future work.
+
+The repair-prompt and standard-adapter checkpoint passed 1,470 Python tests (two optional skips)
+and 14 Swift tests. The packaged app's full-window repair editor was checked interactively in
+Light and Dark modes, including exact multiline Save, Escape cancellation, recipe-prompt reset
+and missing-recipe recovery. These checks establish implementation behavior, not a quality preset.
+Matched tests must also verify the adapter export layout; a shape-compatible wrong-layout run is
+not valid evidence for or against that adapter.
+
+A native LTX 2.5 implementation is a planned follow-on. It can reuse the clip editor, enhancement
+versions and headless job behavior, but needs a separate engine plan for LTX's `8k+1` frame grid,
+conditioning clock, refinement schedule and bounded overlapping windows. The H3 motion adapter
+cannot be applied to LTX. Existing LTX source-latent refinement and frozen audio provide building
+blocks; temporal DFR remains experimental and is not equivalent to this expansion/recovery method.
+LTX support must preserve source timing and pass identity, action, audio and seam comparisons before
+it becomes an available Motion Fidelity clip option.
 
 ## Development files and cleanup
 
