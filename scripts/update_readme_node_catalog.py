@@ -21,15 +21,29 @@ CATEGORY_NAMES = {
     "WeeTodd/H3": "H3 — Core and convenience",
     "WeeTodd/H3/loaders": "H3 — Loaders",
     "WeeTodd/H3/conditioning": "H3 — Conditioning",
+    "WeeTodd/H3/control": "H3 — ControlNet",
     "WeeTodd/H3/sampling": "H3 — Sampling and acceleration",
     "WeeTodd/H3/continuation": "H3 — Continuation",
     "WeeTodd/H3/decoding": "H3 — Decoding",
     "WeeTodd/H3/output": "H3 — Output",
     "WeeTodd/LTX 2.3": "LTX 2.3 — Core",
     "WeeTodd/LTX 2.3/loaders": "LTX 2.3 — Loaders",
+    "WeeTodd/LTX 2.3/conditioning": "LTX 2.3 — Conditioning",
     "WeeTodd/LTX 2.3/upscale": "LTX 2.3 — Upscaling",
     "WeeTodd/LTX 2.5": "LTX 2.5 — Core",
     "WeeTodd/LTX 2.5/loaders": "LTX 2.5 — Loaders",
+    "WeeTodd/LTX 2.5/conditioning": "LTX 2.5 — Conditioning",
+    "WeeTodd/LTX 2.5/optimization": "LTX 2.5 — Optimization",
+    "WeeTodd/LTX 2.5/preprocessors/camera": "LTX 2.5 — Camera preprocessing",
+    "WeeTodd/MLX preprocessors/edges": "MLX preprocessors — Edges",
+    "WeeTodd/MLX preprocessors/depth": "MLX preprocessors — Depth",
+    "WeeTodd/MLX preprocessors/pose": "MLX preprocessors — Pose",
+    "WeeTodd/MLX preprocessors/normals": "MLX preprocessors — Normals",
+    "WeeTodd/MLX preprocessors/line art": "MLX preprocessors — Line art",
+    "WeeTodd/MLX preprocessors/motion": "MLX preprocessors — Motion",
+    "WeeTodd/MLX preprocessors/segmentation": "MLX preprocessors — Segmentation",
+    "WeeTodd/MLX preprocessors": "MLX preprocessors — Lifecycle",
+    "WeeTodd/CorridorKey": "CorridorKey — Keying",
 }
 
 RECOMMENDED = {
@@ -39,10 +53,18 @@ RECOMMENDED = {
     "WeeToddH3TextEncode",
     "WeeToddH3Sample",
     "WeeToddH3ValidatedSamplingPreset",
+    "WeeToddH3FastH3ProductionProfile",
     "WeeToddH3DirectPublishLatents",
     "WeeToddLTX23Preflight",
 }
 EXPERIMENTAL = {
+    "WeeToddLTX23ICLoRALoader",
+    "WeeToddLTX23Keyframe",
+    "WeeToddLTX23ControlVideo",
+    "WeeToddLTX23ControlFrames",
+    "WeeToddLTX23IngredientsReferenceSheet",
+    "WeeToddLTX23LoRALoader",
+    "WeeToddH3VDNCheckpoint",
     "WeeToddH3PreviewOverride",
     "WeeToddH3QuantizedTransformerLoader",
     "WeeToddH3ChainedTimeline",
@@ -51,9 +73,12 @@ EXPERIMENTAL = {
     "WeeToddH3TimedKeyframeEncode",
     "WeeToddH3ReferenceEncode",
     "WeeToddH3ReferenceStrength",
+    "WeeToddH3FunControlNetLoader",
+    "WeeToddH3FunControlEncode",
     "WeeToddH3ContinuationContext",
     "WeeToddH3ChainAppend",
     "WeeToddH3LatentHiresFix",
+    "WeeToddH3SolAttention",
     "WeeToddH3EasyCache",
     "WeeToddH3TrajectoryForecast",
     "WeeToddH3BlockCache",
@@ -64,9 +89,49 @@ EXPERIMENTAL = {
     "WeeToddLTX23UpscalerLoader",
     "WeeToddLTX23UpscalePublish",
     "WeeToddLTX25ComponentLoader",
+    "WeeToddLTX25GuidedModelLoader",
     "WeeToddLTX25GenerationConfig",
+    "WeeToddLTX25QualityMode",
     "WeeToddLTX25Preflight",
     "WeeToddLTX25Generate",
+    "WeeToddLTX25GenerateChained",
+    "WeeToddLTX25VideoUpscale",
+    "WeeToddLTX25DFRDetailing",
+    "WeeToddLTX25DFRTemporalRefinement",
+    "WeeToddLTX25DiffVAEOptimization",
+    "WeeToddLTX25SingleStage",
+    "WeeToddLTX25SolAttention",
+    "WeeToddLTX25MediaConditioning",
+    "WeeToddLTX25ICLoRALoader",
+    "WeeToddLTX25ICLoRAControlGuide",
+    "WeeToddLTX25ICLoRAPipelineMode",
+    "WeeToddLTX25ReferenceSheetGuide",
+    "WeeToddLTX25CrossViewDualReferenceGuide",
+    "WeeToddLTX25CrossViewCameraOrbit",
+    "WeeToddLTX25CrossViewWarp",
+    "WeeToddMLXCannyPreprocessor",
+    "WeeToddMLXVideoDepthLoader",
+    "WeeToddMLXVideoDepthPreprocessor",
+    "WeeToddMLXDWPoseLoader",
+    "WeeToddMLXDWPosePreprocessor",
+    "WeeToddMLXTEEDLoader",
+    "WeeToddMLXTEEDPreprocessor",
+    "WeeToddMLXFastDepthLoader",
+    "WeeToddMLXFastDepthPreprocessor",
+    "WeeToddMLXNormalMapPreprocessor",
+    "WeeToddMLXLineArtLoader",
+    "WeeToddMLXLineArtPreprocessor",
+    "WeeToddMLXMotionTrackGuide",
+    "WeeToddMLXPreprocessorUnload",
+    "WeeToddCorridorKeyModelLoader",
+    "WeeToddCorridorKeyAutoHint",
+    "WeeToddCorridorKeyMaskRefine",
+    "WeeToddCorridorKeyKeyer",
+    "WeeToddCorridorKeyComposite",
+    "WeeToddCorridorKeyUnload",
+    "WeeToddFlorence2ModelLoader",
+    "WeeToddFlorence2TextMask",
+    "WeeToddFlorence2Unload",
 }
 CONVENIENCE = {
     "WeeToddH3ModelLoader",
@@ -77,12 +142,34 @@ FOUNDATION = set()
 NOT_READY = set()
 
 NOTE_OVERRIDES = {
+    "WeeToddH3FastH3ProductionProfile": (
+        "Native FastH3 VSA profile with fail-closed schedule, attention, and checkpoint wiring. "
+        "Balanced is recommended; the explicit 40-layer Speed candidate requires listening "
+        "acceptance and proves 160 compact-Metal calls before publication."
+    ),
+    "WeeToddH3VDNCheckpoint": (
+        "Select VDN stage, required adapters, and verified inference kernels; optional indexed "
+        "attention is numerically approximate and experimental."
+    ),
+    "WeeToddH3VideoVAEDecode": (
+        "Decode final H3 video with fixed tiles or opt-in geometry-aware tiles; audio remains "
+        "on the synchronized latent output."
+    ),
+    "WeeToddH3DirectPublishLatents": (
+        "Stream H3 video/audio to MP4 with staged VAE unloading; fixed decode tiles remain "
+        "default, with experimental geometry-aware tiling available."
+    ),
     "WeeToddH3Unload": "Release state held by the monolithic H3 runtime.",
     "WeeToddLTX23GenerationConfig": (
         "Configure LTX 2.3 mode, canvas, duration, steps, guidance, and memory policy."
     ),
     "WeeToddLTX23Preflight": (
         "Validate the selected LTX 2.3 bundle and mode-specific components before allocation."
+    ),
+    "WeeToddLTX23VideoExtension": (
+        "Extend one exact 8n+1-frame source before or after. Distilled mode is the qualified "
+        "eight-evaluation speed path; Dev one-stage remains available for quality. Final "
+        "publication preserves the source AV prefix and appends groups of eight new frames."
     ),
     "WeeToddLTX23Unload": "Release the process-local LTX 2.3 pipeline.",
     "WeeToddLTX25Preflight": (

@@ -1,0 +1,136 @@
+{
+  "last_node_id": 6,
+  "last_link_id": 5,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "LoadImage",
+      "pos": [40, 180],
+      "size": [320, 300],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {"name": "IMAGE", "type": "IMAGE", "links": [1, 3], "slot_index": 0},
+        {"name": "MASK", "type": "MASK", "links": null, "slot_index": 1}
+      ],
+      "properties": {"Node name for S&R": "LoadImage"},
+      "widgets_values": [""]
+    },
+    {
+      "id": 2,
+      "type": "WeeToddCorridorKeyModelLoader",
+      "pos": [40, 540],
+      "size": [420, 250],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "model",
+          "type": "WEETODD_CORRIDORKEY_MODEL",
+          "links": [2],
+          "slot_index": 0
+        },
+        {"name": "model_info", "type": "STRING", "links": null, "slot_index": 1}
+      ],
+      "properties": {"Node name for S&R": "WeeToddCorridorKeyModelLoader"},
+      "widgets_values": [
+        "corridorkey_mlx.safetensors",
+        "balanced — compiled 1024",
+        true,
+        1024,
+        true,
+        0,
+        64
+      ]
+    },
+    {
+      "id": 3,
+      "type": "WeeToddCorridorKeyAutoHint",
+      "pos": [520, 180],
+      "size": [420, 260],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [
+        {"name": "images", "type": "IMAGE", "link": 1}
+      ],
+      "outputs": [
+        {"name": "alpha_hint", "type": "MASK", "links": [4], "slot_index": 0},
+        {"name": "mask_info", "type": "STRING", "links": null, "slot_index": 1}
+      ],
+      "properties": {"Node name for S&R": "WeeToddCorridorKeyAutoHint"},
+      "widgets_values": ["auto from first frame", 0.06, 0.12, 4, 6, 0.15]
+    },
+    {
+      "id": 4,
+      "type": "WeeToddCorridorKeyKeyer",
+      "pos": [1010, 180],
+      "size": [430, 250],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {"name": "model", "type": "WEETODD_CORRIDORKEY_MODEL", "link": 2},
+        {"name": "images", "type": "IMAGE", "link": 3},
+        {"name": "alpha_hint", "type": "MASK", "link": 4}
+      ],
+      "outputs": [
+        {"name": "foreground", "type": "IMAGE", "links": null, "slot_index": 0},
+        {"name": "matte", "type": "MASK", "links": null, "slot_index": 1},
+        {"name": "premultiplied", "type": "IMAGE", "links": null, "slot_index": 2},
+        {"name": "checkerboard", "type": "IMAGE", "links": [5], "slot_index": 3},
+        {"name": "metadata", "type": "STRING", "links": null, "slot_index": 4}
+      ],
+      "properties": {"Node name for S&R": "WeeToddCorridorKeyKeyer"},
+      "widgets_values": [1.0]
+    },
+    {
+      "id": 5,
+      "type": "PreviewImage",
+      "pos": [1510, 180],
+      "size": [380, 420],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [
+        {"name": "images", "type": "IMAGE", "link": 5}
+      ],
+      "outputs": [],
+      "properties": {"Node name for S&R": "PreviewImage"},
+      "widgets_values": []
+    },
+    {
+      "id": 6,
+      "type": "MarkdownNote",
+      "pos": [40, -330],
+      "size": [900, 430],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "title": "Setup and model downloads",
+      "properties": {},
+      "widgets_values": [
+        "## CorridorKey MLX auto-chroma key\n\n1. Install the separately licensed [CorridorKey MLX runtime](https://github.com/nikopueringer/corridorkey-mlx) in ComfyUI's Python environment.\n2. Review the [official CorridorKey model page](https://huggingface.co/nikopueringer/CorridorKey_v1.0).\n3. Download `corridorkey_mlx.safetensors` from the [official v1.0.0 MLX release](https://github.com/nikopueringer/corridorkey-mlx/releases/tag/v1.0.0).\n4. Put the checkpoint in `ComfyUI/models/corridorkey/` or a shared `corridorkey` model folder.\n5. Select green-screen footage in **Load Image**. The selector is intentionally empty in this portable workflow.\n6. Queue the workflow. The checkerboard preview is connected.\n\nCorridorKey uses a separate non-Apache license. Review the [CorridorKey license](https://github.com/nikopueringer/CorridorKey/blob/main/LICENSE) before use. For SAM, Florence, or Impact Pack masks, connect their standard `MASK` output through **CorridorKey Mask Refine** instead of Auto Chroma Hint."
+      ],
+      "color": "#243447",
+      "bgcolor": "#15202b"
+    }
+  ],
+  "links": [
+    [1, 1, 0, 3, 0, "IMAGE"],
+    [2, 2, 0, 4, 0, "WEETODD_CORRIDORKEY_MODEL"],
+    [3, 1, 0, 4, 1, "IMAGE"],
+    [4, 3, 0, 4, 2, "MASK"],
+    [5, 4, 3, 5, 0, "IMAGE"]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {"workflow_title": "CorridorKey MLX auto-chroma key — balanced"},
+  "version": 0.4
+}

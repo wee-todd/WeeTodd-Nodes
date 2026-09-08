@@ -94,7 +94,9 @@ def adaptive_avg_pool_last(x: mx.array, out_dim: int) -> mx.array:
     if in_dim % out_dim == 0:
         return x.reshape(*x.shape[:-1], out_dim, in_dim // out_dim).mean(axis=-1)
     bins = [
-        x[..., (i * in_dim) // out_dim : -(-((i + 1) * in_dim) // out_dim)].mean(axis=-1, keepdims=True)
+        x[..., (i * in_dim) // out_dim : -(-((i + 1) * in_dim) // out_dim)].mean(
+            axis=-1, keepdims=True
+        )
         for i in range(out_dim)
     ]
     return mx.concatenate(bins, axis=-1)
@@ -121,7 +123,9 @@ class WNConv1d(nn.Module):
             self.bias = mx.zeros((out_channels,))
 
     def __call__(self, x: mx.array) -> mx.array:
-        out = mx.conv1d(x, self.weight, stride=self.stride, padding=self.padding, dilation=self.dilation)
+        out = mx.conv1d(
+            x, self.weight, stride=self.stride, padding=self.padding, dilation=self.dilation
+        )
         if "bias" in self:
             out = out + self.bias
         return out
@@ -130,7 +134,14 @@ class WNConv1d(nn.Module):
 class WNConvTranspose1d(nn.Module):
     """Transposed Conv1d over ``(N, L, C)``, weight ``(C_out, kL, C_in)``."""
 
-    def __init__(self, in_channels: int, out_channels: int, kernel_size: int, stride: int = 1, padding: int = 0):
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int,
+        stride: int = 1,
+        padding: int = 0,
+    ):
         super().__init__()
         self.stride, self.padding = stride, padding
         scale = 1.0 / math.sqrt(in_channels * kernel_size)
@@ -352,7 +363,7 @@ class CausalAttention(nn.Module):
 
 
 class AttnProjection(nn.Module):
-    """``pre_block``: residual causal-attention + GeGLU block rewiring ``latent_dim -> latent_channels``."""
+    """Rewire ``latent_dim`` to ``latent_channels`` with causal attention and GeGLU."""
 
     def __init__(self, in_dim: int, out_dim: int, num_heads: int, mlp_ratio: int = 2):
         super().__init__()
@@ -378,7 +389,9 @@ class AMPBlock(nn.Module):
     def __init__(self, channels: int, kernel_size: int, dilation: tuple[int, ...]):
         super().__init__()
         self.convs1 = [
-            WNConv1d(channels, channels, kernel_size, dilation=d, padding=(kernel_size * d - d) // 2)
+            WNConv1d(
+                channels, channels, kernel_size, dilation=d, padding=(kernel_size * d - d) // 2
+            )
             for d in dilation
         ]
         self.convs2 = [
@@ -389,7 +402,9 @@ class AMPBlock(nn.Module):
 
     def __call__(self, x: mx.array) -> mx.array:
         acts1, acts2 = self.activations[::2], self.activations[1::2]
-        for conv1, conv2, act1, act2 in zip(self.convs1, self.convs2, acts1, acts2):
+        for conv1, conv2, act1, act2 in zip(
+            self.convs1, self.convs2, acts1, acts2, strict=False
+        ):
             residual = conv1(act1(x))
             residual = conv2(act2(residual))
             x = residual + x
@@ -425,14 +440,18 @@ class BigVGANDecoder(nn.Module):
                     padding=(kernel - rate) // 2,
                 )
             ]
-            for i, (rate, kernel) in enumerate(zip(upsample_rates, upsample_kernel_sizes))
+            for i, (rate, kernel) in enumerate(
+                zip(upsample_rates, upsample_kernel_sizes, strict=False)
+            )
         ]
 
         self.resblocks = []
         channels = upsample_initial_channel
         for i in range(self.num_upsamples):
             channels = upsample_initial_channel // (2 ** (i + 1))
-            for kernel, dilation in zip(resblock_kernel_sizes, resblock_dilation_sizes):
+            for kernel, dilation in zip(
+                resblock_kernel_sizes, resblock_dilation_sizes, strict=False
+            ):
                 self.resblocks.append(AMPBlock(channels, kernel, tuple(dilation)))
 
         self.activation_post = Activation1d(SnakeBeta(channels))
@@ -479,10 +498,11 @@ class AudioVAE(nn.Module):
         )
 
     def encode(self, sample: mx.array) -> tuple[mx.array, mx.array]:
-        """Encode ``(B, 1, samples)`` into the posterior ``(mean, logs)`` over ``(B, 32, samples/800)``.
+        """Encode audio into posterior ``(mean, logs)`` tensors.
 
-        The waveform is right-padded to a multiple of the 800-sample hop first. MiniMax-H3 always
-        consumes the posterior **mean** — ``logs_proj`` is never evaluated by the reference pipeline.
+        Input uses ``(B, 1, samples)``. Output uses ``(B, 32, samples/800)``. The waveform is
+        right-padded to a multiple of the 800-sample hop. MiniMax H3 consumes the posterior mean.
+        The reference pipeline does not evaluate ``logs_proj``.
         """
         if sample.ndim != 3 or sample.shape[1] != 1:
             raise ValueError(f"`sample` must have shape (batch, 1, samples), got {sample.shape}.")
@@ -497,10 +517,11 @@ class AudioVAE(nn.Module):
         return mean.transpose(0, 2, 1), logs.transpose(0, 2, 1)
 
     def decode(self, latents: mx.array) -> mx.array:
-        """Decode ``(B, 32, num_frames)`` latents into ``(B, 1, num_frames * 800)``, clamped to [-1, 1]."""
+        """Decode latent frames into a waveform clamped to the range [-1, 1]."""
         if latents.ndim != 3:
             raise ValueError(
-                f"`latents` must have shape (batch, latent_channels, num_frames), got {latents.shape}."
+                "`latents` must have shape (batch, latent_channels, num_frames), "
+                f"got {latents.shape}."
             )
         x = latents.transpose(0, 2, 1)
         out = self.decoder(self.dec_in_proj(x))

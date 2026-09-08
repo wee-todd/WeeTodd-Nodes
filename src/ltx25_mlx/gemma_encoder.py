@@ -77,14 +77,61 @@ def load_gemma4_backbone(path: str | Path, *, _pack_weights=None):
 
     source = Path(path).expanduser()
     report = inspect_gemma4_pack(source)
-    with safe_open(source, framework="numpy") as handle:
-        metadata = handle.metadata() or {}
+    paged_manifest = None
+    if source.is_dir():
+        from .paged_checkpoint import LTX25PagedManifest
+
+        paged_manifest = LTX25PagedManifest.load(source)
+        metadata = paged_manifest.metadata
+    else:
+        with safe_open(source, framework="numpy") as handle:
+            metadata = handle.metadata() or {}
     raw_config = metadata.get(GEMMA_CONFIG_METADATA_KEY)
     if raw_config is None:  # inspect_gemma4_pack produces the detailed user-facing error.
         raise ValueError(f"LTX 2.5 Gemma pack {source} is missing Gemma configuration.")
-    gemma_config: dict[str, Any] = json.loads(raw_config)
+    gemma_config: dict[str, Any] = (
+        raw_config if isinstance(raw_config, dict) else json.loads(raw_config)
+    )
     mlx_config = gemma4_mlx_model_config(gemma_config)
     model = Model(ModelArgs.from_dict(mlx_config))
+
+    if paged_manifest is not None:
+        fixed_weights = dict(mx.load(str(paged_manifest.fixed_path)))
+        mapped = {}
+        for key, value in fixed_weights.items():
+            mapped_key = remap_gemma4_weight_key(key, layout=str(report["weight_layout"]))
+            if mapped_key is not None:
+                mapped[mapped_key] = value
+        inner = model.language_model.model
+        previous_kvs = list(inner.previous_kvs)
+        expected = {
+            key for key, _value in tree_flatten(model.parameters()) if ".layers." not in key
+        }
+        missing = sorted(expected - mapped.keys())
+        unexpected = sorted(mapped.keys() - expected)
+        if missing or unexpected:
+            raise ValueError(
+                "Paged Gemma 4 fixed weight mismatch: "
+                f"missing={missing[:8]}; unexpected={unexpected[:8]}"
+            )
+        model.load_weights(list(mapped.items()), strict=False)
+        model.eval()
+        object.__setattr__(model, "_weetodd_paged_manifest", paged_manifest)
+        object.__setattr__(model, "_weetodd_previous_kvs", previous_kvs)
+        object.__setattr__(model, "_weetodd_weight_layout", str(report["weight_layout"]))
+        from .page_prefetch import LTX25PagePrefetch
+
+        object.__setattr__(
+            model,
+            "_weetodd_page_prefetch",
+            LTX25PagePrefetch(
+                paged_manifest.root,
+                paged_manifest.layers,
+                enabled=LTX25PagePrefetch.default_enabled(),
+                thread_name="ltx25-gemma-prefetch",
+            ),
+        )
+        return model, mlx_config, report
 
     pack_weights = _pack_weights if _pack_weights is not None else mx.load(str(source))
     mapped = {}
@@ -139,13 +186,60 @@ def collect_gemma4_hidden_states(
             left_padding=left_padding,
         ),
     }
-    intermediates = [(None, None)] * len(inner.layers)
-    total = len(inner.layers)
-    for index, (layer, previous_index) in enumerate(
-        zip(inner.layers, inner.previous_kvs, strict=True)
-    ):
+    paged_manifest = getattr(model, "_weetodd_paged_manifest", None)
+    total = paged_manifest.num_layers if paged_manifest is not None else len(inner.layers)
+    previous_kvs = getattr(model, "_weetodd_previous_kvs", inner.previous_kvs)
+    intermediates = [(None, None)] * total
+    page_prefetch = getattr(model, "_weetodd_page_prefetch", None)
+    if page_prefetch is not None:
+        page_prefetch.start(0)
+    for index in range(total):
+        previous_index = previous_kvs[index]
         if is_cancelled is not None and is_cancelled():
             raise InterruptedError("LTX 2.5 Gemma 4 encoding cancelled.")
+        if paged_manifest is None:
+            layer = inner.layers[index]
+        else:
+            import gc
+
+            import mlx.nn as nn
+            from mlx.utils import tree_flatten, tree_unflatten
+
+            layer = inner.layers[index]
+            if page_prefetch is not None:
+                page_prefetch.wait(index)
+            raw = dict(mx.load(str(paged_manifest.layer_paths[index])))
+            local = {}
+            for key, value in raw.items():
+                mapped_key = remap_gemma4_weight_key(
+                    key, layout=model._weetodd_weight_layout
+                )
+                prefix = f"language_model.model.layers.{index}."
+                if mapped_key is not None and mapped_key.startswith(prefix):
+                    local[mapped_key.removeprefix(prefix)] = value
+            quantized = {
+                key.removesuffix(".scales") for key in local if key.endswith(".scales")
+            }
+            if quantized:
+                nn.quantize(
+                    layer,
+                    group_size=paged_manifest.group_size,
+                    bits=paged_manifest.bits,
+                    mode="affine",
+                    class_predicate=lambda path, _module, names=quantized: path in names,
+                )
+            expected = {key for key, _value in tree_flatten(layer.parameters())}
+            if expected != set(local):
+                raise ValueError(
+                    f"Paged Gemma layer {index} mismatch: "
+                    f"missing={sorted(expected - set(local))[:8]}; "
+                    f"unexpected={sorted(set(local) - expected)[:8]}"
+                )
+            layer.update(tree_unflatten(list(local.items())))
+            mx.eval(layer.parameters())
+            raw.clear()
+            if page_prefetch is not None and index + 1 < total:
+                page_prefetch.start(index + 1)
         shared_kv, offset = intermediates[previous_index]
         hidden, shared_kv, offset = layer(
             hidden,
@@ -158,6 +252,13 @@ def collect_gemma4_hidden_states(
         intermediates[index] = (shared_kv, offset)
         if progress_callback is not None:
             progress_callback(index + 1, total)
+        if paged_manifest is not None:
+            local.clear()
+            inner.layers[index] = None
+            gc.collect()
+            mx.clear_cache()
+    if paged_manifest is not None:
+        object.__setattr__(model, "_weetodd_paged_consumed", True)
     return states, attention_mask
 
 
@@ -199,9 +300,17 @@ def load_gemma4_feature_extractor(
 
     source = Path(path).expanduser()
     inspect_gemma4_pack(source)
-    with safe_open(source, framework="numpy") as handle:
-        metadata = handle.metadata() or {}
-    config: dict[str, Any] = json.loads(metadata[GEMMA_CONFIG_METADATA_KEY])
+    if source.is_dir():
+        from .paged_checkpoint import LTX25PagedManifest
+
+        metadata = LTX25PagedManifest.load(source).metadata
+    else:
+        with safe_open(source, framework="numpy") as handle:
+            metadata = handle.metadata() or {}
+    raw_config = metadata[GEMMA_CONFIG_METADATA_KEY]
+    config: dict[str, Any] = (
+        raw_config if isinstance(raw_config, dict) else json.loads(raw_config)
+    )
     text_config = config["text_config"]
 
     pack_weights = _pack_weights if _pack_weights is not None else mx.load(str(source))
@@ -243,6 +352,10 @@ def load_gemma4_feature_extractor(
 
     connector_source = Path(connector_path).expanduser() if connector_path else source
     if connector_source != source:
+        if connector_source.is_dir():
+            from .paged_checkpoint import LTX25PagedManifest
+
+            connector_source = LTX25PagedManifest.load(connector_source).fixed_path
         connector_weights = mx.load(str(connector_source))
         try:
             for key, value in connector_weights.items():
@@ -272,8 +385,16 @@ def _embedded_asset_bytes(path: Path, name: str) -> bytes:
     import numpy as np
 
     tensor_key = "tokenizer_json" if name == "tokenizer.json" else f"hf_asset__{name}"
-    with safe_open(path, framework="numpy") as handle:
-        metadata = handle.metadata() or {}
+    source = path
+    metadata = {}
+    if path.is_dir():
+        from .paged_checkpoint import LTX25PagedManifest
+
+        manifest = LTX25PagedManifest.load(path)
+        source = manifest.fixed_path
+        metadata = manifest.metadata
+    with safe_open(source, framework="numpy") as handle:
+        metadata = metadata or handle.metadata() or {}
         if tensor_key in handle.keys():
             value = handle.get_tensor(tensor_key)
             return np.asarray(value).astype(np.uint8, copy=False).tobytes()
@@ -379,11 +500,18 @@ class LTX25Gemma4Conditioner:
         self.tokenizer = None
 
     def load(self) -> None:
+        if self.model is not None and getattr(self.model, "_weetodd_paged_consumed", False):
+            self.free()
         if self.model is not None:
             return
         import mlx.core as mx
 
-        pack_weights = mx.load(str(self.path))
+        if self.path.is_dir():
+            from .paged_checkpoint import LTX25PagedManifest
+
+            pack_weights = mx.load(str(LTX25PagedManifest.load(self.path).fixed_path))
+        else:
+            pack_weights = mx.load(str(self.path))
         try:
             self.model, _config, _report = load_gemma4_backbone(
                 self.path, _pack_weights=pack_weights
@@ -429,6 +557,10 @@ class LTX25Gemma4Conditioner:
         return video, audio, attention_mask
 
     def free(self) -> None:
+        if self.model is not None:
+            page_prefetch = getattr(self.model, "_weetodd_page_prefetch", None)
+            if page_prefetch is not None:
+                page_prefetch.close()
         self.model = None
         self.feature_extractor = None
         self.tokenizer = None

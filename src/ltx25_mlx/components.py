@@ -114,20 +114,64 @@ class LTX25LatentNormalizer:
 
 
 class LTX25VideoDecoder:
-    """Own the convolutional video-VAE decoder and streamed publication."""
+    """Own either official LTX 2.5 video-VAE decoder and streamed publication."""
 
-    def __init__(self, path: str | Path, *, verbose: bool = True) -> None:
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        verbose: bool = True,
+        diffvae_optimization: str = "combined",
+        diffvae_query_chunk_size: int = 512,
+        diffvae_context_width_chunks: int = 4,
+        diffvae_stage4_tile_width: int = 0,
+    ) -> None:
         self.path = Path(path).expanduser()
         self.verbose = verbose
         self._decoder = None
+        self.last_decode_report: dict[str, object] = {}
+        self.diffvae_optimization = diffvae_optimization
+        self.diffvae_query_chunk_size = diffvae_query_chunk_size
+        self.diffvae_context_width_chunks = diffvae_context_width_chunks
+        self.diffvae_stage4_tile_width = diffvae_stage4_tile_width
+        self._conv_acceleration = None
 
     def load(self):
         if self._decoder is not None:
             return self._decoder
+        component_config = _metadata_config(self.path)
+        vae_config = component_config.get("vae", {})
+        decoder_config = vae_config.get("decoder", {}) if isinstance(vae_config, dict) else {}
+        decoder_name = str(decoder_config.get("_class_name", ""))
+        if "diffusion" in decoder_name.lower():
+            from .diffusion_vae import load_diffusion_video_decoder
+
+            self._decoder = load_diffusion_video_decoder(
+                self.path,
+                component_config,
+                query_chunk_size=self.diffvae_query_chunk_size,
+                attention_backend=(
+                    "metal_tiled"
+                    if self.diffvae_optimization == "metal_na3d_query_tiled_experimental"
+                    else (
+                        "metal"
+                        if self.diffvae_optimization == "metal_na3d_experimental"
+                        else "einsum"
+                    )
+                ),
+                deferred_stage4=self.diffvae_optimization == "deferred_stage4",
+                context_width_chunks=self.diffvae_context_width_chunks,
+                stage4_tile_width=(
+                    self.diffvae_stage4_tile_width
+                    if self.diffvae_optimization == "stage4_width_tiles"
+                    else 0
+                ),
+            )
+            _cleanup()
+            return self._decoder
         from ltx_core_mlx.model.video_vae.video_vae import VideoDecoder
         from ltx_core_mlx.utils.weights import load_split_safetensors
 
-        vae_config = _metadata_config(self.path).get("vae", {})
         decoder = VideoDecoder(
             causal=bool(vae_config.get("causal_decoder", False)),
             spatial_padding_mode=str(vae_config.get("spatial_padding_mode", "zeros")),
@@ -144,6 +188,9 @@ class LTX25VideoDecoder:
         weights = remap_convolution_layout(decoder, weights)
         decoder.load_weights(list(weights.items()), strict=True)
         mx.eval(decoder.parameters())
+        from .conv_vae_acceleration import install_staged_conv3d
+
+        self._conv_acceleration = install_staged_conv3d(decoder)
         self._decoder = decoder
         _cleanup()
         return decoder
@@ -160,12 +207,75 @@ class LTX25VideoDecoder:
         frame_rate: float = 24.0,
         audio_path: str | None = None,
     ) -> str:
-        self.load().decode_and_stream(
-            video_latent,
-            output_path,
-            frame_rate=frame_rate,
-            audio_path=audio_path,
-        )
+        decoder = self.load()
+        is_diffusion = decoder.__class__.__name__ == "MLXDiffusionVideoDecoder"
+        # ltx-core-mlx computes a conservative temporal tile from the actual
+        # latent shape and streams completed RGB frames directly to ffmpeg. Keep
+        # that bounded path visible in generation metadata instead of presenting
+        # decode as an opaque final allocation.
+        try:
+            import os
+
+            from ltx_core_mlx.model.video_vae.video_vae import _compute_decode_tiling
+
+            tiling = (
+                None
+                if is_diffusion
+                else _compute_decode_tiling(video_latent.shape, frame_rate=frame_rate)
+            )
+            temporal = getattr(tiling, "temporal_config", None)
+            self.last_decode_report = {
+                "publication": "direct_ffmpeg_stream",
+                "decoder": "diffusion" if is_diffusion else "convolutional",
+                "diffvae_optimization": self.diffvae_optimization if is_diffusion else None,
+                "diffvae_attention_backend": (
+                    str(getattr(decoder, "attention_backend", "einsum"))
+                    if is_diffusion
+                    else None
+                ),
+                "diffvae_inference_steps": (
+                    int(decoder.config.default_num_inference_steps) if is_diffusion else None
+                ),
+                "diffvae_model_output_type": (
+                    str(decoder.config.model_output_type) if is_diffusion else None
+                ),
+                "query_chunk_size": (
+                    int(getattr(decoder, "query_chunk_size", 0)) if is_diffusion else None
+                ),
+                "stage4_tile_width": (
+                    int(getattr(decoder, "stage4_tile_width", 0)) if is_diffusion else None
+                ),
+                "decode_budget_gib": float(os.environ.get("LTX2_VAE_DECODE_BUDGET_GB", "8.0")),
+                "temporal_tiling": temporal is not None,
+                "tile_frames": (
+                    int(temporal.tile_size_in_frames) if temporal is not None else None
+                ),
+                "overlap_frames": (
+                    int(temporal.tile_overlap_in_frames) if temporal is not None else None
+                ),
+            }
+        except (ImportError, AttributeError, TypeError, ValueError):
+            self.last_decode_report = {"publication": "direct_ffmpeg_stream"}
+        if is_diffusion:
+            decoder.decode_and_stream(
+                video_latent,
+                output_path,
+                frame_rate=frame_rate,
+                audio_path=audio_path,
+            )
+        else:
+            from .conv_vae_acceleration import bounded_conv_workspace
+
+            with bounded_conv_workspace(self._conv_acceleration):
+                decoder.decode_and_stream(
+                    video_latent,
+                    output_path,
+                    frame_rate=frame_rate,
+                    audio_path=audio_path,
+                )
+            self.last_decode_report["conv3d_acceleration"] = (
+                self._conv_acceleration.as_dict() if self._conv_acceleration is not None else None
+            )
         return output_path
 
 
@@ -229,8 +339,53 @@ class LTX25AudioDecoder:
         return vocoder(decoder.decode(audio_latent))
 
 
-def load_ltx25_spatial_upsampler(path: str | Path):
-    """Load the official 2x latent upscaler from embedded configuration."""
+class LTX25AudioConditioner:
+    """Own the audio-VAE encoder used for frozen refinement context."""
+
+    def __init__(self, path: str | Path) -> None:
+        self.path = Path(path).expanduser()
+        self._encoder = None
+        self._processor = None
+
+    def load(self):
+        if self._encoder is not None and self._processor is not None:
+            return self._encoder, self._processor
+        from ltx_core_mlx.model.audio_vae import AudioProcessor, AudioVAEEncoder
+        from ltx_core_mlx.utils.weights import (
+            load_split_safetensors,
+            remap_audio_vae_keys,
+        )
+
+        encoder = AudioVAEEncoder()
+        weights = load_split_safetensors(self.path, prefix="audio_vae.encoder.")
+        statistics = load_split_safetensors(self.path, prefix="audio_vae.")
+        weights.update(
+            (
+                key.replace("mean-of-means", "mean_of_means").replace(
+                    "std-of-means", "std_of_means"
+                ),
+                value,
+            )
+            for key, value in statistics.items()
+            if key.startswith("per_channel_statistics.")
+        )
+        weights = remap_audio_vae_keys(weights)
+        weights = remap_convolution_layout(encoder, weights)
+        encoder.load_weights(list(weights.items()), strict=True)
+        mx.eval(encoder.parameters())
+        self._encoder = encoder
+        self._processor = AudioProcessor(sample_rate=16000)
+        _cleanup()
+        return self._encoder, self._processor
+
+    def free(self) -> None:
+        self._encoder = None
+        self._processor = None
+        _cleanup()
+
+
+def load_ltx25_latent_upsampler(path: str | Path):
+    """Load an official spatial or temporal latent upsampler from checkpoint metadata."""
     from ltx_core_mlx.model.upsampler.model import LatentUpsampler
     from ltx_core_mlx.utils.weights import load_split_safetensors
 
@@ -245,11 +400,40 @@ def load_ltx25_spatial_upsampler(path: str | Path):
     return upsampler
 
 
+def inspect_ltx25_latent_upsampler(path: str | Path) -> dict[str, object]:
+    """Validate an upsampler header without loading its tensors."""
+    source = Path(path).expanduser()
+    if not source.is_file() or source.suffix != ".safetensors":
+        raise FileNotFoundError(f"LTX 2.5 latent upsampler not found: {source}")
+    config = _metadata_config(source)
+    if config.get("_class_name") != "LatentUpsampler":
+        raise ValueError("The selected checkpoint is not an LTX latent upsampler.")
+    if int(config.get("in_channels", 0)) != 128 or int(config.get("dims", 0)) != 3:
+        raise ValueError("The selected latent upsampler has an incompatible LTX 2.5 layout.")
+    return {
+        "path": str(source),
+        "spatial_upsample": bool(config.get("spatial_upsample", False)),
+        "temporal_upsample": bool(config.get("temporal_upsample", False)),
+        "rational_resampler": bool(config.get("rational_resampler", False)),
+    }
+
+
+def load_ltx25_spatial_upsampler(path: str | Path):
+    """Load the official spatial latent upsampler."""
+    model = load_ltx25_latent_upsampler(path)
+    if not model.spatial_upsample or model.temporal_upsample:
+        raise ValueError("The selected LTX 2.5 checkpoint is not a spatial-only upsampler.")
+    return model
+
+
 __all__ = [
+    "LTX25AudioConditioner",
     "LTX25AudioDecoder",
     "LTX25ImageConditioner",
     "LTX25LatentNormalizer",
     "LTX25VideoDecoder",
+    "inspect_ltx25_latent_upsampler",
+    "load_ltx25_latent_upsampler",
     "load_ltx25_spatial_upsampler",
     "remap_convolution_layout",
 ]

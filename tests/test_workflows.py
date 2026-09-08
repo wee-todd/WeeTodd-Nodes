@@ -8,32 +8,40 @@ from wee_todd_nodes.nodes import NODE_CLASS_MAPPINGS
 
 ROOT = Path(__file__).parents[1]
 CORE_NODES = {
+    "Canny",
+    "CreateVideo",
     "GetVideoComponents",
+    "ImageFromBatch",
+    "ImageScale",
     "LoadImage",
+    "LoadAudio",
     "LoadVideo",
     "MarkdownNote",
     "Note",
+    "PreviewImage",
+    "PreviewAny",
+    "SaveVideo",
     "Video Slice",
 }
-VALIDATED_WORKFLOW_PRESETS = {
-    "h3_512p_dense_baseline.json": "Dense baseline — 20 points / 19 evaluations",
-    "h3_512p_trajectory_replay.json": (
-        "Trajectory speed + offline replay — 20 points / up to 11 evaluations"
-    ),
-    "h3_512p_turbo_larry_ema850.json": ("Turbo — Larry EMA-850 — 5 points / 4 evaluations"),
-    "h3_512p_turbo_larry_v4.json": ("Turbo — Larry v4 step-600 — 5 points / 4 evaluations"),
-    "h3_512p_turbo_lightx2v_full.json": ("Turbo — LightX2V full rank — 5 points / 4 evaluations"),
-    "h3_512p_turbo_lightx2v_dynamic_rank21.json": (
-        "Turbo — LightX2V dynamic rank 21 — 5 points / 4 evaluations"
-    ),
-}
-CHAINED_WORKFLOW_PRESETS = {
-    "h3_544p_chained_dense_turbo_rank21.json": (
-        "Chained context — Dense Turbo LightX2V rank 21 — 5 points / 4 evaluations"
-    ),
-    "h3_544p_chained_trajectory_replay.json": (
-        "Chained context — Trajectory target-only replay — 20 points / up to 11 evaluations"
-    ),
+PROFILE_POLICIES = {
+    "speed": {
+        "steps": 5,
+        "size": (640, 384),
+        "memory": "low_memory_bf16",
+        "preset": "Turbo — drbaph v4 step-600 — 384p low-memory — 5 points / 4 evaluations",
+    },
+    "balance": {
+        "steps": 7,
+        "size": (896, 512),
+        "memory": "normal",
+        "preset": "Staged Turbo — drbaph v4 step-600 — 2 base + 4 Turbo evaluations",
+    },
+    "performance": {
+        "steps": 20,
+        "size": (896, 512),
+        "memory": "normal",
+        "preset": "Dense baseline — 20 points / 19 evaluations",
+    },
 }
 PORTABLE_T2VA_COMPONENTS = [
     "MiniMax-H3/FL2VA",
@@ -64,19 +72,26 @@ PORTABLE_T2VA_INPUTS = dict(
     )
 )
 
-UI_WORKFLOW_PATHS = sorted((ROOT / "workflows").glob("*.json")) + sorted(
-    (ROOT / "examples").glob("*_workflow.json")
-)
+UI_WORKFLOW_PATHS = sorted((ROOT / "workflows").rglob("*.json"))
 API_WORKFLOW_PATHS = sorted((ROOT / "examples").glob("*_api.json"))
 PRIMITIVE_WIDGET_TYPES = {"BOOLEAN", "FLOAT", "INT", "STRING"}
 NOTE_NODE_TYPES = {"MarkdownNote", "Note"}
 
 
+def test_public_catalog_audit_accepts_all_registered_task_folders():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "workflow_catalog_audit", ROOT / "scripts" / "audit_workflow_catalog.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.audit(ROOT) == []
+
+
 def _execution_node_map(workflow):
     return {
-        node["id"]: node
-        for node in workflow["nodes"]
-        if node.get("type") not in NOTE_NODE_TYPES
+        node["id"]: node for node in workflow["nodes"] if node.get("type") not in NOTE_NODE_TYPES
     }
 
 
@@ -86,8 +101,7 @@ def test_shipped_ui_workflows_include_setup_note(path):
     notes = [
         node
         for node in workflow["nodes"]
-        if node.get("type") == "MarkdownNote"
-        and node.get("title") == "Setup and model downloads"
+        if node.get("type") == "MarkdownNote" and node.get("title") == "Setup and model downloads"
     ]
 
     assert len(notes) == 1
@@ -112,10 +126,27 @@ def _widget_schema(node):
     for name, specification in _input_schema(node["type"]):
         input_type = specification[0]
         options = specification[1] if len(specification) > 1 else {}
-        if name in connected or options.get("forceInput"):
+        # ComfyUI keeps the Generate prompt widget in widgets_values after that widget is
+        # converted to a linked input. Omitting its saved placeholder shifts the filename
+        # prefix into prompt and the boolean unload flag into filename_prefix ("True_42.mp4").
+        linked_ltx25_generate_prompt = (
+            node["type"] == "WeeToddLTX25Generate" and name == "prompt"
+        )
+        if (name in connected and not linked_ltx25_generate_prompt) or options.get("forceInput"):
             continue
         if isinstance(input_type, list) or input_type in PRIMITIVE_WIDGET_TYPES:
             widgets.append((name, input_type))
+
+            # Current ComfyUI serializes this dynamic widget immediately after a seed INT.
+            # Omitting it shifts every later saved value into the preceding field.
+            if (
+                node["type"] == "WeeToddLTX25VideoUpscale"
+                and name == "seed"
+                and input_type == "INT"
+            ):
+                widgets.append(
+                    ("control_after_generate", ["fixed", "increment", "decrement", "randomize"])
+                )
 
     # The H3 resolution extension deliberately renders the optional size slider beside
     # the aspect-ratio selector, rather than after every required widget.
@@ -177,7 +208,10 @@ def test_shipped_ui_workflows_match_current_node_contracts(path):
     for link_id, origin_id, origin_slot, target_id, target_slot, link_type in workflow["links"]:
         origin = nodes[origin_id]["outputs"][origin_slot]
         target = nodes[target_id]["inputs"][target_slot]
-        assert origin["type"] == target["type"] == link_type
+        if target["type"] == "*":
+            assert link_type == "*"
+        else:
+            assert origin["type"] == target["type"] == link_type
         assert link_id in origin["links"]
         assert target["link"] == link_id
 
@@ -218,7 +252,9 @@ def test_ltx23_standalone_api_is_registered_and_preflighted():
 
 
 def test_ltx23_standalone_ui_workflow_links_are_consistent():
-    workflow = json.loads((ROOT / "workflows" / "ltx23_t2va_two_stage.json").read_text())
+    workflow = json.loads(
+        (ROOT / "workflows/balance/t2v/ltx23_two_stage.json").read_text()
+    )
     nodes = _execution_node_map(workflow)
 
     assert len(nodes) == 4
@@ -233,10 +269,11 @@ def test_ltx23_standalone_ui_workflow_links_are_consistent():
         0,
         0,
         3.0,
-        1.0,
-        True,
-        False,
-    ]
+            1.0,
+            True,
+            False,
+            "auto",
+        ]
     for link_id, origin_id, origin_slot, target_id, target_slot, link_type in workflow["links"]:
         assert link_id in nodes[origin_id]["outputs"][origin_slot]["links"]
         target_input = nodes[target_id]["inputs"][target_slot]
@@ -246,13 +283,13 @@ def test_ltx23_standalone_ui_workflow_links_are_consistent():
 
 def test_ltx25_high_quality_workflow_uses_verified_preset_and_prompt():
     workflow = json.loads(
-        (ROOT / "workflows" / "ltx25_1920x1088_distilled_two_stage.json").read_text()
+        (ROOT / "workflows/performance/t2v/ltx25_1920x1088_two_stage.json").read_text()
     )
     nodes = _execution_node_map(workflow)
 
     assert len(nodes) == 4
     assert nodes[2]["widgets_values"] == [
-        "High quality — 1920×1088, 5 s, reference FP32, 8+3 ancestral",
+        "High quality — 1920×1088, 5 s, reference FP32, 8 ancestral + 3 deterministic",
         1920,
         1088,
         5.0,
@@ -268,6 +305,278 @@ def test_ltx25_high_quality_workflow_uses_verified_preset_and_prompt():
     assert "quiet neighborhood bakery at dawn" in prompt
     assert "Well, you are ambitious." in prompt
     assert "clean synchronized speech" in prompt
+
+
+def test_ltx25_guided_hq_workflow_pins_dev_model_and_res2s_recipe():
+    workflow = json.loads(
+        (ROOT / "workflows/performance/t2v/ltx25_768x512_guided_hq.json").read_text()
+    )
+    nodes = _execution_node_map(workflow)
+    guided_loader = next(
+        node for node in nodes.values() if node["type"] == "WeeToddLTX25GuidedModelLoader"
+    )
+    quality = next(
+        node for node in nodes.values() if node["type"] == "WeeToddLTX25QualityMode"
+    )
+
+    assert guided_loader["widgets_values"] == [
+        "ltx-2.5-22b-dev-transformer-bf16.safetensors",
+        "ltx-2.5-22b-distilled-lora-450-bf16.safetensors",
+    ]
+    assert quality["widgets_values"][0] == "HQ guided — 15 res_2s + 3 deterministic"
+
+
+@pytest.mark.parametrize(
+    "filename",
+    (
+        "../../balance/t2v/ltx25_768x512_dfr_conv_vae.json",
+        "ltx25_768x512_dfr_diffusion_vae.json",
+        "ltx25_768x512_dfr_diffusion_vae_metal_tiled.json",
+        "ltx25_768x512_dfr_temporal_48fps.json",
+    ),
+)
+def test_ltx25_prebaked_dfr_workflows_enable_required_page_streaming(filename):
+    workflow = json.loads((ROOT / "workflows/performance/t2v" / filename).resolve().read_text())
+    nodes = _execution_node_map(workflow)
+    loader = next(node for node in nodes.values() if node["type"] == "WeeToddLTX25ComponentLoader")
+    config = next(node for node in nodes.values() if node["type"] == "WeeToddLTX25GenerationConfig")
+    detailing = next(node for node in nodes.values() if node["type"] == "WeeToddLTX25DFRDetailing")
+
+    assert loader["widgets_values"][0].endswith("-q8-paged")
+    assert config["widgets_values"][7] is True
+    assert detailing["widgets_values"][2].endswith("-q8-paged")
+
+
+def test_ltx25_accelerated_dfr_workflow_uses_measured_metal_query_tile():
+    workflow = json.loads(
+        (
+            ROOT
+            / "workflows/performance/t2v/ltx25_768x512_dfr_diffusion_vae_metal_tiled.json"
+        ).read_text()
+    )
+    optimization = next(
+        node
+        for node in _execution_node_map(workflow).values()
+        if node["type"] == "WeeToddLTX25DiffVAEOptimization"
+    )
+    assert optimization["widgets_values"] == [
+        "metal_na3d_query_tiled_experimental",
+        65536,
+        4,
+        32,
+    ]
+
+
+def test_ltx25_any_video_upscale_workflow_uses_native_movie_components():
+    workflow = json.loads(
+        (ROOT / "workflows/balance/video-upscale/ltx25_any_video_pixel_spatial_2x.json").read_text()
+    )
+    nodes = _execution_node_map(workflow)
+
+    assert nodes[1]["type"] == "LoadVideo"
+    assert nodes[2]["type"] == "GetVideoComponents"
+    assert nodes[4]["type"] == "WeeToddLTX25VideoUpscale"
+    assert nodes[4]["inputs"][1] == {"name": "images", "type": "IMAGE", "link": 2}
+    assert nodes[4]["inputs"][2] == {"name": "fps", "type": "FLOAT", "link": 4}
+    assert nodes[4]["inputs"][5] == {"name": "audio", "type": "AUDIO", "link": 3}
+    assert nodes[4]["widgets_values"][0] == "pixel spatial IC-LoRA 2x (recommended)"
+    assert nodes[4]["widgets_values"][3] == "fixed"
+    assert nodes[4]["widgets_values"][4] == "fit nearest 32px grid (preserve aspect)"
+    assert nodes[4]["widgets_values"][5] == 0.35
+    assert nodes[4]["widgets_values"][10] is True
+    assert nodes[4]["widgets_values"][11] == "disabled"
+    assert nodes[4]["widgets_values"][17] is True
+    assert nodes[4]["widgets_values"][18] == 0.0
+    assert nodes[4]["widgets_values"][19] == "disabled"
+    assert nodes[4]["widgets_values"][20] == 260.0
+    assert nodes[4]["widgets_values"][21] is False
+
+
+def test_ltx25_crossview_workflow_stacks_reference_and_preserves_source_audio():
+    workflow = json.loads(
+        (ROOT / "workflows/balance/ref2va/ltx25_crossview_warp_balanced.json").read_text()
+    )
+    nodes = _execution_node_map(workflow)
+
+    audio_output = next(output for output in nodes[5]["outputs"] if output["name"] == "audio")
+    publication_input = next(
+        input_ for input_ in nodes[9]["inputs"] if input_["name"] == "publication_audio"
+    )
+    assert audio_output["links"] == [25, 26]
+    assert publication_input == {"name": "publication_audio", "type": "AUDIO", "link": 25}
+    assert [25, 5, 1, 9, 7, "AUDIO"] in workflow["links"]
+    assert nodes[18]["type"] == "WeeToddLTX25ICLoRALoader"
+    assert nodes[18]["widgets_values"] == [
+        "ltx-2.3-22b-ic-lora-ingredients-0.9.safetensors",
+        1.2,
+    ]
+    assert nodes[19]["type"] == "ImageFromBatch"
+    assert nodes[19]["widgets_values"] == [47, 1]
+    assert nodes[20]["type"] == "PreviewImage"
+    assert nodes[21]["type"] == "WeeToddLTX25ReferenceSheetGuide"
+    assert [32, 7, 0, 21, 2, "WEETODD_LTX25_MEDIA_CONDITIONING"] in workflow["links"]
+    assert [33, 21, 0, 9, 5, "WEETODD_LTX25_MEDIA_CONDITIONING"] in workflow["links"]
+    assert [34, 21, 1, 9, 2, "STRING"] in workflow["links"]
+    assert nodes[16]["type"] == "CreateVideo"
+    assert nodes[16]["inputs"] == [
+        {"name": "images", "type": "IMAGE", "link": 23},
+        {"name": "fps", "type": "FLOAT", "link": 27},
+        {"name": "audio", "type": "AUDIO", "link": 26},
+    ]
+    assert nodes[14]["type"] == "SaveVideo"
+    assert nodes[14]["inputs"] == [{"name": "video", "type": "VIDEO", "link": 20}]
+
+
+@pytest.mark.parametrize(
+    ("profile", "filename", "schedule", "uses_baked_q8"),
+    (
+        (
+            "performance",
+            "ltx25_ingredients_reference_sheet_quality.json",
+            "full",
+            False,
+        ),
+        (
+            "balance",
+            "ltx25_ingredients_reference_sheet_balanced.json",
+            "balanced",
+            True,
+        ),
+        (
+            "speed",
+            "ltx25_ingredients_reference_sheet_speed.json",
+            "full",
+            True,
+        ),
+    ),
+)
+def test_ltx25_ingredients_profiles_pin_the_intended_adapter_and_schedule(
+    profile, filename, schedule, uses_baked_q8
+):
+    workflow = json.loads((ROOT / "workflows" / profile / "ref2va" / filename).read_text())
+    nodes = list(_execution_node_map(workflow).values())
+    loader = next(node for node in nodes if node["type"] == "WeeToddLTX25ComponentLoader")
+    mode = next(node for node in nodes if node["type"] == "WeeToddLTX25ICLoRAPipelineMode")
+    config = next(node for node in nodes if node["type"] == "WeeToddLTX25GenerationConfig")
+    images = [node for node in nodes if node["type"] == "LoadImage"]
+    live_adapters = [node for node in nodes if node["type"] == "WeeToddLTX25ICLoRALoader"]
+
+    assert mode["widgets_values"][2] == schedule
+    assert all(node["widgets_values"] == [""] for node in images)
+    if uses_baked_q8:
+        assert loader["widgets_values"][0] == "ltx-2.5-22b-distilled-ingredients1p2-q8-paged"
+        assert loader["widgets_values"][1] == "gemma4-12b-with-proj-ltx-2.5-q8-paged"
+        assert config["widgets_values"][7] is True
+        assert live_adapters == []
+    if profile == "speed":
+        sol = next(node for node in nodes if node["type"] == "WeeToddLTX25SolAttention")
+        assert mode["widgets_values"][0].startswith("Fast single stage")
+        assert sol["widgets_values"] == ["paged_speed"]
+        assert config["widgets_values"][1:3] == [1344, 768]
+    if not uses_baked_q8:
+        assert loader["widgets_values"][0].endswith("transformer-bf16.safetensors")
+        assert loader["widgets_values"][1].endswith("bf16.safetensors")
+        assert config["widgets_values"][7] is False
+        assert len(live_adapters) == 1
+        assert live_adapters[0]["widgets_values"] == [
+            "ltx-2.3-22b-ic-lora-ingredients-0.9.safetensors",
+            1.2,
+        ]
+
+
+@pytest.mark.parametrize(
+    ("filename", "control_type", "uses_mlx_canny"),
+    (
+        ("ltx25_union_canny_balanced.json", "canny_edges", True),
+        ("ltx25_union_depth_balanced.json", "depth_map", False),
+        ("ltx25_union_pose_balanced.json", "pose_skeleton", False),
+    ),
+)
+def test_ltx25_union_control_workflows_use_the_official_two_stage_reference_grid(
+    filename, control_type, uses_mlx_canny
+):
+    workflow = json.loads((ROOT / "workflows/balance/ref2va" / filename).read_text())
+    nodes = list(_execution_node_map(workflow).values())
+    loader = next(node for node in nodes if node["type"] == "WeeToddLTX25ComponentLoader")
+    config = next(node for node in nodes if node["type"] == "WeeToddLTX25GenerationConfig")
+    mode = next(node for node in nodes if node["type"] == "WeeToddLTX25ICLoRAPipelineMode")
+    guide = next(node for node in nodes if node["type"] == "WeeToddLTX25ICLoRAControlGuide")
+    videos = [node for node in nodes if node["type"] == "LoadVideo"]
+
+    assert loader["widgets_values"][0] == "ltx-2.5-22b-distilled-union1p0-q8-paged"
+    assert loader["widgets_values"][1] == "gemma4-12b-with-proj-ltx-2.5-q8-paged"
+    assert tuple(config["widgets_values"][1:3]) == (768, 512)
+    assert config["widgets_values"][6:8] == [True, True]
+    assert mode["widgets_values"][0] == "Two stage — 8 low-resolution + 3 clean refinement"
+    assert guide["widgets_values"] == [control_type, 0, 120, 1.0, 1.0]
+    assert len(videos) == 1 and videos[0]["widgets_values"] == [""]
+    assert (
+        any(node["type"] == "WeeToddMLXCannyPreprocessor" for node in nodes)
+        is uses_mlx_canny
+    )
+    assert not any(node["type"] == "Canny" for node in nodes)
+    depth_loaders = [node for node in nodes if node["type"] == "WeeToddMLXVideoDepthLoader"]
+    depth_processors = [
+        node for node in nodes if node["type"] == "WeeToddMLXVideoDepthPreprocessor"
+    ]
+    if control_type == "depth_map":
+        assert len(depth_loaders) == len(depth_processors) == 1
+        assert depth_loaders[0]["widgets_values"] == [
+            "video_depth_anything/video_depth_anything_vits_mlx.safetensors"
+        ]
+        assert depth_processors[0]["widgets_values"] == [
+            518,
+            "float32 quality",
+            4,
+            4,
+            "near white (recommended)",
+            False,
+        ]
+    else:
+        assert not depth_loaders and not depth_processors
+    pose_loaders = [node for node in nodes if node["type"] == "WeeToddMLXDWPoseLoader"]
+    pose_processors = [
+        node for node in nodes if node["type"] == "WeeToddMLXDWPosePreprocessor"
+    ]
+    if control_type == "pose_skeleton":
+        assert len(pose_loaders) == len(pose_processors) == 1
+        assert pose_loaders[0]["widgets_values"] == [
+            "dwpose_mlx/yolox_l",
+            "dwpose_mlx/dw-ll_ucoco_384",
+        ]
+        assert pose_processors[0]["widgets_values"] == [
+            "whole body",
+            0.3,
+            0.3,
+            False,
+        ]
+    else:
+        assert not pose_loaders and not pose_processors
+
+
+def test_ltx25_motion_track_workflow_uses_trajectory_guide_and_dedicated_adapter():
+    workflow = json.loads(
+        (ROOT / "workflows/performance/i2v/ltx25_motion_track_quality.json").read_text()
+    )
+    nodes = list(_execution_node_map(workflow).values())
+    loader = next(node for node in nodes if node["type"] == "WeeToddLTX25ComponentLoader")
+    adapter = next(node for node in nodes if node["type"] == "WeeToddLTX25ICLoRALoader")
+    mode = next(node for node in nodes if node["type"] == "WeeToddLTX25ICLoRAPipelineMode")
+    renderer = next(node for node in nodes if node["type"] == "WeeToddMLXMotionTrackGuide")
+    guide = next(node for node in nodes if node["type"] == "WeeToddLTX25ICLoRAControlGuide")
+    images = [node for node in nodes if node["type"] == "LoadImage"]
+
+    assert loader["widgets_values"][0] == "ltx-2.5-22b-distilled-transformer-q8-paged"
+    assert adapter["widgets_values"] == [
+        "ltx-2.3-22b-ic-lora-motion-track-control-ref0.5.safetensors",
+        1.0,
+    ]
+    assert mode["widgets_values"][0] == "CFG++ quality — 8 steps / 15 real forwards"
+    assert renderer["widgets_values"][1:4] == [768, 512, 121]
+    assert renderer["widgets_values"][4:] == ["normalized", "spline control points", 50]
+    assert guide["widgets_values"] == ["motion_track", 0, 120, 1.0, 1.0]
+    assert len(images) == 1 and images[0]["widgets_values"] == [""]
+    assert any(node["type"] == "PreviewImage" for node in nodes)
 
 
 def test_h3_to_ltx23_upscale_api_preserves_comfy_image_and_audio_contracts():
@@ -296,91 +605,37 @@ def test_h3_native_hires_fix_api_preserves_audio_and_publishes_refined_latents()
     assert prompt["7"]["inputs"]["sampling_info"] == ["6", 2]
 
 
-def test_h3_768p_staged_turbo_workflow_uses_one_continuous_schedule():
-    prompt = json.loads(
-        (ROOT / "examples" / "h3_768p_fl2va_staged_turbo_drbaph_v4_api.json").read_text()
-    )
-    workflow = json.loads(
-        (ROOT / "workflows" / "h3_768p_fl2va_staged_turbo_drbaph_v4.json").read_text()
-    )
-    ui_nodes = _execution_node_map(workflow)
+@pytest.mark.parametrize("profile", PROFILE_POLICIES)
+@pytest.mark.parametrize("task", ["t2v", "i2v", "fflf2va", "ref2va"])
+def test_profiled_h3_workflow_matrix_is_complete(profile, task):
+    path = ROOT / "workflows" / profile / task / f"h3_{task}_{profile}.json"
+    workflow = json.loads(path.read_text())
+    nodes = list(_execution_node_map(workflow).values())
+    policy = PROFILE_POLICIES[profile]
 
-    assert prompt["1"]["inputs"]["task"] == "fl2va"
-    assert prompt["2"]["inputs"]["steps"] == 7
-    assert prompt["2"]["inputs"]["custom_width"] == 1344
-    assert prompt["2"]["inputs"]["custom_height"] == 768
-    assert prompt["2"]["inputs"]["sampling_method"] == "euler"
-    assert prompt["5"]["inputs"]["config"] == ["6", 0]
-    assert prompt["6"]["class_type"] == "WeeToddH3ValidatedSamplingPreset"
-    assert prompt["6"]["inputs"] == {
-        "config": ["2", 0],
-        "preset": ("Staged Turbo — drbaph v4 step-600 — 2 base + 4 Turbo evaluations"),
-    }
-    assert prompt["7"]["inputs"]["config"] == ["6", 0]
-    assert prompt["7"]["inputs"]["loras"] == ["6", 1]
-    assert prompt["7"]["inputs"]["trajectory_forecast"] == ["6", 2]
-    assert "easycache" not in prompt["7"]["inputs"]
-    assert "blockcache" not in prompt["7"]["inputs"]
-    assert prompt["7"]["inputs"]["unload_after_sample"] is True
-    assert ui_nodes[8]["type"] == "WeeToddH3ValidatedSamplingPreset"
-    assert ui_nodes[8]["widgets_values"] == [prompt["6"]["inputs"]["preset"]]
-    assert ui_nodes[6]["inputs"][3]["name"] == "trajectory_forecast"
-    assert ui_nodes[6]["inputs"][4]["name"] == "loras"
+    config = next(node for node in nodes if node["type"] == "WeeToddH3GenerationConfig")
+    preset = next(node for node in nodes if node["type"] == "WeeToddH3ValidatedSamplingPreset")
+    previews = [node for node in nodes if node["type"] == "WeeToddH3PreviewOverride"]
+    loaders = [node for node in nodes if node["type"] in {"LoadImage", "LoadVideo"}]
 
+    assert config["widgets_values"][1] == policy["steps"]
+    assert tuple(config["widgets_values"][7:9]) == policy["size"]
+    assert config["widgets_values"][10] == policy["memory"]
+    assert preset["widgets_values"] == [policy["preset"]]
+    assert len(previews) == 1
+    assert all(node["widgets_values"][0] == "" for node in loaders)
 
-def test_h3_384p_staged_turbo_workflow_matches_measured_low_memory_recipe():
-    prompt = json.loads(
-        (ROOT / "examples" / "h3_384p_staged_turbo_2base_4turbo_api.json").read_text()
-    )
-    workflow = json.loads(
-        (ROOT / "workflows" / "h3_384p_staged_turbo_2base_4turbo.json").read_text()
-    )
-    ui_nodes = _execution_node_map(workflow)
+    component = next(node for node in nodes if node["type"] == "WeeToddH3ComponentLoader")
+    if task == "t2v":
+        assert component["widgets_values"][1] == "t2va"
+    elif task == "ref2va":
+        assert component["widgets_values"][1] == "ref2va"
+        assert component["widgets_values"][8] is False
+    else:
+        assert component["widgets_values"][1] == "fl2va"
 
-    assert len(ui_nodes) == 7
-    assert {node["type"] for node in ui_nodes.values()} <= set(NODE_CLASS_MAPPINGS)
-    assert prompt["1"]["inputs"] == PORTABLE_T2VA_INPUTS
-    assert prompt["2"]["inputs"]["duration_seconds"] == 5.0
-    assert prompt["2"]["inputs"]["steps"] == 7
-    assert prompt["2"]["inputs"]["seed"] == 0
-    assert prompt["2"]["inputs"]["resolution_mode"] == "ratio + size"
-    assert prompt["2"]["inputs"]["aspect_ratio"] == "5:3 — wide landscape"
-    assert prompt["2"]["inputs"]["short_edge"] == 384
-    assert prompt["2"]["inputs"]["custom_width"] == 640
-    assert prompt["2"]["inputs"]["custom_height"] == 384
-    assert prompt["2"]["inputs"]["memory_mode"] == "low_memory_bf16"
-    assert prompt["3"]["inputs"]["preset"] == (
-        "Staged Turbo — drbaph v4 step-600 — 384p low-memory — "
-        "2 base + 4 Turbo evaluations"
-    )
-    assert prompt["6"]["inputs"]["loras"] == ["3", 1]
-    assert "easycache" not in prompt["6"]["inputs"]
-    assert "blockcache" not in prompt["6"]["inputs"]
-    assert ui_nodes[3]["widgets_values"] == [prompt["3"]["inputs"]["preset"]]
-    assert ui_nodes[2]["widgets_values"][0:3] == [5.0, 7, 0]
-    assert ui_nodes[2]["widgets_values"][10] == "low_memory_bf16"
-
-
-def test_h3_384p_four_evaluation_turbo_workflow_is_dense_and_cache_free():
-    prompt = json.loads((ROOT / "examples" / "h3_384p_turbo_4real_api.json").read_text())
-    workflow = json.loads((ROOT / "workflows" / "h3_384p_turbo_4real.json").read_text())
-    ui_nodes = _execution_node_map(workflow)
-
-    assert len(ui_nodes) == 7
-    assert {node["type"] for node in ui_nodes.values()} <= set(NODE_CLASS_MAPPINGS)
-    assert prompt["1"]["inputs"] == PORTABLE_T2VA_INPUTS
-    assert prompt["2"]["inputs"]["steps"] == 5
-    assert prompt["2"]["inputs"]["memory_mode"] == "low_memory_bf16"
-    assert prompt["2"]["inputs"]["short_edge"] == 384
-    assert prompt["3"]["inputs"]["preset"] == (
-        "Turbo — drbaph v4 step-600 — 384p low-memory — 5 points / 4 evaluations"
-    )
-    assert prompt["6"]["inputs"]["loras"] == ["3", 1]
-    assert "easycache" not in prompt["6"]["inputs"]
-    assert "blockcache" not in prompt["6"]["inputs"]
-    assert "trajectory_forecast" not in prompt["6"]["inputs"]
-    assert ui_nodes[2]["widgets_values"][0:3] == [5.0, 5, 0]
-    assert ui_nodes[3]["widgets_values"] == [prompt["3"]["inputs"]["preset"]]
+    if task == "fflf2va":
+        assert any(node["type"] == "WeeToddH3FirstLastFrame" for node in nodes)
 
 
 def test_h3_15_second_one_shot_workflow_is_the_portable_quality_control():
@@ -404,6 +659,103 @@ def test_h3_15_second_one_shot_workflow_is_the_portable_quality_control():
     assert hashlib.sha256(prompt["5"]["inputs"]["prompt"].encode()).hexdigest() == (
         "056473f39220c73477b8a9ef6d0cb5f322c93ccf508dee509657da86948f50c9"
     )
+
+
+def test_fasth3_performance_workflow_uses_native_compact_profile_and_exact_canvas():
+    workflow = json.loads(
+        (ROOT / "workflows/performance/t2v/h3_fasth3_compact_vsa_performance.json").read_text()
+    )
+    nodes = list(_execution_node_map(workflow).values())
+    component = next(node for node in nodes if node["type"] == "WeeToddH3ComponentLoader")
+    config = next(node for node in nodes if node["type"] == "WeeToddH3GenerationConfig")
+    profile = next(
+        node for node in nodes if node["type"] == "WeeToddH3FastH3ProductionProfile"
+    )
+    sampler = next(node for node in nodes if node["type"] == "WeeToddH3Sample")
+    diagnostics = next(node for node in nodes if node["type"] == "PreviewAny")
+
+    assert component["widgets_values"][2].endswith(
+        "/weetodd-fasth3-vsa-datafree-q8-paged"
+    )
+    assert config["widgets_values"][0:4] == [4.0, 5, 20260829, "exact dimensions"]
+    assert config["widgets_values"][7:9] == [768, 448]
+    assert profile["widgets_values"] == [
+        "Balanced — compact indexed Metal (recommended)",
+        "768×448 — 2m 22s / 7.18 GB MLX",
+        4096,
+        0.0,
+    ]
+    assert [item["name"] for item in sampler["inputs"]] == [
+        "components",
+        "conditioning",
+        "config",
+        "sol_attention",
+        "production_profile_info",
+    ]
+    assert [11, profile["id"], 2, sampler["id"], 3, "WEETODD_H3_SOL_ATTENTION"] in workflow[
+        "links"
+    ]
+    assert [15, profile["id"], 3, sampler["id"], 4, "STRING"] in workflow["links"]
+    assert diagnostics["title"] == "FastH3 Profile and Hardware Advisories"
+    assert [16, profile["id"], 3, diagnostics["id"], 0, "*"] in workflow["links"]
+
+
+def test_fasth3_768_api_workflow_persists_profile_diagnostics():
+    prompt = json.loads(
+        (ROOT / "examples/h3_fasth3_compact_vsa_768x448_api.json").read_text()
+    )
+
+    assert prompt["4"]["inputs"]["resolution_preset"] == (
+        "768×448 — 2m 22s / 7.18 GB MLX"
+    )
+    assert prompt["4"]["inputs"]["advisory_memory_budget_gb"] == 0.0
+    assert prompt["7"]["inputs"]["production_profile_info"] == ["4", 3]
+    assert prompt["8"]["inputs"]["sampling_info"] == ["7", 1]
+    assert prompt["9"] == {
+        "class_type": "PreviewAny",
+        "inputs": {"source": ["4", 3]},
+        "_meta": {"title": "FastH3 Profile and Hardware Advisories"},
+    }
+
+
+def test_fasth3_40layer_candidate_connects_thinning_and_keeps_staged_publication():
+    workflow = json.loads(
+        (ROOT / "workflows/speed/t2v/h3_fasth3_40layer_candidate.json").read_text()
+    )
+    nodes = list(_execution_node_map(workflow).values())
+    profile = next(node for node in nodes if node["type"] == "WeeToddH3FastH3ProductionProfile")
+    sampler = next(node for node in nodes if node["type"] == "WeeToddH3Sample")
+    publisher = next(node for node in nodes if node["type"] == "WeeToddH3DirectPublishLatents")
+    assert profile["widgets_values"][0] == "Speed candidate — compact Metal + 40 layers"
+    assert profile["outputs"][4]["name"] == "fastvideo"
+    assert sampler["inputs"][5]["name"] == "fastvideo"
+    assert [17, profile["id"], 4, sampler["id"], 5, "WEETODD_H3_FASTVIDEO"] in workflow["links"]
+    assert sampler["widgets_values"] == [True, "checkpoint_default"]
+    metadata = json.loads(publisher["widgets_values"][3])
+    assert metadata["layers_per_evaluation"] == 40
+    assert metadata["expected_attention_calls"] == 160
+    assert metadata["promotion"] == "human_sound_effect_acceptance_pending"
+
+    prompt = json.loads((ROOT / "examples/h3_fasth3_40layer_768x448_api.json").read_text())
+    assert prompt["4"]["inputs"]["profile"] == profile["widgets_values"][0]
+    assert prompt["7"]["inputs"]["fastvideo"] == ["4", 4]
+    assert prompt["7"]["inputs"]["production_profile_info"] == ["4", 3]
+    assert prompt["7"]["inputs"]["unload_after_sample"] is True
+    assert prompt["8"]["inputs"]["sampling_info"] == ["7", 1]
+
+
+@pytest.mark.parametrize("scenario,seed", [("dialogue", 20260830), ("fast_motion", 20260831)])
+def test_fasth3_speed_acceptance_pairs_hold_generation_and_components_constant(scenario, seed):
+    root = ROOT / "benchmarks/fasth3_acceptance/api"
+    baseline = json.loads((root / f"{scenario}_balanced_api.json").read_text())
+    candidate = json.loads((root / f"{scenario}_layer40_api.json").read_text())
+    for node_id in ("1", "2", "3", "5", "6"):
+        assert baseline[node_id] == candidate[node_id]
+    assert baseline["3"]["inputs"]["seed"] == seed
+    assert baseline["3"]["inputs"]["duration_seconds"] == 4.0
+    assert baseline["4"]["inputs"]["profile"] == "Balanced — compact indexed Metal (recommended)"
+    assert candidate["4"]["inputs"]["profile"] == "Speed candidate — compact Metal + 40 layers"
+    assert candidate["7"]["inputs"]["fastvideo"] == ["4", 4]
 
 
 def test_h3_15_second_chain_uses_four_windows_and_direct_join_repair():
@@ -463,8 +815,8 @@ def test_h3_15_second_alien_ref2va_workflow_uses_strict_two_reference_order():
     assert prompt["3"]["inputs"]["preset"] == (
         "One-shot staged Turbo — drbaph v4 step-600 — 15-second quality baseline"
     )
-    assert prompt["5"]["inputs"]["image"] == "tall_white_reference_sheet.png"
-    assert prompt["7"]["inputs"]["image"] == "grey_alien_reference_sheet.png"
+    assert prompt["5"]["inputs"]["image"] == ""
+    assert prompt["7"]["inputs"]["image"] == ""
     assert prompt["8"]["inputs"]["previous_references"] == ["6", 0]
     reference_prompt = prompt["9"]["inputs"]["prompt"]
     assert reference_prompt.startswith("<Picture 1> defines the single tall white")
@@ -484,9 +836,7 @@ def test_h3_15_second_alien_ref2va_chain_keeps_media_and_latent_context():
 
     assert prompt["1"]["inputs"]["task"] == "ref2va"
     assert prompt["1"]["inputs"]["allow_fl2va_weights_for_ref2va"] is False
-    assert prompt["10"]["inputs"]["file"] == (
-        "H3_768p_15s_One_Clip_Staged_Turbo_Benchmark_20260811.mp4"
-    )
+    assert prompt["10"]["inputs"]["file"] == ""
     assert [prompt[node]["inputs"]["start_time"] for node in ("11", "20", "29", "38")] == [
         0.0,
         85 / 24,
@@ -564,45 +914,24 @@ def test_t2va_api_prompt_uses_registered_nodes_and_staged_unloading():
     assert prompt["1"]["inputs"] == PORTABLE_T2VA_INPUTS
 
 
-def test_t2va_ui_workflow_links_are_consistent():
-    workflow = json.loads((ROOT / "examples" / "t2va_smoke_workflow.json").read_text())
-    nodes = _execution_node_map(workflow)
-    links = {link[0]: link for link in workflow["links"]}
-
-    assert len(nodes) == 10
-    assert set(links) == set(range(1, 18))
-    assert {node["type"] for node in nodes.values()} <= set(NODE_CLASS_MAPPINGS)
-    assert nodes[3]["widgets_values"] == [
-        5.0,
-        8,
-        0,
-        "ratio + size",
-        "384 px short edge — fast smoke",
-        "16:9 — widescreen landscape",
-        384,
-        640,
-        384,
-        True,
-        "normal",
-        "automatic",
-        "mlx",
-        "euler",
-    ]
-    assert nodes[1]["widgets_values"] == PORTABLE_T2VA_COMPONENTS
-    assert nodes[10]["widgets_values"] == [
-        "taeh3.safetensors",
-        "auto",
-        "taeh3_coreml_256.mlpackage",
-        1,
-        6,
-        256,
-        "conservative collapse guard",
-    ]
-    for link_id, origin_id, origin_slot, target_id, target_slot, link_type in links.values():
-        assert link_id in nodes[origin_id]["outputs"][origin_slot]["links"]
-        target_input = nodes[target_id]["inputs"][target_slot]
-        assert target_input["link"] == link_id
-        assert target_input["type"] == link_type
+def test_vdn_optimized_workflow_keeps_recipe_and_staged_direct_publication():
+    prompt = json.loads((ROOT / "examples/h3_vdn_8_step_api.json").read_text())
+    assert prompt["3"]["inputs"]["steps"] == 9
+    assert prompt["3"]["inputs"]["projection_backend"] == "auto"
+    assert prompt["10"]["inputs"]["preview_every"] == 2
+    assert prompt["5"]["inputs"]["unload_after_sample"] is True
+    assert prompt["5"]["inputs"]["block_residency"] == "checkpoint_default"
+    assert prompt["8"]["class_type"] == "WeeToddH3DirectPublishLatents"
+    assert prompt["8"]["inputs"]["latents"] == ["5", 0]
+    assert not any(n["class_type"] in {"WeeToddH3VideoVAEDecode", "WeeToddH3AudioVAEDecode"}
+                   for n in prompt.values())
+    warm = json.loads((ROOT / "examples/h3_vdn_8_step_resident_api.json").read_text())
+    assert warm["5"]["inputs"]["block_residency"] == "resident"
+    assert warm["5"]["inputs"]["unload_after_sample"] is False
+    ui = json.loads((ROOT / "workflows/performance/t2v/"
+                    "h3_vdn_8_step_resident_experimental.json").read_text())
+    sampler = next(node for node in ui["nodes"] if node["type"] == "WeeToddH3Sample")
+    assert sampler["widgets_values"] == [False, "resident"]
 
 
 def test_low_memory_paged_api_uses_dual_paging_and_direct_publication():
@@ -640,227 +969,6 @@ def test_low_memory_paged_api_uses_dual_paging_and_direct_publication():
     assert prompt["6"]["inputs"]["sampling_info"] == ["5", 1]
 
 
-def test_low_memory_paged_ui_workflow_links_are_consistent():
-    workflow = json.loads((ROOT / "examples" / "t2va_low_memory_paged_workflow.json").read_text())
-    nodes = _execution_node_map(workflow)
-    links = {link[0]: link for link in workflow["links"]}
-
-    assert len(nodes) == 6
-    assert set(links) == set(range(1, 10))
-    assert {node["type"] for node in nodes.values()} <= set(NODE_CLASS_MAPPINGS)
-    assert nodes[1]["widgets_values"][2:4] == [
-        "MiniMax-H3/transformers/q8_extended_paged",
-        "MiniMax-H3/text_encoders/q8-paged",
-    ]
-    assert nodes[1]["widgets_values"][6] == ("MiniMax-H3/vae/q8/video_vae_affine_q8.safetensors")
-    assert nodes[1]["widgets_values"] == PORTABLE_T2VA_COMPONENTS
-    assert nodes[3]["widgets_values"] == [
-        5.0,
-        5,
-        0,
-        "ratio + size",
-        "384 px short edge — fast smoke",
-        "16:9 — widescreen landscape",
-        384,
-        640,
-        384,
-        True,
-        "low_memory_bf16",
-        "automatic",
-        "mlx",
-        "euler",
-    ]
-    assert nodes[6]["type"] == "WeeToddH3DirectPublishLatents"
-    for link_id, origin_id, origin_slot, target_id, target_slot, link_type in links.values():
-        assert link_id in nodes[origin_id]["outputs"][origin_slot]["links"]
-        target_input = nodes[target_id]["inputs"][target_slot]
-        assert target_input["link"] == link_id
-        assert target_input["type"] == link_type
-
-
-@pytest.mark.parametrize("filename,preset", VALIDATED_WORKFLOW_PRESETS.items())
-def test_validated_sampling_workflows_are_loadable_and_preconfigured(filename, preset):
-    workflow = json.loads((ROOT / "workflows" / filename).read_text())
-    nodes = _execution_node_map(workflow)
-
-    assert len(nodes) == 7
-    assert {node["type"] for node in nodes.values()} <= set(NODE_CLASS_MAPPINGS)
-    assert nodes[2]["widgets_values"][:3] == [5.17, 20, 246813579]
-    assert nodes[2]["widgets_values"][4:9] == [
-        "512 px short edge — balanced preview",
-        "16:9 — widescreen landscape",
-        512,
-        896,
-        512,
-    ]
-    assert nodes[3]["type"] == "WeeToddH3ValidatedSamplingPreset"
-    assert nodes[3]["widgets_values"] == [preset]
-    assert nodes[1]["widgets_values"] == PORTABLE_T2VA_COMPONENTS
-    assert [item["name"] for item in nodes[6]["inputs"]] == [
-        "components",
-        "conditioning",
-        "config",
-        "trajectory_forecast",
-        "loras",
-    ]
-
-    for link_id, origin_id, origin_slot, target_id, target_slot, link_type in workflow["links"]:
-        assert link_id in nodes[origin_id]["outputs"][origin_slot]["links"]
-        target_input = nodes[target_id]["inputs"][target_slot]
-        assert target_input["link"] == link_id
-        assert target_input["type"] == link_type
-
-
-@pytest.mark.parametrize("filename,preset", CHAINED_WORKFLOW_PRESETS.items())
-def test_chained_workflows_are_portable_linked_and_preconfigured(filename, preset):
-    raw = (ROOT / "workflows" / filename).read_text()
-    workflow = json.loads(raw)
-    nodes = _execution_node_map(workflow)
-
-    assert len(nodes) == 30
-    assert {node["type"] for node in nodes.values()} <= set(NODE_CLASS_MAPPINGS)
-    assert "/Volumes/" not in raw
-    assert "/Users/" not in raw
-    assert nodes[2]["widgets_values"] == [
-        5.17,
-        20,
-        54420260810,
-        "ratio + size",
-        "Use size slider — 32 px steps",
-        "16:9 — widescreen landscape",
-        544,
-        960,
-        544,
-        False,
-        "normal",
-        "automatic",
-        "mlx",
-        "euler",
-    ]
-    assert nodes[3]["widgets_values"] == [preset]
-    assert nodes[1]["widgets_values"] == PORTABLE_T2VA_COMPONENTS
-
-    by_type = {}
-    for node in nodes.values():
-        by_type.setdefault(node["type"], []).append(node)
-    assert len(by_type["WeeToddH3TextEncode"]) == 4
-    assert len(by_type["WeeToddH3Sample"]) == 4
-    assert len(by_type["WeeToddH3ContinuationContext"]) == 3
-    assert len(by_type["WeeToddH3VideoVAEDecode"]) == 4
-    assert len(by_type["WeeToddH3AudioVAEDecode"]) == 4
-    assert len(by_type["WeeToddH3TrimContinuation"]) == 3
-    assert len(by_type["WeeToddH3PublishVideoAudio"]) == 4
-    assert [node["widgets_values"] for node in by_type["WeeToddH3ContinuationContext"]] == [
-        ["22"],
-        ["22"],
-        ["22"],
-    ]
-    assert [node["widgets_values"] for node in by_type["WeeToddH3Sample"]] == [
-        [False],
-        [False],
-        [False],
-        [True],
-    ]
-    assert [item["name"] for item in nodes[9]["inputs"]] == [
-        "components",
-        "conditioning",
-        "config",
-        "trajectory_forecast",
-        "loras",
-    ]
-    for sample_id in (10, 11, 12):
-        assert [item["name"] for item in nodes[sample_id]["inputs"]] == [
-            "components",
-            "conditioning",
-            "config",
-            "trajectory_forecast",
-            "continuation",
-            "loras",
-        ]
-
-    for link_id, origin_id, origin_slot, target_id, target_slot, link_type in workflow["links"]:
-        assert link_id in nodes[origin_id]["outputs"][origin_slot]["links"]
-        target_input = nodes[target_id]["inputs"][target_slot]
-        assert target_input["link"] == link_id
-        assert target_input["type"] == link_type
-
-
-def test_four_reference_ref2va_forward_attention_workflow_is_portable_and_linked():
-    path = ROOT / "workflows" / "h3_512p_ref2va_four_reference_forward_attention.json"
-    raw = path.read_text()
-    workflow = json.loads(raw)
-    nodes = _execution_node_map(workflow)
-
-    assert len(nodes) == 15
-    assert {node["type"] for node in nodes.values()} <= set(NODE_CLASS_MAPPINGS) | CORE_NODES
-    assert "/Volumes/" not in raw
-    assert "/Users/" not in raw
-    assert nodes[1]["widgets_values"] == [
-        "MiniMax-H3/FL2VA",
-        "ref2va",
-        "MiniMax-H3/transformers/q8_extended_paged",
-        "MiniMax-H3/FL2VA/text_encoder",
-        "MiniMax-H3/FL2VA/processor",
-        "MiniMax-H3/FL2VA/tokenizer",
-        "MiniMax-H3/vae/q8/video_vae_affine_q8.safetensors",
-        "MiniMax-H3/FL2VA/audio_vae",
-        True,
-    ]
-    assert "q8-paged" not in nodes[1]["widgets_values"][3]
-    assert nodes[2]["widgets_values"] == [
-        5.0,
-        20,
-        842731905,
-        "ratio + size",
-        "512 px short edge — balanced preview",
-        "16:9 — widescreen landscape",
-        512,
-        896,
-        512,
-        True,
-        "normal",
-        "automatic",
-        "mlx",
-        "euler",
-    ]
-    assert nodes[3]["widgets_values"] == [
-        ("Ref2VA four-reference BF16 — Forward Attention replay — 20 points / up to 11 evaluations")
-    ]
-    load_images = [node for node in nodes.values() if node["type"] == "LoadImage"]
-    reference_nodes = [node for node in nodes.values() if node["type"] == "WeeToddH3ReferenceImage"]
-    assert len(load_images) == 4
-    assert len(reference_nodes) == 4
-    assert [node["widgets_values"][0] for node in load_images] == [
-        "select_little_red_reference.png",
-        "select_wolf_reference.png",
-        "select_granny_reference.png",
-        "select_woodsman_reference.png",
-    ]
-    assert all(node["widgets_values"] == [100] for node in reference_nodes)
-    assert all(
-        label in nodes[13]["widgets_values"][0]
-        for label in (
-            "<Picture 1>",
-            "<Picture 2>",
-            "<Picture 3>",
-            "<Picture 4>",
-        )
-    )
-    assert [item["name"] for item in nodes[14]["inputs"]] == [
-        "components",
-        "conditioning",
-        "config",
-        "trajectory_forecast",
-        "loras",
-    ]
-
-    for link_id, origin_id, origin_slot, target_id, target_slot, link_type in workflow["links"]:
-        assert link_id in nodes[origin_id]["outputs"][origin_slot]["links"]
-        target_input = nodes[target_id]["inputs"][target_slot]
-        assert target_input["link"] == link_id
-        assert target_input["type"] == link_type
-
-
 @pytest.mark.parametrize(
     "name, conditioning_node",
     [
@@ -883,17 +991,3 @@ def test_conditioning_api_examples_use_current_nodes(name, conditioning_node):
     assert loader["video_vae"]
     assert loader["audio_vae"]
     assert "q8-paged" not in loader["text_encoder"]
-
-
-@pytest.mark.parametrize("name", ["fl2va_first_frame", "ref2va_image"])
-def test_conditioning_ui_examples_have_consistent_links(name):
-    workflow = json.loads((ROOT / "examples" / f"{name}_workflow.json").read_text())
-    nodes = _execution_node_map(workflow)
-    assert {node["type"] for node in nodes.values()} <= set(NODE_CLASS_MAPPINGS) | CORE_NODES
-    assert all(nodes[1]["widgets_values"][index] for index in range(2, 8))
-    assert "q8-paged" not in nodes[1]["widgets_values"][3]
-    for link_id, origin_id, origin_slot, target_id, target_slot, link_type in workflow["links"]:
-        assert link_id in nodes[origin_id]["outputs"][origin_slot]["links"]
-        target_input = nodes[target_id]["inputs"][target_slot]
-        assert target_input["link"] == link_id
-        assert target_input["type"] == link_type

@@ -16,6 +16,7 @@ from minimax_h3_mlx.adaln import ModulationCache, drop_adaln_weights, schedule_t
 from minimax_h3_mlx.algorithm_search.capture import CaptureConfig, DiagnosticSession
 from minimax_h3_mlx.blockcache import H3BlockCacheConfig
 from minimax_h3_mlx.config import TAG_AUDIO, TAG_TEXT, TAG_VIDEO, DiTConfig
+from minimax_h3_mlx.controlnet import H3FunControlCondition, MiniMaxH3FunControl
 from minimax_h3_mlx.dit import MiniMaxH3DiT
 from minimax_h3_mlx.easycache import H3EasyCacheConfig, H3EasyCacheState
 from minimax_h3_mlx.pipeline import MiniMaxH3Pipeline
@@ -116,6 +117,22 @@ def test_query_chunked_attention_matches_dense_within_bf16_precision():
     assert all(block.attn.query_chunk_size == 4 for block in dit.blocks)
 
 
+def test_head_and_ffn_chunking_match_dense_within_bf16_precision():
+    dit, _, args = _forward_fixture()
+    dense_v, dense_a = dit(*args)
+    mx.eval(dense_v, dense_a)
+
+    dit.set_attention_head_chunk_size(2)
+    dit.set_ffn_row_chunk_size(4)
+    chunked_v, chunked_a = dit(*args)
+    mx.eval(chunked_v, chunked_a)
+
+    np.testing.assert_allclose(np.asarray(chunked_v), np.asarray(dense_v), rtol=2e-2, atol=2e-2)
+    np.testing.assert_allclose(np.asarray(chunked_a), np.asarray(dense_a), rtol=2e-2, atol=2e-2)
+    assert all(block.attn.head_chunk_size == 2 for block in dit.blocks)
+    assert all(block.mlp.row_chunk_size == 4 for block in dit.blocks)
+
+
 def test_modulation_cache_matches_live_projection():
     """The precomputed AdaLN table must reproduce the live projection bit-for-bit in float32."""
     dit, _, args = _forward_fixture()
@@ -198,6 +215,38 @@ def test_transformer_only_text_sampling_shapes():
     assert repeated.prepared_state_cache_builds == 1
     assert repeated.prepared_state_cache_hits == 1
     assert repeated.prepared_state_key == result.prepared_state_key
+
+
+def test_transformer_only_fun_control_sampling_shapes():
+    cfg = tiny_config()
+    mx.random.seed(44)
+    pipeline = MiniMaxH3Pipeline(MiniMaxH3DiT(cfg), None, None, None)
+    control_model = MiniMaxH3FunControl(
+        cfg,
+        control_in_dim=cfg.latents_dim,
+        injection_layers=(0,),
+    )
+    control = H3FunControlCondition(
+        control_model,
+        mx.random.normal((1, cfg.latents_dim, 37, 2, 2)),
+        1.0,
+    )
+
+    result = pipeline.sample_latents(
+        mx.random.normal((1, 3, cfg.text_dim)),
+        np.full((3,), TAG_TEXT, dtype=np.int32),
+        duration_seconds=5.0,
+        num_inference_steps=3,
+        height=32,
+        width=32,
+        drop_adaln=False,
+        verbose=False,
+        fun_control=control,
+    )
+
+    assert result.video_latents.shape == (1, cfg.latents_dim, 37, 2, 2)
+    assert result.audio_latents.shape == (2, cfg.audio_latents_dim, 207)
+    assert result.transformer_evaluations == 2
 
 
 def test_transformer_only_continuation_sampling_shapes():
@@ -375,9 +424,7 @@ def test_continuation_hidden_state_becomes_target_dependent_after_block_zero(tmp
     )
 
     captures = {
-        (item["block"], item["evaluation_index"]): mx.load(str(tmp_path / item["path"]))[
-            "tensor_0"
-        ]
+        (item["block"], item["evaluation_index"]): mx.load(str(tmp_path / item["path"]))["tensor_0"]
         for item in session.captures
     }
     # Three text rows, seven video-context rows, then 74 audio-context rows.
@@ -520,7 +567,6 @@ def test_transformer_only_ref2va_sampling_keeps_reference_rows_fixed():
         weakened.video_latents,
         weakened.audio_latents,
     )
-
     assert result.video_latents.shape == (1, cfg.latents_dim, 37, 2, 2)
     assert result.audio_latents.shape == (2, cfg.audio_latents_dim, 207)
     assert result.transformer_evaluations == 2
@@ -528,6 +574,30 @@ def test_transformer_only_ref2va_sampling_keeps_reference_rows_fixed():
     assert mx.array_equal(result.audio_latents, explicit_defaults.audio_latents)
     assert not mx.array_equal(result.video_latents, weakened.video_latents)
     assert not mx.array_equal(result.audio_latents, weakened.audio_latents)
+
+
+def test_transformer_only_audio_driven_ref2va_sampling():
+    cfg = tiny_config()
+    pipeline = MiniMaxH3Pipeline(MiniMaxH3DiT(cfg), None, None, None)
+    reference = PreparedReference("audio", num_audio_latents=2, target_frame=0)
+
+    result = pipeline.sample_latents(
+        mx.random.normal((1, 2, cfg.text_dim)),
+        np.full((2,), TAG_TEXT, dtype=np.int32),
+        duration_seconds=5.0,
+        num_inference_steps=3,
+        seed=29,
+        height=32,
+        width=32,
+        drop_adaln=False,
+        verbose=False,
+        condition_audio_rows=mx.random.normal((4, cfg.audio_latents_dim)),
+        references=(reference,),
+    )
+
+    assert result.video_latents.shape == (1, cfg.latents_dim, 37, 2, 2)
+    assert result.audio_latents.shape == (2, cfg.audio_latents_dim, 207)
+    assert result.transformer_evaluations == 2
 
 
 def test_h3_easycache_skips_joint_video_audio_evaluation():
@@ -589,9 +659,7 @@ def test_h3_easycache_core_residual_reuses_blocks_with_fresh_output_heads():
 
 
 def test_h3_easycache_core_residual_is_applied_to_current_packed_input():
-    state = H3EasyCacheState(
-        H3EasyCacheConfig(reuse_strategy="core_residual_fresh_heads")
-    )
+    state = H3EasyCacheState(H3EasyCacheConfig(reuse_strategy="core_residual_fresh_heads"))
     before = mx.arange(24, dtype=mx.float32).reshape(1, 3, 8)
     after = before * 2
     current = mx.full(before.shape, 10.0)

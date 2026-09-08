@@ -9,6 +9,7 @@ from pathlib import Path
 from threading import RLock
 from typing import Any
 
+from .phase_memory import measured_phase
 from .preflight import H3ComponentSetSpec
 from .sampling import H3Latents
 
@@ -18,12 +19,17 @@ class H3VideoVAESpec:
     """Immutable location of one H3 video decoder."""
 
     video_vae: str
+    tile_mode: str = "fixed"
 
     @classmethod
-    def from_components(cls, components: H3ComponentSetSpec) -> H3VideoVAESpec:
-        return cls(video_vae=str(components.resolved_paths()["video_vae"]))
+    def from_components(
+        cls, components: H3ComponentSetSpec, *, tile_mode="fixed"
+    ) -> H3VideoVAESpec:
+        return cls(video_vae=str(components.resolved_paths()["video_vae"]), tile_mode=tile_mode)
 
     def validate(self) -> None:
+        if self.tile_mode not in {"fixed", "geometry_experimental"}:
+            raise ValueError("Unknown H3 video VAE tile mode.")
         path = Path(self.video_vae).expanduser()
         if path.is_file():
             if path.suffix != ".safetensors":
@@ -74,6 +80,7 @@ class H3VideoFrames:
     decode_seconds: float
     decode_batch: int
     quantization: str = "unquantized-or-self-describing"
+    tile_plan: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -88,6 +95,7 @@ class H3VideoStream:
     decode_batch: int
     peak_rgb8_chunk_bytes: int
     quantization: str = "unquantized-or-self-describing"
+    tile_plan: dict | None = None
 
 
 VideoVAEFactory = Callable[[H3VideoVAESpec], Any]
@@ -116,6 +124,7 @@ class H3VideoVAECache:
         with self._lock:
             return self._vae is not None
 
+    @measured_phase("video_vae")
     def decode(
         self,
         spec: H3VideoVAESpec,
@@ -141,6 +150,7 @@ class H3VideoVAECache:
                 self._vae = self._factory(spec)
                 self._spec = spec
             try:
+                self._vae.decode_tile_mode = spec.tile_mode
                 if latents.generation_config.memory_mode == "low_memory_bf16":
                     # Keep the existing tile geometry, but hold one decoder activation set at a
                     # time. Weights and decoder arithmetic remain in their checkpoint dtypes.
@@ -161,6 +171,7 @@ class H3VideoVAECache:
                     decode_seconds=elapsed,
                     decode_batch=int(self._vae.decode_batch),
                     quantization=spec.quantization(),
+                    tile_plan=getattr(self._vae, "last_decode_tile_plan", None),
                 )
             except BaseException:
                 self._release_locked()
@@ -259,6 +270,67 @@ class H3VideoVAECache:
                 self._release_locked()
             return rows
 
+    def encode_continuation(
+        self,
+        spec: H3VideoVAESpec,
+        frames: Any,
+        *,
+        unload_after: bool = True,
+        check_interrupted: Callable[[], None] | None = None,
+        prepare_stage: Callable[[], None] | None = None,
+    ) -> Any:
+        """Encode an exact 17n+5 RGB context into normalized H3 video latents."""
+
+        import mlx.core as mx
+        import numpy as np
+
+        from minimax_h3_mlx.packing import (
+            PIXEL_MEAN,
+            PIXEL_STD,
+            video_latent_num_frames,
+        )
+
+        pixels = np.asarray(frames)
+        if pixels.ndim != 4 or pixels.shape[-1] != 3:
+            raise ValueError("H3 continuation frames must have shape (frames, H, W, 3).")
+        expected_frames = video_latent_num_frames(int(pixels.shape[0]))
+        spec.validate()
+        if prepare_stage is not None:
+            prepare_stage()
+        with self._lock:
+            if self._vae is None or self._spec != spec:
+                self._release_locked()
+                self._vae = self._factory(spec)
+                self._spec = spec
+            try:
+                if check_interrupted is not None:
+                    check_interrupted()
+                cfg = self._vae.config
+                pixel_mean = np.asarray(PIXEL_MEAN, dtype=np.float32).reshape(1, 3, 1, 1, 1)
+                pixel_std = np.asarray(PIXEL_STD, dtype=np.float32).reshape(1, 3, 1, 1, 1)
+                source = pixels.astype(np.float32).transpose(3, 0, 1, 2)[None]
+                source = (source / 255.0 - pixel_mean) / pixel_std
+                moments = self._vae.encode(mx.array(source))
+                latent = moments[:, : cfg.latent_channels].astype(mx.float32)
+                mean = mx.array(np.asarray(cfg.latents_mean, dtype=np.float32)).reshape(
+                    1, -1, 1, 1, 1
+                )
+                std = mx.array(np.asarray(cfg.latents_std, dtype=np.float32)).reshape(
+                    1, -1, 1, 1, 1
+                )
+                normalized = (latent - mean) / std
+                if int(normalized.shape[2]) != expected_frames:
+                    raise RuntimeError("H3 continuation video VAE produced the wrong frame count.")
+                mx.eval(normalized)
+                if check_interrupted is not None:
+                    check_interrupted()
+            except BaseException:
+                self._release_locked()
+                raise
+            if unload_after:
+                self._release_locked()
+            return normalized
+
     def _decode_normalized(self, normalized: Any, num_frames: int) -> Any:
         import mlx.core as mx
         import numpy as np
@@ -275,6 +347,7 @@ class H3VideoVAECache:
         frames = frames[0, :, :num_frames].transpose(1, 2, 3, 0)
         return np.ascontiguousarray(frames, dtype=np.float32)
 
+    @measured_phase("video_vae_stream")
     def decode_stream(
         self,
         spec: H3VideoVAESpec,
@@ -302,6 +375,7 @@ class H3VideoVAECache:
                 self._vae = self._factory(spec)
                 self._spec = spec
             try:
+                self._vae.decode_tile_mode = spec.tile_mode
                 if latents.generation_config.memory_mode == "low_memory_bf16":
                     self._vae.decode_batch = 1
                 started = time.perf_counter()
@@ -339,6 +413,7 @@ class H3VideoVAECache:
                     decode_batch=int(self._vae.decode_batch),
                     peak_rgb8_chunk_bytes=peak_rgb8_chunk_bytes,
                     quantization=spec.quantization(),
+                    tile_plan=getattr(self._vae, "last_decode_tile_plan", None),
                 )
             except BaseException:
                 self._release_locked()
@@ -454,6 +529,7 @@ class H3AudioVAECache:
         with self._lock:
             return self._vae is not None
 
+    @measured_phase("audio_vae")
     def decode(
         self,
         spec: H3AudioVAESpec,
@@ -544,6 +620,66 @@ class H3AudioVAECache:
             if unload_after:
                 self._release_locked()
             return rows
+
+    def encode_continuation(
+        self,
+        spec: H3AudioVAESpec,
+        waveform: Any,
+        *,
+        num_frames: int,
+        unload_after: bool = True,
+        check_interrupted: Callable[[], None] | None = None,
+        prepare_stage: Callable[[], None] | None = None,
+    ) -> Any:
+        """Encode synchronized stereo PCM into normalized H3 audio latents."""
+
+        import mlx.core as mx
+        import numpy as np
+
+        from minimax_h3_mlx.packing import FPS, audio_latent_num_frames
+
+        source = np.asarray(waveform, dtype=np.float32)
+        if source.ndim != 2 or source.shape[0] != 2:
+            raise ValueError("H3 continuation audio must have shape (2, samples).")
+        expected_samples = round(num_frames / FPS * 32000)
+        if source.shape[1] != expected_samples:
+            raise ValueError(
+                "H3 continuation audio sample count does not match its video context."
+            )
+        expected_latents = audio_latent_num_frames(num_frames)
+        spec.validate()
+        if prepare_stage is not None:
+            prepare_stage()
+        with self._lock:
+            if self._vae is None or self._spec != spec:
+                self._release_locked()
+                self._vae = self._factory(spec)
+                self._spec = spec
+            try:
+                if self._vae.config.sampling_rate != 32000:
+                    raise ValueError("H3 continuation requires a 32 kHz audio VAE.")
+                if check_interrupted is not None:
+                    check_interrupted()
+                mean, _ = self._vae.encode(mx.array(source[:, None, :]))
+                cfg = self._vae.config
+                latent_mean = mx.array(
+                    np.asarray(cfg.latents_mean, dtype=np.float32)
+                ).reshape(1, -1, 1)
+                latent_std = mx.array(
+                    np.asarray(cfg.latents_std, dtype=np.float32)
+                ).reshape(1, -1, 1)
+                normalized = (mean.astype(mx.float32) - latent_mean) / latent_std
+                if int(normalized.shape[2]) != expected_latents:
+                    raise RuntimeError("H3 continuation audio VAE produced the wrong token count.")
+                mx.eval(normalized)
+                if check_interrupted is not None:
+                    check_interrupted()
+            except BaseException:
+                self._release_locked()
+                raise
+            if unload_after:
+                self._release_locked()
+            return normalized
 
     def _decode_normalized(self, normalized: Any) -> Any:
         import mlx.core as mx

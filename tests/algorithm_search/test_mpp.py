@@ -75,6 +75,73 @@ def test_mpp_backend_wraps_only_eligible_bf16_core_projections(monkeypatch) -> N
     assert isinstance(mixed.attn.qkv_proj, nn.Linear)
 
 
+def test_automatic_backend_uses_mpp_when_capable(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "minimax_h3_mlx.projection.mpp_capability", lambda: (True, None)
+    )
+    monkeypatch.setattr(
+        "minimax_h3_mlx.projection.mpp_auto_capability", lambda: (True, None)
+    )
+    layer = nn.Linear(16, 48, bias=False)
+    layer.weight = layer.weight.astype(mx.bfloat16)
+    block = SimpleNamespace(
+        attn=SimpleNamespace(qkv_proj=layer, out_proj=nn.Identity()),
+        mlp=SimpleNamespace(fc1=nn.Identity(), fc2=nn.Identity()),
+    )
+
+    report = configure_projection_backend(SimpleNamespace(blocks=[block]), "auto")
+
+    assert report.requested == "auto"
+    assert report.resolved == "mpp_experimental"
+    assert report.wrapped_projections == 1
+    assert report.skipped_projections == 3
+    assert isinstance(block.attn.qkv_proj, MPPLinear)
+
+
+def test_mpp_backend_is_deferred_to_paged_block_materialization(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "minimax_h3_mlx.projection.mpp_capability", lambda: (True, None)
+    )
+    paged = SimpleNamespace(projection_backend="mlx")
+
+    report = configure_projection_backend(
+        SimpleNamespace(blocks=[], paged_blocks=paged), "mpp_experimental"
+    )
+
+    assert report.resolved == "mpp_experimental"
+    assert "paged block window" in report.reason
+    assert paged.projection_backend == "mpp_experimental"
+
+
+def test_automatic_backend_falls_back_when_mpp_is_unavailable(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "minimax_h3_mlx.projection.mpp_capability",
+        lambda: (False, "test runtime has no MPP"),
+    )
+
+    report = configure_projection_backend(SimpleNamespace(blocks=[]), "auto")
+
+    assert report.requested == "auto"
+    assert report.resolved == "mlx"
+    assert report.wrapped_projections == 0
+    assert report.reason == "test runtime has no MPP"
+
+
+def test_automatic_backend_requires_a_measured_architecture(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "minimax_h3_mlx.projection.mpp_capability", lambda: (True, None)
+    )
+    monkeypatch.setattr(
+        "minimax_h3_mlx.projection.mpp_auto_capability",
+        lambda: (False, "unmeasured test architecture"),
+    )
+
+    report = configure_projection_backend(SimpleNamespace(blocks=[]), "auto")
+
+    assert report.resolved == "mlx"
+    assert report.reason == "unmeasured test architecture"
+
+
 def test_mpp_linear_failure_returns_one_standard_mlx_projection(monkeypatch) -> None:
     reset_mpp_runtime_status()
 
@@ -106,6 +173,8 @@ def test_mpp_linear_failure_returns_one_standard_mlx_projection(monkeypatch) -> 
         "verified_signatures": 0,
         "fallback_signatures": 1,
         "fallback_reasons": ["RuntimeError"],
+        "expanded_q8_verified_signatures": 0,
+        "expanded_q8_fallback_signatures": 0,
     }
 
 
@@ -150,4 +219,6 @@ def test_mpp_linear_verifies_once_and_returns_exact_output() -> None:
         "verified_signatures": 1,
         "fallback_signatures": 0,
         "fallback_reasons": [],
+        "expanded_q8_verified_signatures": 0,
+        "expanded_q8_fallback_signatures": 0,
     }

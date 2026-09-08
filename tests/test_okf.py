@@ -1,10 +1,15 @@
 from pathlib import Path
 
+import pytest
+
 from scripts.validate_okf import validate_bundle
 
 
 def test_project_knowledge_bundle_is_valid():
-    assert validate_bundle(Path("knowledge")) == []
+    bundle = Path(__file__).parents[1] / "knowledge"
+    if not bundle.exists():
+        pytest.skip("Private knowledge bundle is not distributed with the source")
+    assert validate_bundle(bundle) == []
 
 
 def test_validator_rejects_concept_without_type(tmp_path: Path):

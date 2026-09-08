@@ -2,7 +2,9 @@
 
 import json
 import math
+import os
 import platform
+import struct
 from dataclasses import asdict, replace
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -27,15 +29,31 @@ from .decoding import (
     H3VideoVAESpec,
 )
 from .direct_publishing import publish_latent_chain_direct, publish_latents_direct
-from .preflight import H3ComponentSetSpec, H3PreflightRequest, preflight_components
+from .preflight import (
+    H3ComponentSetSpec,
+    H3PreflightRequest,
+    estimate_h3_token_budget,
+    preflight_components,
+)
 from .preview import PREVIEW_BACKENDS, PREVIEW_GUARD_MODES, H3PreviewConfig
 from .publishing import publish_synchronized_media
 from .residency import prepare_low_memory_stage
 from .runtime import RUNTIME, H3GenerationConfig, H3ModelSpec
-from .sampling import TRANSFORMER_RUNTIME, H3TransformerSpec
+from .sampling import (
+    TRANSFORMER_RUNTIME,
+    H3LearnedLatentUpscalerSpec,
+    H3TransformerSpec,
+)
 from .timeline import H3ChainedTimeline, H3LatentChain
+from .vdn import VDN_REPOSITORY_ID, VDN_STAGES, resolve_vdn_spec
 
-_PORTABLE_H3_LORA_NAMES = ("minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors",)
+_PORTABLE_H3_LORA_NAMES = (
+    "minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors",
+    "fasth3_dense_datafree_4step_rank64.safetensors",
+)
+_PORTABLE_H3_LATENT_UPSCALER_NAMES = (
+    "minimax_h3_latent_upscaler_3d_bf16.safetensors",
+)
 
 
 def _lora_choices():
@@ -61,6 +79,69 @@ def _resolve_lora_path(name: str) -> Path:
         return Path(folder_paths.models_dir) / "loras" / name
     except ImportError:
         return path
+
+
+def _h3_latent_upscaler_choices():
+    try:
+        import folder_paths
+
+        category = "latent_upscale_models"
+        if category not in folder_paths.folder_names_and_paths:
+            folder_paths.add_model_folder_path(
+                category, str(Path(folder_paths.models_dir) / category)
+            )
+        discovered = []
+        for name in folder_paths.get_filename_list(category):
+            resolved = folder_paths.get_full_path(category, name)
+            if resolved and _is_h3_latent_upscaler_checkpoint(Path(resolved)):
+                discovered.append(name)
+        return list(
+            dict.fromkeys((*_PORTABLE_H3_LATENT_UPSCALER_NAMES, *discovered))
+        )
+    except ImportError:
+        return list(_PORTABLE_H3_LATENT_UPSCALER_NAMES)
+
+
+def _is_h3_latent_upscaler_checkpoint(path: Path) -> bool:
+    """Identify the H3 24-channel 3D architecture from its SafeTensors header only."""
+    if path.suffix.lower() != ".safetensors" or not path.is_file():
+        return False
+    try:
+        with path.open("rb") as stream:
+            header_size = struct.unpack("<Q", stream.read(8))[0]
+            if not 0 < header_size <= 4 * 1024 * 1024:
+                return False
+            header = json.loads(stream.read(header_size))
+        conv = header.get("conv_in.weight") or header.get("upscaler.conv_in.weight")
+        shape = conv.get("shape") if isinstance(conv, dict) else None
+        return bool(
+            isinstance(shape, list)
+            and len(shape) == 5
+            and shape[1] == 24
+            and any(key.endswith("dwconv.weight") for key in header)
+        )
+    except (OSError, ValueError, json.JSONDecodeError, struct.error):
+        return False
+
+
+def _resolve_h3_latent_upscaler_path(name: str) -> Path:
+    candidate = Path(name).expanduser()
+    if candidate.is_absolute() or candidate.exists():
+        return candidate
+    try:
+        import folder_paths
+
+        category = "latent_upscale_models"
+        if category not in folder_paths.folder_names_and_paths:
+            folder_paths.add_model_folder_path(
+                category, str(Path(folder_paths.models_dir) / category)
+            )
+        resolved = folder_paths.get_full_path(category, name)
+        if resolved:
+            return Path(resolved)
+        return Path(folder_paths.models_dir) / category / name
+    except ImportError:
+        return candidate
 
 
 def _output_directory() -> Path:
@@ -127,8 +208,7 @@ def _frames_from_manifest(frame_manifest: str, num_frames: int, image_loader=Non
                 raise ValueError(f"H3 Frames middle entry {index} needs an integer frame number.")
             if not 2 <= frame_number < num_frames:
                 raise ValueError(
-                    f"H3 Frames middle entry {index} must be between frame 2 and "
-                    f"{num_frames - 1}."
+                    f"H3 Frames middle entry {index} must be between frame 2 and {num_frames - 1}."
                 )
         resolved.append((frame_number, image_name.strip()))
 
@@ -290,6 +370,20 @@ def _resolve_component_root(checkpoint: str, component: str = "checkpoint") -> s
         return str(path)
 
 
+def _resolve_h3_coreml_model(value: str) -> str:
+    """Honor an existing requested model, then try its compiled/package sibling."""
+    resolved = _resolve_component_root(value, "preview_tae")
+    if Path(resolved).exists():
+        return resolved
+    suffix = Path(value).suffix
+    alternate = {".mlpackage": ".mlmodelc", ".mlmodelc": ".mlpackage"}.get(suffix)
+    if alternate:
+        sibling = _resolve_component_root(str(Path(value).with_suffix(alternate)), "preview_tae")
+        if Path(sibling).exists():
+            return sibling
+    return resolved
+
+
 _H3_RESOLUTION_MODES = ("ratio + size", "exact dimensions")
 _H3_RESOLUTION_PRESETS = {
     "Use size slider — 32 px steps": 768,
@@ -338,6 +432,44 @@ _H3_LEGACY_ASPECT_RATIOS = {
 }
 
 _H3_VALIDATED_SAMPLING_PRESETS = {
+    "FastH3 Preview v1 — Native VSA student — 5 points / 4 evaluations": {
+        "steps": 5,
+        "policy": "distilled_checkpoint",
+        "required_transformer": "weetodd-fasth3-vsa-datafree-q8-paged",
+        "required_attention_profile": "fasth3_vsa_90_metal",
+        "source": {
+            "model_id": "FastVideo/FastVideo-FastH3-4-step-Preview-v1-VSA-DataFree",
+            "revision": "b65818d41939b5085451074fe8ca8b799f8d4921",
+            "attention": "VSA-H3 64-token tiles at 90% sparsity",
+            "training": "data-free DMD2 with trained compression gates",
+            "tasks": ["t2va"],
+        },
+    },
+    "FastH3 Preview v1 — Native dense student — 5 points / 4 evaluations": {
+        "steps": 5,
+        "policy": "distilled_checkpoint",
+        "required_transformer": "weetodd-fasth3-dense-q8-paged",
+        "source": {
+            "model_id": "FastVideo/FastVideo-FastH3-4-step-Preview-v1-Dense-DataFree",
+            "revision": "f624f08c6c279ab43534c003e556fc5b295b6558",
+            "attention": "dense",
+            "training": "data-free DMD2",
+            "tasks": ["t2va"],
+        },
+    },
+    "FastH3 Preview v1 — Dense Data-Free — 5 points / 4 evaluations": {
+        "steps": 5,
+        "policy": "turbo",
+        "lora": "fasth3_dense_datafree_4step_rank64.safetensors",
+        "source": {
+            "model_id": "FastVideo/FastVideo-FastH3-4-step-Preview-v1-LoRA",
+            "revision": "bcf40ca6f457ed66f8badf13514943e390205fca",
+            "variant": "dense-datafree",
+            "sha256": "4ce198c83132251b7fd0de2503823aa49c53983f068318f66cb19eaefb7fcc12",
+            "attention": "dense",
+            "training": "data-free DMD2",
+        },
+    },
     "Chained context — Dense Turbo LightX2V rank 21 — 5 points / 4 evaluations": {
         "steps": 5,
         "policy": "turbo",
@@ -798,9 +930,7 @@ class WeeToddH3PreviewOverride:
             tae_path=_resolve_component_root(tae_model, "preview_tae"),
             backend=preview_backend,
             coreml_model_path=(
-                _resolve_component_root(coreml_model, "preview_tae")
-                if coreml_model.strip()
-                else None
+                _resolve_h3_coreml_model(coreml_model) if coreml_model.strip() else None
             ),
             every_n_evaluations=int(preview_every),
             preview_frames=int(preview_frames),
@@ -913,6 +1043,48 @@ class WeeToddH3Preflight:
         payload = report.to_dict()
         payload["publication"] = _publication_environment(ffmpeg_path)
         return components, json.dumps(payload, indent=2, sort_keys=True)
+
+
+class WeeToddH3TokenBudget:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "config": ("WEETODD_H3_CONFIG",),
+                "prompt_tokens": ("INT", {"default": 512, "min": 1, "max": 32768}),
+                "condition_video_rows": (
+                    "INT",
+                    {"default": 0, "min": 0, "max": 1000000, "advanced": True},
+                ),
+                "condition_audio_rows": (
+                    "INT",
+                    {"default": 0, "min": 0, "max": 1000000, "advanced": True},
+                ),
+            }
+        }
+
+    RETURN_TYPES = ("INT", "STRING")
+    RETURN_NAMES = ("packed_rows", "token_report")
+    FUNCTION = "estimate"
+    CATEGORY = "WeeTodd/H3/loaders"
+    DESCRIPTION = (
+        "Estimate H3 text, condition, audio, and video rows plus dense-attention scale without "
+        "loading a checkpoint. Add encoded reference rows for Ref2VA planning."
+    )
+
+    def estimate(self, config, prompt_tokens, condition_video_rows, condition_audio_rows):
+        report = estimate_h3_token_budget(
+            H3PreflightRequest(
+                duration_seconds=config.duration_seconds,
+                steps=config.steps,
+                width=config.width,
+                height=config.height,
+                prompt_tokens=prompt_tokens,
+            ),
+            condition_video_rows=condition_video_rows,
+            condition_audio_rows=condition_audio_rows,
+        )
+        return int(report["packed_rows"]), json.dumps(report, indent=2, sort_keys=True)
 
 
 class WeeToddH3FirstFrame:
@@ -1197,16 +1369,18 @@ class WeeToddH3ReferenceVideo:
                 "temporal_density": (
                     [
                         "all frames (recommended)",
+                        "automatic (conservative, experimental)",
                         "uniform 50% (experimental)",
                         "uniform 25% (experimental)",
                     ],
                     {
                         "default": "all frames (recommended)",
                         "tooltip": (
-                            "Experimental uniform sampling reduces persistent reference-video "
-                            "tokens while retaining Qwen inspection of the full clip and rotary "
-                            "timestamps across the original duration. Reduced density can change "
-                            "motion or identity fidelity."
+                            "Automatic mode scans adjacent-frame activity and conservatively "
+                            "selects full, half, or quarter persistent video-VAE density. Qwen "
+                            "still inspects the full clip at 2 fps, and rotary timestamps retain "
+                            "the original duration. Reduced density can change motion or identity "
+                            "fidelity."
                         ),
                     },
                 ),
@@ -1266,6 +1440,87 @@ class WeeToddH3ReferenceAudio:
 
     def append(self, audio, previous_references=None):
         return _append_reference(previous_references, H3ReferenceInput("audio", audio))
+
+
+class WeeToddH3TimelineVisualGuide:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image_or_clip": ("IMAGE",),
+                "target_frame": (
+                    "INT",
+                    {
+                        "default": 0,
+                        "min": -100000,
+                        "max": 100000,
+                        "tooltip": "Zero-based target frame; negative values count from the end.",
+                    },
+                ),
+                "fps": ("FLOAT", {"default": 24.0, "min": 0.01, "max": 240.0}),
+            },
+            "optional": {
+                "soundtrack": ("AUDIO",),
+                "previous_references": ("WEETODD_H3_REFERENCES",),
+            },
+        }
+
+    RETURN_TYPES = ("WEETODD_H3_REFERENCES", "STRING")
+    RETURN_NAMES = ("references", "guide_info")
+    FUNCTION = "append"
+    CATEGORY = "WeeTodd/H3/conditioning"
+    DESCRIPTION = (
+        "Place one image or an aligned H3 clip on the Ref2VA target timeline. A clip must contain "
+        "5, 22, 39, ... frames after 24 fps alignment; optional audio starts at the same frame."
+    )
+
+    def append(self, image_or_clip, target_frame, fps, soundtrack=None, previous_references=None):
+        frame_count = int(image_or_clip.shape[0])
+        kind = "image" if frame_count == 1 else "video"
+        if kind == "video" and frame_count < 5:
+            raise ValueError("An H3 timeline clip must contain at least five source frames.")
+        return _append_reference(
+            previous_references,
+            H3ReferenceInput(
+                kind,
+                image_or_clip,
+                fps=(fps if kind == "video" else None),
+                soundtrack=soundtrack,
+                target_frame=target_frame,
+            ),
+        )
+
+
+class WeeToddH3TimelineAudioGuide:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "audio": ("AUDIO",),
+                "target_frame": (
+                    "INT",
+                    {
+                        "default": 0,
+                        "min": -100000,
+                        "max": 100000,
+                        "tooltip": "Zero-based target frame; negative values count from the end.",
+                    },
+                ),
+            },
+            "optional": {"previous_references": ("WEETODD_H3_REFERENCES",)},
+        }
+
+    RETURN_TYPES = ("WEETODD_H3_REFERENCES", "STRING")
+    RETURN_NAMES = ("references", "guide_info")
+    FUNCTION = "append"
+    CATEGORY = "WeeTodd/H3/conditioning"
+    DESCRIPTION = "Place an audio guide at an exact Ref2VA target frame."
+
+    def append(self, audio, target_frame, previous_references=None):
+        return _append_reference(
+            previous_references,
+            H3ReferenceInput("audio", audio, target_frame=target_frame),
+        )
 
 
 class WeeToddH3KeyframeEncode:
@@ -1578,6 +1833,27 @@ class WeeToddH3ReferenceEncode:
                     "latent_height": reference.latent_height,
                     "latent_width": reference.latent_width,
                     "audio_latents": reference.num_audio_latents,
+                    **(
+                        {
+                            "temporal_density_policy": getattr(
+                                reference, "temporal_density_requested", "full"
+                            ),
+                            "temporal_density_resolved": getattr(
+                                reference, "temporal_density_resolved", 1.0
+                            ),
+                            "temporal_activity_mean": getattr(
+                                reference, "temporal_activity_mean", None
+                            ),
+                            "temporal_activity_p95": getattr(
+                                reference, "temporal_activity_p95", None
+                            ),
+                            "temporal_density_reason": getattr(
+                                reference, "temporal_density_reason", None
+                            ),
+                        }
+                        if reference.kind == "video"
+                        else {}
+                    ),
                 }
                 for metadata, reference in zip(
                     references.metadata()["references"], prepared, strict=True
@@ -1587,6 +1863,9 @@ class WeeToddH3ReferenceEncode:
             "encoder_resident": TEXT_ENCODER_RUNTIME.loaded,
             "video_vae_resident": VIDEO_VAE_RUNTIME.loaded,
             "audio_vae_resident": AUDIO_VAE_RUNTIME.loaded,
+            "reference_feature_reuse": (
+                "encoded_once_and_reused_for_every_transformer_evaluation"
+            ),
         }
         return conditioning, json.dumps(info, indent=2, sort_keys=True)
 
@@ -1672,7 +1951,16 @@ class WeeToddH3TextEncode:
                 "prompt": ("STRING", {"multiline": True, "dynamicPrompts": True}),
                 "unload_after_encode": ("BOOLEAN", {"default": True}),
             },
-            "optional": {"config": ("WEETODD_H3_CONFIG",)},
+            "optional": {
+                "config": ("WEETODD_H3_CONFIG",),
+                "persistent_cache": (
+                    "BOOLEAN",
+                    {
+                        "default": True,
+                        "tooltip": "Reuse text-only features; bounded 1 GiB local cache.",
+                    },
+                ),
+            },
         }
 
     RETURN_TYPES = ("WEETODD_H3_CONDITIONING", "STRING")
@@ -1681,10 +1969,12 @@ class WeeToddH3TextEncode:
     CATEGORY = "WeeTodd/H3/conditioning"
     DESCRIPTION = (
         "Encode a text-only H3 prompt with Qwen3-VL. The vision tower stays unloaded. "
-        "The encoder can unload after it produces conditioning."
+        "A bounded persistent feature cache can skip repeat encodes without keeping weights loaded."
     )
 
-    def encode(self, components, prompt, unload_after_encode, config=None):
+    def encode(self, components, prompt, unload_after_encode, config=None, persistent_cache=True):
+        from .conditioning_cache import default_cache_directory
+
         memory_mode = getattr(config, "memory_mode", "normal")
         staged_releases = ()
 
@@ -1707,6 +1997,7 @@ class WeeToddH3TextEncode:
             task=components.task,
             unload_after=unload_after_encode or memory_mode == "low_memory_bf16",
             prepare_stage=prepare_stage,
+            **({"cache_directory": default_cache_directory()} if persistent_cache else {}),
         )
         if check_interrupted is not None:
             check_interrupted()
@@ -1717,6 +2008,8 @@ class WeeToddH3TextEncode:
             "memory_mode": memory_mode,
             "staged_releases": list(staged_releases),
             "paged_weights": getattr(conditioning, "paging_report", None),
+            "conditioning_cache": getattr(conditioning, "cache_report", None),
+            "phase_memory": getattr(conditioning, "phase_memory", None),
         }
         return conditioning, json.dumps(info, indent=2, sort_keys=True)
 
@@ -1829,8 +2122,22 @@ class WeeToddH3Sample:
                 "easycache": ("WEETODD_H3_EASYCACHE",),
                 "blockcache": ("WEETODD_H3_BLOCKCACHE",),
                 "trajectory_forecast": ("WEETODD_H3_TRAJECTORY_FORECAST",),
+                "sol_attention": ("WEETODD_H3_SOL_ATTENTION",),
+                "production_profile_info": ("STRING", {"forceInput": True}),
+                "fastvideo": ("WEETODD_H3_FASTVIDEO",),
+                "vdn": ("WEETODD_H3_VDN",),
                 "continuation": ("WEETODD_H3_CONTINUATION",),
                 "loras": ("WEETODD_H3_LORAS",),
+                "fun_control": ("WEETODD_H3_FUN_CONTROL",),
+                "block_residency": (
+                    ["checkpoint_default", "resident"],
+                    {
+                        "default": "checkpoint_default",
+                        "advanced": True,
+                        "tooltip": "Resident retains all transformer blocks during sampling. "
+                        "Requires ample memory; unload_after_sample controls release.",
+                    },
+                ),
             },
         }
 
@@ -1840,7 +2147,8 @@ class WeeToddH3Sample:
     CATEGORY = "WeeTodd/H3/sampling"
     DESCRIPTION = (
         "Sample synchronized MiniMax H3 video and audio latents with MLX. "
-        "This node does not load or run either VAE."
+        "This node does not load or run either VAE. Optional resident block loading avoids "
+        "repeated paging; staged unloading remains the default."
     )
 
     def sample(
@@ -1852,11 +2160,33 @@ class WeeToddH3Sample:
         easycache=None,
         blockcache=None,
         trajectory_forecast=None,
+        sol_attention=None,
+        production_profile_info=None,
+        fastvideo=None,
+        vdn=None,
         continuation=None,
         loras=None,
+        fun_control=None,
+        block_residency="checkpoint_default",
     ):
         if sum(value is not None for value in (easycache, blockcache, trajectory_forecast)) > 1:
             raise ValueError("Connect only one of EasyCache, BlockCache, or Trajectory Forecast.")
+        production_profile = WeeToddH3FastH3ProductionProfile.validate_sampling_inputs(
+            production_profile_info,
+            components,
+            config,
+            sol_attention,
+            fastvideo,
+            modifiers=(
+                easycache,
+                blockcache,
+                trajectory_forecast,
+                vdn,
+                continuation,
+                fun_control,
+            ),
+            loras=loras,
+        )
         staged_releases = ()
 
         def prepare_stage():
@@ -1904,16 +2234,27 @@ class WeeToddH3Sample:
             conditioning,
             config,
             unload_after=unload_after_sample,
+            block_residency=block_residency,
             step_callback=on_step,
             easycache=easycache,
             blockcache=blockcache,
             trajectory_forecast=trajectory_forecast,
+            sol_attention=sol_attention,
+            fastvideo=fastvideo,
+            vdn=vdn,
             continuation=continuation,
             loras=loras,
             preview_config=preview_config,
             preview_callback=on_preview if preview_config is not None else None,
             prepare_stage=prepare_stage,
+            fun_control_spec=(fun_control.spec if fun_control is not None else None),
+            fun_control_latent=(fun_control.latent if fun_control is not None else None),
         )
+        try:
+            WeeToddH3FastH3ProductionProfile.validate_execution(production_profile, latents)
+        except BaseException:
+            TRANSFORMER_RUNTIME.unload()
+            raise
         info = {
             "prompt": conditioning.prompt,
             "task": conditioning.task,
@@ -1931,6 +2272,7 @@ class WeeToddH3Sample:
                 "visual": conditioning.visual_condition_strength,
                 "audio": conditioning.audio_condition_strength,
             },
+            "fun_control": getattr(latents, "fun_control_report", None),
             "continuation": (
                 {
                     "context_frames": continuation.context_frames,
@@ -1949,9 +2291,7 @@ class WeeToddH3Sample:
             "transformer_evaluations": latents.transformer_evaluations,
             "easycache_skipped_steps": latents.easycache_skipped_steps,
             "easycache_resolved_threshold": latents.easycache_resolved_threshold,
-            "easycache_reuse_strategy": getattr(
-                latents, "easycache_reuse_strategy", None
-            ),
+            "easycache_reuse_strategy": getattr(latents, "easycache_reuse_strategy", None),
             "easycache_cache_bytes": getattr(latents, "easycache_cache_bytes", 0),
             "easycache": asdict(easycache) if easycache is not None else None,
             "blockcache_hits": getattr(latents, "blockcache_hits", 0),
@@ -1991,16 +2331,25 @@ class WeeToddH3Sample:
             "trajectory_forecast": (
                 asdict(trajectory_forecast) if trajectory_forecast is not None else None
             ),
+            "sol_attention": getattr(latents, "sol_attention_report", None)
+            or (asdict(sol_attention) if sol_attention is not None else None),
+            "fastvideo": getattr(latents, "fast_h3_approximation_report", None)
+            or (asdict(fastvideo) if fastvideo is not None else None),
+            "vdn": getattr(latents, "vdn_report", None),
+            "production_profile": production_profile,
             "loras": loras.metadata() if loras is not None else [],
             "lora_report": list(getattr(latents, "lora_report", ())),
             "seconds_per_evaluation": latents.seconds_per_evaluation,
             "total_seconds": latents.total_seconds,
             "transformer_resident": TRANSFORMER_RUNTIME.loaded,
+            "block_residency": getattr(latents, "block_residency_report", None),
             "memory_mode": config.memory_mode,
             "sampling_method": config.sampling_method,
             "attention_query_chunk_size": config.attention_query_chunk_size,
             "compute_dtype": "bfloat16",
             "projection_backend": getattr(latents, "projection_backend_report", None),
+            "phase_memory": getattr(latents, "phase_memory", None),
+            "conditioning_cache": getattr(latents, "conditioning_cache_report", None),
             "projection_backend_runtime": getattr(latents, "projection_backend_runtime", None),
             "paged_weights": {
                 "transformer": getattr(latents, "paging_report", None),
@@ -2024,6 +2373,42 @@ class WeeToddH3Sample:
         return latents, json.dumps(info, indent=2, sort_keys=True)
 
 
+class WeeToddH3LearnedLatentUpscalerLoader:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "model_name": (
+                    _h3_latent_upscaler_choices(),
+                    {
+                        "default": _PORTABLE_H3_LATENT_UPSCALER_NAMES[0],
+                        "tooltip": (
+                            "Place the BF16 SafeTensors checkpoint in ComfyUI/models/"
+                            "latent_upscale_models. Weights load only during Hi-Res Fix and "
+                            "unload before the H3 transformer refinement stage."
+                        ),
+                    },
+                ),
+            }
+        }
+
+    RETURN_TYPES = ("WEETODD_H3_LATENT_UPSCALER",)
+    RETURN_NAMES = ("latent_upscaler",)
+    FUNCTION = "select"
+    CATEGORY = "WeeTodd/H3/loaders"
+    DESCRIPTION = (
+        "Select an MLX-native learned 3D latent upscaler for H3 Hi-Res Fix. "
+        "The checkpoint is validated now and loaded only when the graph executes."
+    )
+
+    def select(self, model_name):
+        spec = H3LearnedLatentUpscalerSpec(
+            checkpoint=str(_resolve_h3_latent_upscaler_path(model_name))
+        )
+        spec.validate()
+        return (spec,)
+
+
 class WeeToddH3LatentHiresFix:
     @classmethod
     def INPUT_TYPES(cls):
@@ -2033,7 +2418,11 @@ class WeeToddH3LatentHiresFix:
                 "conditioning": ("WEETODD_H3_CONDITIONING",),
                 "source_latents": ("WEETODD_H3_LATENTS",),
                 "scale": (
-                    ["1.5x — balanced", "2.0x — experimental"],
+                    [
+                        "1.5x — balanced",
+                        "2.0x — experimental",
+                        "maximum canvas — 1920×1088",
+                    ],
                     {"default": "1.5x — balanced"},
                 ),
                 "refinement_schedule_points": (
@@ -2061,6 +2450,7 @@ class WeeToddH3LatentHiresFix:
                 "unload_after_refine": ("BOOLEAN", {"default": True}),
             },
             "optional": {
+                "learned_latent_upscaler": ("WEETODD_H3_LATENT_UPSCALER",),
                 "loras": ("WEETODD_H3_LORAS",),
                 "trajectory_forecast": ("WEETODD_H3_TRAJECTORY_FORECAST",),
                 "latent_resize_method": (
@@ -2097,37 +2487,51 @@ class WeeToddH3LatentHiresFix:
         loras=None,
         trajectory_forecast=None,
         latent_resize_method="bilinear",
+        learned_latent_upscaler=None,
     ):
-        from minimax_h3_mlx.hires_fix import resolve_hires_canvas
-
-        scale_value = 1.5 if scale.startswith("1.5") else 2.0
-        target_width, target_height = resolve_hires_canvas(
-            source_latents.width,
-            source_latents.height,
-            scale_value,
+        from minimax_h3_mlx.hires_fix import (
+            resolve_hires_canvas,
+            resolve_hires_maximum_canvas,
         )
+
+        if scale.startswith("maximum canvas"):
+            scale_value = None
+            scale_label = "maximum canvas"
+            target_width, target_height = resolve_hires_maximum_canvas(
+                source_latents.width,
+                source_latents.height,
+            )
+        else:
+            scale_value = 1.5 if scale.startswith("1.5") else 2.0
+            scale_label = f"{scale_value:g}x"
+            target_width, target_height = resolve_hires_canvas(
+                source_latents.width,
+                source_latents.height,
+                scale_value,
+            )
         config = replace(
             source_latents.generation_config,
             width=target_width,
             height=target_height,
             steps=int(refinement_schedule_points),
             resolution_mode="custom",
-            resolution_tier=f"H3 Hi Res Fix {scale_value:g}x",
+            resolution_tier=f"H3 Hi Res Fix {scale_label}",
             aspect_ratio="custom",
         )
         config.validate()
 
         progress = None
         check_interrupted = None
+        active_steps = max(
+            1,
+            int(math.ceil((config.steps - 1) * float(refinement_strength))),
+        )
         try:
             import comfy.model_management
             import comfy.utils
 
-            active_steps = max(
-                1,
-                int(math.ceil((config.steps - 1) * float(refinement_strength))),
-            )
-            progress = comfy.utils.ProgressBar(active_steps)
+            upscaler_steps = 39 if learned_latent_upscaler is not None else 0
+            progress = comfy.utils.ProgressBar(active_steps + upscaler_steps)
             check_interrupted = comfy.model_management.throw_exception_if_processing_interrupted
         except ImportError:
             pass
@@ -2136,7 +2540,14 @@ class WeeToddH3LatentHiresFix:
             if check_interrupted is not None:
                 check_interrupted()
             if progress is not None:
-                progress.update_absolute(completed, total)
+                offset = 39 if learned_latent_upscaler is not None else 0
+                progress.update_absolute(offset + completed, offset + total)
+
+        def on_upscaler_step(completed, total):
+            if check_interrupted is not None:
+                check_interrupted()
+            if progress is not None:
+                progress.update_absolute(completed, total + active_steps)
 
         preview_config = getattr(components, "preview_override", None)
 
@@ -2147,8 +2558,8 @@ class WeeToddH3LatentHiresFix:
                 image = _h3_preview_contact_sheet(update.frames, completed, total)
                 _save_h3_preview_contact_sheet(image, completed, total)
                 progress.update_absolute(
-                    completed,
-                    total,
+                    (39 if learned_latent_upscaler is not None else 0) + completed,
+                    (39 if learned_latent_upscaler is not None else 0) + total,
                     ("JPEG", image, preview_config.max_edge),
                 )
 
@@ -2161,6 +2572,10 @@ class WeeToddH3LatentHiresFix:
             refinement_source=source_latents,
             refinement_strength=float(refinement_strength),
             refinement_resize_method=str(latent_resize_method),
+            refinement_learned_upscaler=learned_latent_upscaler,
+            refinement_upscaler_callback=(
+                on_upscaler_step if learned_latent_upscaler is not None else None
+            ),
             loras=loras,
             trajectory_forecast=trajectory_forecast,
             preview_config=preview_config,
@@ -2171,6 +2586,7 @@ class WeeToddH3LatentHiresFix:
             "source_canvas": [source_latents.width, source_latents.height],
             "target_canvas": [target_width, target_height],
             "requested_scale": scale_value,
+            "scale_mode": scale_label,
             "resolved_scale": [
                 target_width / source_latents.width,
                 target_height / source_latents.height,
@@ -2178,6 +2594,13 @@ class WeeToddH3LatentHiresFix:
             "refinement_schedule_points": config.steps,
             "refinement_strength": refinement_strength,
             "latent_resize_method": latent_resize_method,
+            "latent_upscale_backend": (
+                "learned 3D MLX" if learned_latent_upscaler is not None else "interpolation"
+            ),
+            "learned_upscaler": getattr(refined, "refinement_upscaler_report", None),
+            "condition_rows_resized": getattr(
+                refined, "refinement_condition_rows_resized", False
+            ),
             "transformer_evaluations": refined.transformer_evaluations,
             "trajectory_forecasts": refined.trajectory_forecasts,
             "trajectory_fallbacks": refined.trajectory_fallbacks,
@@ -2217,7 +2640,17 @@ class WeeToddH3LoRALoader:
                     "FLOAT",
                     {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.01},
                 ),
-                "profile": (["auto", "standard", "turbo"], {"default": "auto"}),
+                "profile": (
+                    ["auto", "standard", "turbo"],
+                    {
+                        "default": "auto",
+                        "tooltip": (
+                            "Auto uses checkpoint metadata and otherwise defaults to standard. "
+                            "Select turbo explicitly when a downloaded adapter does not declare "
+                            "its distillation schedule. Filenames never select adapter math."
+                        ),
+                    },
+                ),
                 "adaln_input_grid": (
                     "STRING",
                     {
@@ -2264,7 +2697,8 @@ class WeeToddH3LoRALoader:
     CATEGORY = "WeeTodd/H3/loaders"
     DESCRIPTION = (
         "Build a lazy, ordered MiniMax H3 LoRA stack. Validate safetensors headers now and load "
-        "adapter tensors only when the H3 transformer executes."
+        "adapter tensors only when the H3 transformer executes. Reject malformed A/B pairs "
+        "and unsupported tensor fields before loading weights."
     )
 
     def load(
@@ -2297,7 +2731,9 @@ class WeeToddH3LoRALoader:
             "file": path.name,
             "strength": strength,
             "profile": spec.resolved_profile,
+            "profile_classification_basis": spec.profile_classification_basis,
             "qkv_layout": spec.resolved_qkv_layout,
+            "structural_descriptor": spec.structural_descriptor,
             "tensor_bytes": spec.tensor_bytes,
             "adaln_input_grid": grid.name if grid is not None else None,
             "stack_size": len(stack.adapters),
@@ -2305,6 +2741,142 @@ class WeeToddH3LoRALoader:
             "start_after_evaluations": start_after_evaluations,
         }
         return stack, json.dumps(info, indent=2, sort_keys=True)
+
+
+class WeeToddH3VDNCheckpoint:
+    """Select OpenVDN's hybrid branch and its required adapter stack."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "components": ("WEETODD_H3_COMPONENTS",),
+                "config": ("WEETODD_H3_CONFIG",),
+                "repository": (
+                    "STRING",
+                    {
+                        "default": VDN_REPOSITORY_ID,
+                        "tooltip": (
+                            "Local directory produced by hf download "
+                            "OpenVDN/vdn-minimax-h3 --local-dir <directory>."
+                        ),
+                    },
+                ),
+                "stage": (list(VDN_STAGES), {"default": next(iter(VDN_STAGES))}),
+            },
+            "optional": {
+                "adaln_input_grid": (
+                    "STRING",
+                    {
+                        "default": "",
+                        "tooltip": (
+                            "Original H3 SiLU timestep grid for an AdaLN-pruned base. "
+                            "Uses the normal ComfyUI LoRA/model paths; blank checks the "
+                            "Turbo adapter and transformer directories for "
+                            "h3_silu_temb_grid.safetensors."
+                        ),
+                    },
+                ),
+                "inference_backend": (
+                    ["verified", "reference", "indexed_experimental"],
+                    {
+                        "default": "verified",
+                        "tooltip": (
+                            "Verified inference fusion; reference disables new optimizations. "
+                            "Indexed attention is numerically approximate and experimental."
+                        ),
+                    },
+                ),
+            },
+        }
+
+    RETURN_TYPES = (
+        "WEETODD_H3_COMPONENTS",
+        "WEETODD_H3_CONFIG",
+        "WEETODD_H3_VDN",
+        "WEETODD_H3_LORAS",
+        "STRING",
+    )
+    RETURN_NAMES = ("components", "config", "vdn", "loras", "vdn_info")
+    FUNCTION = "select"
+    CATEGORY = "WeeTodd/H3/sampling"
+    DESCRIPTION = (
+        "Select the VDN-H3 hybrid-attention branch and required LoRAs from a downloaded "
+        "OpenVDN/vdn-minimax-h3 repository. Supports T2VA with resident or paged H3 base "
+        "transformers. Experimental MLX runtime with a verified FP32 Metal matrix solve "
+        "and CPU fallback; "
+        "full-checkpoint render parity has not been established."
+    )
+
+    def select(
+        self,
+        components,
+        config,
+        repository,
+        stage,
+        adaln_input_grid="",
+        inference_backend="verified",
+    ):
+        if components.task != "t2va":
+            raise ValueError("VDN-H3 currently supports WeeTodd T2VA components only.")
+        transformer = Path(components.resolved_paths()["transformer"])
+        vdn = resolve_vdn_spec(_resolve_component_root(repository), stage)
+        vdn = replace(vdn, inference_backend=inference_backend)
+        vdn.validate()
+        from .lora import H3LoRASpec, H3LoRAStack
+
+        adapters = H3LoRAStack().append(
+            H3LoRASpec(
+                path=vdn.default_adapter,
+                strength=1.0,
+                profile="standard",
+                qkv_layout="contiguous_qkv",
+            )
+        )
+        if vdn.turbo_adapter is not None:
+            grid = _resolve_lora_path(adaln_input_grid) if adaln_input_grid.strip() else None
+            if grid is None:
+                for directory in (Path(vdn.turbo_adapter).parent, transformer, transformer.parent):
+                    candidate = directory / "h3_silu_temb_grid.safetensors"
+                    if candidate.is_file():
+                        grid = candidate
+                        break
+            adapters = adapters.append(
+                H3LoRASpec(
+                    path=vdn.turbo_adapter,
+                    strength=1.0,
+                    profile="turbo",
+                    qkv_layout="contiguous_qkv",
+                    adaln_input_grid=str(grid) if grid is not None else None,
+                )
+            )
+        configured = replace(
+            config,
+            steps=vdn.schedule_points,
+            sampling_method="euler",
+            attention_chunk_size="automatic",
+        )
+        configured.validate()
+        info = {
+            "repository_id": VDN_REPOSITORY_ID,
+            "stage": vdn.stage,
+            "checkpoint": Path(vdn.checkpoint).name,
+            "schedule_points": vdn.schedule_points,
+            "transformer_evaluations": vdn.schedule_points - 1,
+            "hybrid_attention": "window_softmax_plus_bidirectional_vdn_solve",
+            "softmax_window": {"chunk": 5, "radius": 1, "anchor_frames": "both"},
+            "linear_branch": Path(vdn.linear_branch).name,
+            "adapters": [Path(item.path).name for item in adapters.adapters],
+            "task": "t2va",
+            "runtime": "mlx_metal_solve_with_cpu_fallback",
+            "inference_backend": inference_backend,
+            "full_checkpoint_parity_validated": False,
+            "adaln_input_grid": (
+                Path(adapters.adapters[-1].adaln_input_grid).name
+                if adapters.adapters[-1].adaln_input_grid is not None else None
+            ),
+        }
+        return components, configured, vdn, adapters, json.dumps(info, indent=2, sort_keys=True)
 
 
 class WeeToddH3ValidatedSamplingPreset:
@@ -2406,9 +2978,801 @@ class WeeToddH3ValidatedSamplingPreset:
             "canvas": [configured.width, configured.height],
             "duration_seconds": configured.duration_seconds,
             "seed": configured.seed,
+            "source": selected.get("source"),
+            "required_transformer": selected.get("required_transformer"),
+            "required_attention_profile": selected.get("required_attention_profile"),
             "measurement": selected.get("measurement"),
         }
         return configured, loras, trajectory_forecast, json.dumps(info, indent=2, sort_keys=True)
+
+
+class WeeToddH3FastH3ProductionProfile:
+    """Apply one fail-closed native FastH3 VSA production policy."""
+
+    _PROFILES = {
+        "Balanced — compact indexed Metal (recommended)": {
+            "attention": "fasth3_vsa_90_metal",
+            "status": "validated_numerically_approximate",
+            "storage_layout": "compact_preordered",
+        },
+        "Speed candidate — compact Metal + 40 layers": {
+            "attention": "fasth3_vsa_90_metal",
+            "status": "generatively_approximate_candidate",
+            "storage_layout": "compact_preordered",
+            "active_layers": 40,
+        },
+        "Conservative — grouped MLX fallback": {
+            "attention": "fasth3_vsa_90",
+            "status": "experimental_control",
+            "storage_layout": "padded_tiles",
+        },
+        "Experimental — compact Metal + fused QKV": {
+            "attention": "fasth3_vsa_90_metal_fused_qkv",
+            "status": "numerically_approximate_research",
+            "storage_layout": "compact_preordered",
+        },
+    }
+    _TRANSFORMER = "weetodd-fasth3-vsa-datafree-q8-paged"
+    _SOURCE = "FastVideo/FastVideo-FastH3-4-step-Preview-v1-VSA-DataFree"
+    _SOURCE_REVISION = "b65818d41939b5085451074fe8ca8b799f8d4921"
+    _KEEP_RESOLUTION = "Keep Generation Config"
+    _RESOLUTION_MATRIX = {
+        "512×256 — 1m 00s / 5.79 GB MLX": {
+            "width": 512,
+            "height": 256,
+            "complete_wall_seconds": 60.29744724999182,
+            "complete_peak_memory_bytes": 5791476444,
+        },
+        "768×448 — 2m 22s / 7.18 GB MLX": {
+            "width": 768,
+            "height": 448,
+            "complete_wall_seconds": 141.7950401660055,
+            "complete_peak_memory_bytes": 7176383420,
+        },
+        "1024×576 — 4m 14s / 9.29 GB MLX": {
+            "width": 1024,
+            "height": 576,
+            "complete_wall_seconds": 254.22458666702732,
+            "complete_peak_memory_bytes": 9286711236,
+        },
+        "1280×704 — 6m 43s / 11.96 GB MLX": {
+            "width": 1280,
+            "height": 704,
+            "complete_wall_seconds": 402.85038945800625,
+            "complete_peak_memory_bytes": 11959781484,
+        },
+        "1536×832 — 9m 28s / 15.23 GB MLX": {
+            "width": 1536,
+            "height": 832,
+            "complete_wall_seconds": 568.4969888750347,
+            "complete_peak_memory_bytes": 15226952612,
+        },
+        "1920×1088 — 17m 00s / 22.16 GB MLX": {
+            "width": 1920,
+            "height": 1088,
+            "complete_wall_seconds": 1019.617088708037,
+            "complete_peak_memory_bytes": 22160015292,
+        },
+    }
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "components": ("WEETODD_H3_COMPONENTS",),
+                "config": ("WEETODD_H3_CONFIG",),
+                "profile": (
+                    list(cls._PROFILES),
+                    {"default": "Balanced — compact indexed Metal (recommended)"},
+                ),
+                "resolution_preset": (
+                    [cls._KEEP_RESOLUTION, *cls._RESOLUTION_MATRIX],
+                    {
+                        "default": "768×448 — 2m 22s / 7.18 GB MLX",
+                        "tooltip": (
+                            "Select one measured M3 Ultra canvas or preserve the dimensions from "
+                            "H3 Generation Config. Times include sampling, decode, and mux for a "
+                            "107-frame run; shared text encoding is excluded."
+                        ),
+                    },
+                ),
+            },
+            "optional": {
+                "min_tokens": (
+                    "INT",
+                    {
+                        "default": 4096,
+                        "min": 1024,
+                        "max": 131072,
+                        "step": 1024,
+                        "advanced": True,
+                        "tooltip": (
+                            "Keep 4096 for the shipped scaling range so the trained VSA route "
+                            "remains active at 512x256. Raise only for deliberate dense fallback."
+                        ),
+                    },
+                ),
+                "advisory_memory_budget_gb": (
+                    "FLOAT",
+                    {
+                        "default": 0.0,
+                        "min": 0.0,
+                        "max": 1024.0,
+                        "step": 1.0,
+                        "round": 0.1,
+                        "advanced": True,
+                        "tooltip": (
+                            "Optional planning budget in GiB. Zero uses detected physical memory. "
+                            "A manual value changes advisory warnings only; it does not simulate "
+                            "or validate a lower-memory render."
+                        ),
+                    },
+                ),
+            },
+        }
+
+    RETURN_TYPES = (
+        "WEETODD_H3_COMPONENTS",
+        "WEETODD_H3_CONFIG",
+        "WEETODD_H3_SOL_ATTENTION",
+        "STRING",
+        "WEETODD_H3_FASTVIDEO",
+    )
+    RETURN_NAMES = ("components", "config", "sol_attention", "profile_info", "fastvideo")
+    FUNCTION = "apply"
+    CATEGORY = "WeeTodd/H3/sampling"
+    DESCRIPTION = (
+        "Recommended native FastH3 VSA entry point. It applies the four-evaluation schedule, "
+        "selects one measured resolution and compact Metal backend or an explicit fallback, "
+        "reports hardware-aware advisories, and rejects incompatible checkpoints before sampling. "
+        "The opt-in 40-layer Speed candidate skips joint video/audio layers and still requires "
+        "sound-effect listening acceptance. Connect its fastvideo output to H3 Sample."
+    )
+
+    @classmethod
+    def validate_sampling_inputs(
+        cls, raw, components, config, attention, fastvideo, *, modifiers=(), loras=None
+    ):
+        """Check the profile's execution contract before transformer loading."""
+        if not raw:
+            return None
+        try:
+            info = json.loads(raw)
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise ValueError("Production profile info must be valid JSON.") from exc
+        if not isinstance(info, dict):
+            raise ValueError("Production profile info must decode to a JSON object.")
+        # Older metadata-only callers remain readable. Current profile outputs are versioned
+        # and must be connected together; their declared policy is an execution contract.
+        if "contract_version" not in info:
+            return info
+        if info["contract_version"] != 1 or info.get("profile") not in cls._PROFILES:
+            raise ValueError("Unsupported FastH3 production profile contract.")
+        selected = cls._PROFILES[info["profile"]]
+        if (
+            components.task != "t2va"
+            or components.resolved_paths()["transformer"].name != cls._TRANSFORMER
+        ):
+            raise ValueError("FastH3 profile requires its native VSA student and T2VA task.")
+        if config.steps != 5 or config.sampling_method != "euler":
+            raise ValueError(
+                "FastH3 profile requires five Euler schedule points / four evaluations."
+            )
+        if [config.width, config.height] != info.get(
+            "canvas"
+        ) or config.duration_seconds != info.get("duration_seconds_requested"):
+            raise ValueError(
+                "FastH3 profile config changed after selection; reconnect its config output."
+            )
+        if any(value is not None for value in modifiers) or (loras is not None and loras.adapters):
+            raise ValueError(
+                "FastH3 production profiles cannot be combined with cache, forecast, VDN, "
+                "continuation, or LoRA modifiers."
+            )
+        expected_attention = {
+            "enabled": True,
+            "consumer_backend": "grouped_sdpa"
+            if selected["attention"] == "fasth3_vsa_90"
+            else "metal_indexed",
+            "block_stack_preorder": selected["attention"] != "fasth3_vsa_90",
+            "qkv_prep_backend": "metal_fused"
+            if selected["attention"].endswith("fused_qkv")
+            else "mlx",
+            "sparsity": 0.9,
+            "min_tokens": info.get("min_tokens"),
+        }
+        if attention is None or any(
+            getattr(attention, key, None) != value for key, value in expected_attention.items()
+        ):
+            raise ValueError(
+                "FastH3 profile attention changed or is disconnected; reconnect its "
+                "sol_attention output."
+            )
+        expected_layers = selected.get("active_layers", 50)
+        if (
+            info.get("layers_per_evaluation") != expected_layers
+            or info.get("expected_attention_calls") != expected_layers * 4
+        ):
+            raise ValueError("FastH3 profile execution counts changed after selection.")
+        if expected_layers == 40:
+            if fastvideo is None or (
+                fastvideo.active_layers != 40
+                or fastvideo.pair_target_video
+                or fastvideo.protect_first_layers != 2
+                or fastvideo.protect_last_layers != 2
+            ):
+                raise ValueError(
+                    "FastH3 40-layer profile requires its fastvideo output connected unchanged "
+                    "to H3 Sample."
+                )
+            fastvideo.validate(50)
+            root = components.resolved_paths()["transformer"]
+            try:
+                manifest = json.loads((root / "paged_manifest.json").read_text())
+                quantization = json.loads((root / "quant_config.json").read_text())
+            except (OSError, json.JSONDecodeError) as exc:
+                raise ValueError(
+                    "FastH3 40-layer profile requires readable native checkpoint metadata."
+                ) from exc
+            if (
+                not isinstance(manifest, dict)
+                or not isinstance(quantization, dict)
+                or manifest.get("format") != "weetodd-h3-paged-v1"
+                or manifest.get("source") != cls._SOURCE
+                or manifest.get("source_revision") != cls._SOURCE_REVISION
+                or manifest.get("num_blocks") != 50
+                or manifest.get("attention") != "vsa_h3_64_90"
+                or manifest.get("sampling") != {"schedule_points": 5, "transformer_evaluations": 4}
+                or quantization.get("bits") != 8
+                or quantization.get("group_size") != 64
+                or quantization.get("quantize_core") is not True
+                or quantization.get("quantize_adaln") is not True
+                or quantization.get("adaln_bits") != 8
+                or quantization.get("overrides") != {}
+            ):
+                raise ValueError(
+                    "FastH3 40-layer profile requires the validated native Q8 VSA checkpoint "
+                    "revision; renaming another checkpoint is not sufficient."
+                )
+        elif fastvideo is not None and fastvideo.enabled:
+            raise ValueError(
+                "The selected FastH3 profile requires all 50 layers; select the Speed "
+                "candidate for thinning."
+            )
+        return info
+
+    @staticmethod
+    def validate_execution(info, latents):
+        """Do not publish a Speed result unless the engine proves the requested path ran."""
+        if not info or info.get("contract_version") != 1 or info.get("layers_per_evaluation") != 40:
+            return
+        report = getattr(latents, "fast_h3_approximation_report", None) or {}
+        kept = report.get("active_layer_indices", [])
+        skipped = report.get("skipped_layer_indices", [])
+        attention = getattr(latents, "sol_attention_report", None) or {}
+        if (
+            latents.transformer_evaluations != 4
+            or report.get("executed_layers") != 40
+            or report.get("skipped_layers") != 10
+            or len(kept) != 40
+            or len(skipped) != 10
+            or sorted([*kept, *skipped]) != list(range(50))
+            or not {0, 1, 48, 49}.issubset(kept)
+            or attention.get("executed_calls") != 160
+            or attention.get("fallback_calls") != 0
+            or attention.get("storage_layout") != "compact_preordered"
+        ):
+            raise RuntimeError(
+                "FastH3 40-layer execution proof failed; no production-profile artifact was "
+                "published. Inspect layer and attention telemetry."
+            )
+
+    @staticmethod
+    def _hardware_report():
+        memory_bytes = None
+        try:
+            memory_bytes = int(os.sysconf("SC_PHYS_PAGES")) * int(os.sysconf("SC_PAGE_SIZE"))
+        except (OSError, TypeError, ValueError):
+            pass
+        chip = None
+        if platform.system() == "Darwin":
+            try:
+                import subprocess
+
+                completed = subprocess.run(
+                    ["sysctl", "-n", "machdep.cpu.brand_string"],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=2,
+                )
+                chip = completed.stdout.strip() or None
+            except (OSError, subprocess.SubprocessError):
+                pass
+        return {
+            "architecture": platform.machine(),
+            "chip": chip,
+            "unified_memory_bytes": memory_bytes,
+            "unified_memory_gib": (memory_bytes / 1024**3 if memory_bytes is not None else None),
+        }
+
+    @classmethod
+    def _measurement_for_canvas(cls, width, height):
+        return next(
+            (
+                {"label": label, **measurement}
+                for label, measurement in cls._RESOLUTION_MATRIX.items()
+                if (measurement["width"], measurement["height"]) == (width, height)
+            ),
+            None,
+        )
+
+    def apply(
+        self,
+        components,
+        config,
+        profile,
+        resolution_preset="768×448 — 2m 22s / 7.18 GB MLX",
+        min_tokens=4096,
+        advisory_memory_budget_gb=0.0,
+    ):
+        try:
+            selected = self._PROFILES[profile]
+        except KeyError as exc:
+            raise ValueError(f"Unknown FastH3 production profile: {profile!r}.") from exc
+
+        transformer = components.resolved_paths()["transformer"]
+        if transformer.name != self._TRANSFORMER:
+            raise ValueError(
+                "FastH3 production profiles require the native VSA student transformer "
+                f"{self._TRANSFORMER!r}; selected {transformer.name!r}."
+            )
+        if components.task != "t2va":
+            raise ValueError(
+                "FastH3 Preview v1 native VSA supports T2VA only; "
+                f"selected task {components.task!r}."
+            )
+
+        if resolution_preset == self._KEEP_RESOLUTION:
+            configured = replace(config, steps=5, sampling_method="euler")
+        else:
+            try:
+                resolution = self._RESOLUTION_MATRIX[resolution_preset]
+            except KeyError as exc:
+                raise ValueError(
+                    f"Unknown FastH3 resolution preset: {resolution_preset!r}."
+                ) from exc
+            configured = replace(
+                config,
+                steps=5,
+                sampling_method="euler",
+                width=resolution["width"],
+                height=resolution["height"],
+                resolution_mode="exact dimensions",
+                resolution_tier="custom",
+                aspect_ratio="custom",
+            )
+        configured.validate()
+        attention, raw_attention = WeeToddH3SolAttention().configure(
+            selected["attention"],
+            0.75,
+            0.2,
+            1.0,
+            2,
+            int(min_tokens),
+        )
+        attention_info = json.loads(raw_attention)
+        fastvideo = None
+        active_layers = selected.get("active_layers", 50)
+        if active_layers == 40:
+            from minimax_h3_mlx.fasth3_approx import FastH3ApproximationConfig
+
+            fastvideo = FastH3ApproximationConfig(active_layers=40)
+            fastvideo.validate(50)
+        measurement = self._measurement_for_canvas(configured.width, configured.height)
+        hardware = self._hardware_report()
+        memory_budget_gib = float(advisory_memory_budget_gb)
+        if not math.isfinite(memory_budget_gib) or memory_budget_gib < 0.0:
+            raise ValueError("FastH3 advisory memory budget must be a finite non-negative value.")
+        budget_is_override = memory_budget_gib > 0.0
+        advisory_memory_bytes = (
+            round(memory_budget_gib * 1024**3)
+            if budget_is_override
+            else hardware["unified_memory_bytes"]
+        )
+        advisory_memory_source = (
+            "manual_override"
+            if budget_is_override
+            else (
+                "detected_physical_memory" if advisory_memory_bytes is not None else "unavailable"
+            )
+        )
+        warnings = []
+        if budget_is_override:
+            warnings.append(
+                f"Manual advisory memory budget of {memory_budget_gib:.1f} GiB is active; it "
+                "changes warning evaluation only and does not simulate or validate a "
+                "lower-memory render."
+            )
+        measurement_applicable = measurement is not None
+        if configured.inference_optimization != "off":
+            measurement_applicable = False
+            warnings.append(
+                "An opt-in H3 arithmetic experiment is active; the reference timing matrix "
+                "does not measure this policy. Generic QMM/dense rounding may differ."
+            )
+        if fastvideo is not None:
+            measurement_applicable = False
+            warnings.append(
+                "The 40-layer Speed candidate changes the joint video/audio trajectory. "
+                "Three 640x384 scenarios passed visual continuity, audio health, and dialogue "
+                "transcription; sound-effect fidelity and synchronization still need listening "
+                "acceptance. The resolution matrix is the 50-layer Balanced reference, not "
+                "a 40-layer timing or memory measurement."
+            )
+        if measurement is None:
+            warnings.append("The selected canvas is outside the measured FastH3 resolution matrix.")
+        if configured.duration_seconds != 4.0:
+            measurement_applicable = False
+            warnings.append(
+                "Measured time and memory apply to a 4.0-second request aligned to 107 frames; "
+                f"the selected request is {configured.duration_seconds:.1f} seconds."
+            )
+        if selected["attention"] != "fasth3_vsa_90_metal":
+            measurement_applicable = False
+            warnings.append(
+                "Measured matrix values use the Balanced compact indexed-Metal backend; the "
+                "selected attention policy has different performance."
+            )
+        if hardware["chip"] is None:
+            measurement_applicable = False
+            warnings.append(
+                "Apple chip identity is unavailable; M3 Ultra timing is reference-only."
+            )
+        elif hardware["chip"] != "Apple M3 Ultra":
+            measurement_applicable = False
+            warnings.append(
+                f"Detected {hardware['chip']}; measured times are specific to Apple M3 Ultra."
+            )
+
+        advisory_minimum_bytes = None
+        headroom_status = "unmeasured"
+        if measurement is not None:
+            peak_bytes = int(measurement["complete_peak_memory_bytes"])
+            advisory_minimum_bytes = max(round(peak_bytes * 1.35), peak_bytes + 4_000_000_000)
+            if advisory_memory_bytes is None:
+                headroom_status = "unknown"
+                warnings.append(
+                    "Unified-memory capacity is unavailable; confirm headroom in H3 Preflight."
+                )
+            elif advisory_memory_bytes < advisory_minimum_bytes:
+                headroom_status = "limited"
+                budget_description = (
+                    "the manual advisory budget is"
+                    if budget_is_override
+                    else "the detected system has"
+                )
+                warnings.append(
+                    "Limited measured headroom: this row used "
+                    f"{peak_bytes / 1_000_000_000:.2f} GB of MLX allocations on the reference "
+                    f"machine, while {budget_description} "
+                    f"{advisory_memory_bytes / 1024**3:.1f} GiB. "
+                    "This is advisory; H3 Preflight and live free memory remain authoritative."
+                )
+            else:
+                headroom_status = "comfortable"
+        info = {
+            "contract_version": 1,
+            "profile": profile,
+            "status": selected["status"],
+            "transformer": transformer.name,
+            "task": components.task,
+            "requested_schedule_points": configured.steps,
+            "transformer_evaluations": configured.steps - 1,
+            "layers_per_evaluation": active_layers,
+            "expected_attention_calls": active_layers * (configured.steps - 1),
+            "fastvideo": asdict(fastvideo) if fastvideo is not None else None,
+            "sampling_method": configured.sampling_method,
+            "inference_optimization": configured.inference_optimization,
+            "attention_profile": selected["attention"],
+            "attention_backend": attention_info["backend"],
+            "qkv_prep_backend": attention_info["qkv_prep_backend"],
+            "storage_layout": selected["storage_layout"],
+            "min_tokens": attention.min_tokens,
+            "canvas": [configured.width, configured.height],
+            "resolution_selector": resolution_preset,
+            "duration_seconds_requested": configured.duration_seconds,
+            "measurement": (
+                {
+                    **measurement,
+                    "reference_hardware": "Mac Studio M3 Ultra, 256 GB",
+                    "requested_duration_seconds": 4.0,
+                    "aligned_frames": 107,
+                    "fps": 24,
+                    "timing_scope": "sampling + direct video/audio decode + mux",
+                    "shared_text_encoding_excluded": True,
+                    "applicable_to_current_selection": measurement_applicable,
+                }
+                if measurement is not None
+                else None
+            ),
+            "hardware": {
+                **hardware,
+                "advisory_minimum_bytes": advisory_minimum_bytes,
+                "advisory_minimum_gib": (
+                    advisory_minimum_bytes / 1024**3 if advisory_minimum_bytes is not None else None
+                ),
+                "policy": "advisory_only",
+                "advisory_memory_budget_bytes": advisory_memory_bytes,
+                "advisory_memory_budget_gib": (
+                    advisory_memory_bytes / 1024**3 if advisory_memory_bytes is not None else None
+                ),
+                "advisory_memory_source": advisory_memory_source,
+                "advisory_budget_is_override": budget_is_override,
+                "headroom_status": headroom_status,
+                "validation_scope": (
+                    "warning_policy_only_not_lower_memory_hardware"
+                    if budget_is_override
+                    else "detected_hardware"
+                ),
+            },
+            "warnings": warnings,
+            "compatibility": "native FastH3 VSA student; T2VA only",
+            "fallback": (
+                "select Conservative — grouped MLX fallback if compact Metal is unavailable"
+                if selected["attention"] == "fasth3_vsa_90_metal"
+                else None
+            ),
+        }
+        return (
+            components,
+            configured,
+            attention,
+            json.dumps(info, indent=2, sort_keys=True),
+            fastvideo,
+        )
+
+
+class WeeToddH3FastVideoApproximation:
+    """Configure disclosed FastH3 layer and target-video token approximations."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "profile": (
+                    ["layer_thinning_40", "token_pairing", "combined_40_pairing", "manual"],
+                    {"default": "layer_thinning_40"},
+                ),
+                "active_layers": (
+                    "INT",
+                    {
+                        "default": 40,
+                        "min": 4,
+                        "max": 50,
+                        "step": 1,
+                        "tooltip": "Used only by manual; 50 disables layer thinning.",
+                    },
+                ),
+                "pair_target_video": (
+                    "BOOLEAN",
+                    {
+                        "default": False,
+                        "tooltip": (
+                            "Pair adjacent horizontal target-video tokens between the selected "
+                            "layers. Prefix text, condition, and audio rows remain full size."
+                        ),
+                    },
+                ),
+                "pair_start_layer": (
+                    "INT",
+                    {"default": 4, "min": 0, "max": 49, "step": 1},
+                ),
+                "pair_end_layer": (
+                    "INT",
+                    {"default": 30, "min": 1, "max": 50, "step": 1},
+                ),
+            }
+        }
+
+    RETURN_TYPES = ("WEETODD_H3_FASTVIDEO", "STRING")
+    RETURN_NAMES = ("fastvideo", "policy_info")
+    FUNCTION = "configure"
+    CATEGORY = "WeeTodd/H3/sampling"
+    DESCRIPTION = (
+        "Opt-in generative FastH3 approximations. Layer thinning is ranked once from the full "
+        "AdaLN schedule; token pairing keeps a full-resolution residual bypass."
+    )
+
+    def configure(
+        self,
+        profile,
+        active_layers,
+        pair_target_video,
+        pair_start_layer,
+        pair_end_layer,
+    ):
+        from minimax_h3_mlx.fasth3_approx import FastH3ApproximationConfig
+
+        if profile == "layer_thinning_40":
+            active_layers, pair_target_video = 40, False
+        elif profile == "token_pairing":
+            active_layers, pair_target_video = 50, True
+        elif profile == "combined_40_pairing":
+            active_layers, pair_target_video = 40, True
+        config = FastH3ApproximationConfig(
+            active_layers=None if int(active_layers) == 50 else int(active_layers),
+            pair_target_video=bool(pair_target_video),
+            pair_start_layer=int(pair_start_layer),
+            pair_end_layer=int(pair_end_layer),
+        )
+        config.validate(50)
+        info = {
+            **asdict(config),
+            "profile": profile,
+            "status": "generatively_approximate",
+            "layer_policy": "schedule-wide AdaLN attention+MLP gate magnitude",
+            "token_policy": (
+                "horizontal target-video pairs with full-resolution residual bypass"
+                if config.pair_target_video
+                else "disabled"
+            ),
+            "prefix_policy": "text, condition video, and audio rows remain full resolution",
+            "vsa_pairing_compatibility": "layer thinning only; token pairing requires dense FastH3",
+        }
+        return config, json.dumps(info, indent=2, sort_keys=True)
+
+
+class WeeToddH3SolAttention:
+    """Configure independent MLX Sol-style or trained FastH3 VSA attention."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "profile": (
+                    [
+                        "quality",
+                        "balanced",
+                        "speed",
+                        "fasth3_vsa_90",
+                        "fasth3_vsa_90_metal",
+                        "fasth3_vsa_90_metal_fused_qkv",
+                        "manual",
+                    ],
+                    {"default": "balanced"},
+                ),
+                "tau": (
+                    "FLOAT",
+                    {
+                        "default": 0.75,
+                        "min": 0.0,
+                        "max": 2.0,
+                        "step": 0.05,
+                        "tooltip": (
+                            "Higher values route fewer exact attention blocks. Used only by "
+                            "the manual profile."
+                        ),
+                    },
+                ),
+                "start_percent": (
+                    "FLOAT",
+                    {"default": 0.2, "min": 0.0, "max": 1.0, "step": 0.05},
+                ),
+                "end_percent": (
+                    "FLOAT",
+                    {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.05},
+                ),
+                "dense_blocks": (
+                    "INT",
+                    {"default": 2, "min": 0, "max": 50, "step": 1},
+                ),
+                "min_tokens": (
+                    "INT",
+                    {"default": 16384, "min": 1024, "max": 131072, "step": 1024},
+                ),
+            }
+        }
+
+    RETURN_TYPES = ("WEETODD_H3_SOL_ATTENTION", "STRING")
+    RETURN_NAMES = ("sol_attention", "policy_info")
+    FUNCTION = "configure"
+    CATEGORY = "WeeTodd/H3/sampling"
+    DESCRIPTION = (
+        "Experimental H3 sparse attention. Sol profiles use the fused MLX Metal backend; the "
+        "FastH3 profiles preserve trained 64-token routing and compression gates with either "
+        "grouped SDPA or an indexed Metal consumer. Both preserve the complete multimodal prefix."
+    )
+
+    def configure(
+        self,
+        profile,
+        tau,
+        start_percent,
+        end_percent,
+        dense_blocks,
+        min_tokens,
+    ):
+        if profile.startswith("fasth3_vsa_90"):
+            from minimax_h3_mlx.vsa_h3 import FastH3VSAConfig
+
+            config = FastH3VSAConfig(
+                enabled=True,
+                sparsity=0.9,
+                min_tokens=int(min_tokens),
+                query_tile_batch=8,
+                block_stack_preorder=profile != "fasth3_vsa_90",
+                consumer_backend=(
+                    "metal_indexed" if profile != "fasth3_vsa_90" else "grouped_sdpa"
+                ),
+                qkv_prep_backend=(
+                    "metal_fused"
+                    if profile == "fasth3_vsa_90_metal_fused_qkv"
+                    else "mlx"
+                ),
+            )
+            config.validate()
+            info = {
+                "profile": profile,
+                "backend": (
+                    "mlx_grouped_sdpa_vsa_h3"
+                    if config.consumer_backend == "grouped_sdpa"
+                    else "metal_indexed_vsa_h3"
+                ),
+                "qkv_prep_backend": config.qkv_prep_backend,
+                "block_stack_preorder": config.block_stack_preorder,
+                "storage_layout": (
+                    "compact_preordered"
+                    if config.consumer_backend == "metal_indexed"
+                    else "padded_tiles"
+                ),
+                "sparsity": config.sparsity,
+                "tile_shape": [4, 4, 4],
+                "tile_tokens": 64,
+                "query_tile_batch": config.query_tile_batch,
+                "prefix_policy": "segment-pure dense queries and exempt keys",
+                "requires": "FastH3 checkpoint with trained VSA gate_compress weights",
+                "status": (
+                    "numerically_approximate_research"
+                    if config.qkv_prep_backend == "metal_fused"
+                    else (
+                        "validated_numerically_approximate"
+                        if config.consumer_backend == "metal_indexed"
+                        else "experimental_control"
+                    )
+                ),
+            }
+            return config, json.dumps(info, indent=2, sort_keys=True)
+
+        from minimax_h3_mlx.sol_attention import SolAttentionConfig
+
+        presets = {
+            "quality": (0.75, 0.30, 1.0, 4),
+            "balanced": (1.00, 0.25, 1.0, 3),
+            "speed": (1.25, 0.20, 1.0, 2),
+        }
+        if profile in presets:
+            tau, start_percent, end_percent, dense_blocks = presets[profile]
+        config = SolAttentionConfig(
+            enabled=True,
+            tau=float(tau),
+            min_tokens=int(min_tokens),
+            start_percent=float(start_percent),
+            end_percent=float(end_percent),
+            dense_blocks=int(dense_blocks),
+        )
+        config.validate()
+        info = {
+            "profile": profile,
+            "tau": config.tau,
+            "start_percent": config.start_percent,
+            "end_percent": config.end_percent,
+            "dense_blocks": config.dense_blocks,
+            "min_tokens": config.min_tokens,
+            "exact_prefix": "automatic: text + visual references + audio",
+            "status": "experimental",
+        }
+        return config, json.dumps(info, indent=2, sort_keys=True)
 
 
 class WeeToddH3EasyCache:
@@ -2790,7 +4154,10 @@ class WeeToddH3VideoVAEDecode:
                 "components": ("WEETODD_H3_COMPONENTS",),
                 "latents": ("WEETODD_H3_LATENTS",),
                 "unload_after_decode": ("BOOLEAN", {"default": True}),
-            }
+            },
+            "optional": {
+                "video_tile_mode": (["fixed", "geometry_experimental"], {"default": "fixed"}),
+            },
         }
 
     RETURN_TYPES = ("IMAGE", "STRING")
@@ -2802,7 +4169,7 @@ class WeeToddH3VideoVAEDecode:
         "The audio latent stream remains available on the original latent output."
     )
 
-    def decode(self, components, latents, unload_after_decode):
+    def decode(self, components, latents, unload_after_decode, video_tile_mode="fixed"):
         staged_releases = ()
 
         def prepare_stage():
@@ -2819,7 +4186,7 @@ class WeeToddH3VideoVAEDecode:
         except ImportError:
             pass
         result = VIDEO_VAE_RUNTIME.decode(
-            H3VideoVAESpec.from_components(components),
+            H3VideoVAESpec.from_components(components, tile_mode=video_tile_mode),
             latents,
             unload_after=unload_after_decode,
             check_interrupted=check_interrupted,
@@ -2835,9 +4202,11 @@ class WeeToddH3VideoVAEDecode:
             "fps": result.fps,
             "decode_seconds": result.decode_seconds,
             "video_vae_resident": VIDEO_VAE_RUNTIME.loaded,
+            "phase_memory": getattr(latents, "phase_memory", None),
             "video_vae_quantization": result.quantization,
             "memory_mode": latents.generation_config.memory_mode,
             "tile_decode_batch": result.decode_batch,
+            "tile_plan": getattr(result, "tile_plan", None),
             "staged_releases": list(staged_releases),
         }
         return frames, json.dumps(info, indent=2, sort_keys=True)
@@ -2919,6 +4288,7 @@ class WeeToddH3AudioVAEDecode:
             "fps": result.fps,
             "decode_seconds": result.decode_seconds,
             "audio_vae_resident": AUDIO_VAE_RUNTIME.loaded,
+            "phase_memory": getattr(latents, "phase_memory", None),
             "memory_mode": latents.generation_config.memory_mode,
             "staged_releases": list(staged_releases),
         }
@@ -3184,6 +4554,16 @@ class WeeToddH3DirectPublishLatents:
                         "tooltip": "Optional ffmpeg executable override for this publication.",
                     },
                 ),
+                "video_tile_mode": (
+                    ["fixed", "geometry_experimental"],
+                    {
+                        "default": "fixed",
+                        "tooltip": (
+                            "Experimental geometry-aware VAE tiling changes decode context, "
+                            "not output resolution."
+                        ),
+                    },
+                ),
             },
         }
 
@@ -3207,6 +4587,7 @@ class WeeToddH3DirectPublishLatents:
         generation_metadata="{}",
         sampling_info="",
         ffmpeg_path="",
+        video_tile_mode="fixed",
     ):
         config = latents.generation_config
         config.validate()
@@ -3289,6 +4670,7 @@ class WeeToddH3DirectPublishLatents:
                 }
             },
             ffmpeg_path=ffmpeg_path or None,
+            video_tile_mode=video_tile_mode,
         )
         info = json.dumps(result.metadata, indent=2, sort_keys=True)
         relative = result.video_path.resolve().relative_to(output_root)
@@ -3510,13 +4892,22 @@ class WeeToddH3GenerationConfig:
                     },
                 ),
                 "projection_backend": (
-                    ["mlx", "mpp_experimental"],
+                    [
+                        "auto",
+                        "mlx",
+                        "mpp_experimental",
+                        "m5_low_bit_experimental",
+                        "mpp_resident_expanded_experimental",
+                    ],
                     {
-                        "default": "mlx",
+                        "default": "auto",
                         "advanced": True,
                         "tooltip": (
-                            "Experimental Metal Performance Primitives acceleration for eligible "
-                            "BF16 transformer projections. Unsupported projections use MLX."
+                            "Auto uses bitwise-verified Metal Performance Primitives acceleration "
+                            "for eligible BF16 transformer projections. The M5 low-bit option "
+                            "requires an M5 g17 GPU and a quantized checkpoint; every unsupported "
+                            "case falls back to standard MLX."
+                            " Resident expanded mode trades RAM for selective Q8-to-BF16 expansion."
                         ),
                     },
                 ),
@@ -3546,6 +4937,13 @@ class WeeToddH3GenerationConfig:
                         ),
                     },
                 ),
+                "inference_optimization": (
+                    ["off", "transient_q8", "compiled_adaln", "combined"],
+                    {
+                        "default": "off", "advanced": True,
+                        "tooltip": "Experimental H3 hot paths. Benchmark on your GPU before use.",
+                    },
+                ),
             },
         }
 
@@ -3556,7 +4954,8 @@ class WeeToddH3GenerationConfig:
 
     DESCRIPTION = (
         "Choose a clearly labeled aspect ratio and move the short-edge size slider, or use exact "
-        "dimensions. The live canvas remains on H3's required 32-pixel grid."
+        "dimensions. The canvas stays on H3's 32-pixel grid. "
+        "Optional hot-path experiments default off."
     )
 
     def configure(
@@ -3572,9 +4971,10 @@ class WeeToddH3GenerationConfig:
         drop_adaln,
         memory_mode="normal",
         attention_chunk_size="automatic",
-        projection_backend="mlx",
+        projection_backend="auto",
         short_edge=None,
         sampling_method="euler",
+        inference_optimization="off",
     ):
         width, height = _resolve_h3_resolution(
             resolution_mode,
@@ -3601,6 +5001,7 @@ class WeeToddH3GenerationConfig:
             attention_chunk_size=attention_chunk_size,
             projection_backend=projection_backend,
             sampling_method=sampling_method,
+            inference_optimization=inference_optimization,
         )
         config.validate()
         if ratio_mode:
@@ -3610,6 +5011,54 @@ class WeeToddH3GenerationConfig:
                 f"{width} × {height} pixels — {normalized_ratio} — {short_edge_label}",
             )
         return config, f"{width} × {height} pixels — custom"
+
+
+class WeeToddH3LowMemoryTuning:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "config": ("WEETODD_H3_CONFIG",),
+                "attention_head_chunk_size": (
+                    ["automatic", "2", "4", "8", "disabled"],
+                    {
+                        "default": "automatic",
+                        "tooltip": (
+                            "Chunk independent attention heads to bound the SDPA workspace. "
+                            "Automatic selects four heads in low-memory BF16 mode."
+                        ),
+                    },
+                ),
+                "ffn_row_chunk_size": (
+                    ["automatic", "128", "256", "512", "disabled"],
+                    {
+                        "default": "automatic",
+                        "tooltip": (
+                            "Chunk packed rows to bound the SwiGLU intermediate. Automatic "
+                            "selects 256 rows in low-memory BF16 mode."
+                        ),
+                    },
+                ),
+            }
+        }
+
+    RETURN_TYPES = ("WEETODD_H3_CONFIG",)
+    RETURN_NAMES = ("config",)
+    FUNCTION = "apply"
+    CATEGORY = "WeeTodd/H3/sampling"
+    DESCRIPTION = (
+        "Apply optional MLX attention-head and feed-forward row chunking without invalidating "
+        "older Generation Config workflows."
+    )
+
+    def apply(self, config, attention_head_chunk_size, ffn_row_chunk_size):
+        tuned = replace(
+            config,
+            attention_head_chunk_size=attention_head_chunk_size,
+            ffn_row_chunk_size=ffn_row_chunk_size,
+        )
+        tuned.validate()
+        return (tuned,)
 
 
 class WeeToddH3Generate:
@@ -3699,6 +5148,7 @@ NODE_CLASS_MAPPINGS = {
     "WeeToddH3PreviewOverride": WeeToddH3PreviewOverride,
     "WeeToddH3QuantizedTransformerLoader": WeeToddH3QuantizedTransformerLoader,
     "WeeToddH3Preflight": WeeToddH3Preflight,
+    "WeeToddH3TokenBudget": WeeToddH3TokenBudget,
     "WeeToddH3FirstFrame": WeeToddH3FirstFrame,
     "WeeToddH3LastFrame": WeeToddH3LastFrame,
     "WeeToddH3FirstLastFrame": WeeToddH3FirstLastFrame,
@@ -3708,6 +5158,8 @@ NODE_CLASS_MAPPINGS = {
     "WeeToddH3ReferenceImage": WeeToddH3ReferenceImage,
     "WeeToddH3ReferenceVideo": WeeToddH3ReferenceVideo,
     "WeeToddH3ReferenceAudio": WeeToddH3ReferenceAudio,
+    "WeeToddH3TimelineVisualGuide": WeeToddH3TimelineVisualGuide,
+    "WeeToddH3TimelineAudioGuide": WeeToddH3TimelineAudioGuide,
     "WeeToddH3KeyframeEncode": WeeToddH3KeyframeEncode,
     "WeeToddH3TimedKeyframeEncode": WeeToddH3TimedKeyframeEncode,
     "WeeToddH3ReferenceEncode": WeeToddH3ReferenceEncode,
@@ -3717,9 +5169,14 @@ NODE_CLASS_MAPPINGS = {
     "WeeToddH3ContinuationContext": WeeToddH3ContinuationContext,
     "WeeToddH3ChainAppend": WeeToddH3ChainAppend,
     "WeeToddH3Sample": WeeToddH3Sample,
+    "WeeToddH3LearnedLatentUpscalerLoader": WeeToddH3LearnedLatentUpscalerLoader,
     "WeeToddH3LatentHiresFix": WeeToddH3LatentHiresFix,
     "WeeToddH3LoRALoader": WeeToddH3LoRALoader,
+    "WeeToddH3VDNCheckpoint": WeeToddH3VDNCheckpoint,
     "WeeToddH3ValidatedSamplingPreset": WeeToddH3ValidatedSamplingPreset,
+    "WeeToddH3FastH3ProductionProfile": WeeToddH3FastH3ProductionProfile,
+    "WeeToddH3FastVideoApproximation": WeeToddH3FastVideoApproximation,
+    "WeeToddH3SolAttention": WeeToddH3SolAttention,
     "WeeToddH3EasyCache": WeeToddH3EasyCache,
     "WeeToddH3TrajectoryForecast": WeeToddH3TrajectoryForecast,
     "WeeToddH3BlockCache": WeeToddH3BlockCache,
@@ -3735,6 +5192,7 @@ NODE_CLASS_MAPPINGS = {
     "WeeToddH3DirectPublishChain": WeeToddH3DirectPublishChain,
     "WeeToddH3ModelLoader": WeeToddH3ModelLoader,
     "WeeToddH3GenerationConfig": WeeToddH3GenerationConfig,
+    "WeeToddH3LowMemoryTuning": WeeToddH3LowMemoryTuning,
     "WeeToddH3Generate": WeeToddH3Generate,
     "WeeToddH3Unload": WeeToddH3Unload,
 }
@@ -3743,6 +5201,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "WeeToddH3PreviewOverride": "WeeTodd H3 Model Preview Override",
     "WeeToddH3QuantizedTransformerLoader": "WeeTodd H3 Quantized Transformer Loader",
     "WeeToddH3Preflight": "WeeTodd H3 Component Preflight",
+    "WeeToddH3TokenBudget": "WeeTodd H3 Token + Memory Budget",
     "WeeToddH3FirstFrame": "WeeTodd H3 First Frame",
     "WeeToddH3LastFrame": "WeeTodd H3 Last Frame",
     "WeeToddH3FirstLastFrame": "WeeTodd H3 First + Last Frame",
@@ -3752,6 +5211,8 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "WeeToddH3ReferenceImage": "WeeTodd H3 Reference Image",
     "WeeToddH3ReferenceVideo": "WeeTodd H3 Reference Video",
     "WeeToddH3ReferenceAudio": "WeeTodd H3 Reference Audio",
+    "WeeToddH3TimelineVisualGuide": "WeeTodd H3 Timeline Visual Guide",
+    "WeeToddH3TimelineAudioGuide": "WeeTodd H3 Timeline Audio Guide",
     "WeeToddH3KeyframeEncode": "WeeTodd H3 Encode First / Last Frames",
     "WeeToddH3TimedKeyframeEncode": "WeeTodd H3 Encode Timed Keyframes",
     "WeeToddH3ReferenceEncode": "WeeTodd H3 Encode References",
@@ -3761,9 +5222,18 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "WeeToddH3ContinuationContext": "WeeTodd H3 Motion Continuation Context",
     "WeeToddH3ChainAppend": "WeeTodd H3 Append Latent Chain Window",
     "WeeToddH3Sample": "WeeTodd H3 Sample Video + Audio Latents",
+    "WeeToddH3LearnedLatentUpscalerLoader": (
+        "WeeTodd H3 Learned Latent Upscaler Loader (MLX)"
+    ),
     "WeeToddH3LatentHiresFix": "WeeTodd H3 Latent Hi Res Fix",
     "WeeToddH3LoRALoader": "WeeTodd H3 LoRA Loader (MLX)",
+    "WeeToddH3VDNCheckpoint": "WeeTodd H3 VDN Checkpoint (MLX)",
     "WeeToddH3ValidatedSamplingPreset": "WeeTodd H3 Validated Sampling Preset",
+    "WeeToddH3FastH3ProductionProfile": "WeeTodd H3 FastH3 Production Profile",
+    "WeeToddH3FastVideoApproximation": (
+        "WeeTodd H3 FastVideo Approximation (MLX Experimental)"
+    ),
+    "WeeToddH3SolAttention": "WeeTodd H3 Sparse Attention (MLX Experimental)",
     "WeeToddH3EasyCache": "WeeTodd H3 EasyCache (MLX)",
     "WeeToddH3TrajectoryForecast": "WeeTodd H3 Trajectory Forecast (MLX)",
     "WeeToddH3BlockCache": "WeeTodd H3 BlockCache (MLX)",
@@ -3779,6 +5249,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "WeeToddH3DirectPublishChain": "WeeTodd H3 Direct Publish Chained Timeline (MLX)",
     "WeeToddH3ModelLoader": "WeeTodd H3 Model Loader (MLX)",
     "WeeToddH3GenerationConfig": "WeeTodd H3 Generation Config",
+    "WeeToddH3LowMemoryTuning": "WeeTodd H3 Low-Memory Tuning (MLX)",
     "WeeToddH3Generate": "WeeTodd H3 Generate Video + Audio",
     "WeeToddH3Unload": "WeeTodd H3 Unload MLX Runtime",
 }
@@ -3806,3 +5277,49 @@ from .ltx25_nodes import (  # noqa: E402
 
 NODE_CLASS_MAPPINGS.update(LTX25_NODE_CLASS_MAPPINGS)
 NODE_DISPLAY_NAME_MAPPINGS.update(LTX25_NODE_DISPLAY_NAME_MAPPINGS)
+
+# Control preprocessors use a separate MLX execution layer so their models and
+# intermediate state never become part of either video-generation runtime.
+from .control_preprocessors import (  # noqa: E402
+    NODE_CLASS_MAPPINGS as CONTROL_PREPROCESSOR_NODE_CLASS_MAPPINGS,
+)
+from .control_preprocessors import (  # noqa: E402
+    NODE_DISPLAY_NAME_MAPPINGS as CONTROL_PREPROCESSOR_NODE_DISPLAY_NAME_MAPPINGS,
+)
+
+NODE_CLASS_MAPPINGS.update(CONTROL_PREPROCESSOR_NODE_CLASS_MAPPINGS)
+NODE_DISPLAY_NAME_MAPPINGS.update(CONTROL_PREPROCESSOR_NODE_DISPLAY_NAME_MAPPINGS)
+
+from .h3_controlnet import (  # noqa: E402
+    NODE_CLASS_MAPPINGS as H3_CONTROLNET_NODE_CLASS_MAPPINGS,
+)
+from .h3_controlnet import (  # noqa: E402
+    NODE_DISPLAY_NAME_MAPPINGS as H3_CONTROLNET_NODE_DISPLAY_NAME_MAPPINGS,
+)
+
+NODE_CLASS_MAPPINGS.update(H3_CONTROLNET_NODE_CLASS_MAPPINGS)
+NODE_DISPLAY_NAME_MAPPINGS.update(H3_CONTROLNET_NODE_DISPLAY_NAME_MAPPINGS)
+
+# CorridorKey is a separately licensed, optional MLX media engine. This import
+# registers only the lightweight Apache-2.0 adapter and mask utilities.
+from .corridorkey_nodes import (  # noqa: E402
+    NODE_CLASS_MAPPINGS as CORRIDORKEY_NODE_CLASS_MAPPINGS,
+)
+from .corridorkey_nodes import (  # noqa: E402
+    NODE_DISPLAY_NAME_MAPPINGS as CORRIDORKEY_NODE_DISPLAY_NAME_MAPPINGS,
+)
+
+NODE_CLASS_MAPPINGS.update(CORRIDORKEY_NODE_CLASS_MAPPINGS)
+NODE_DISPLAY_NAME_MAPPINGS.update(CORRIDORKEY_NODE_DISPLAY_NAME_MAPPINGS)
+
+# Florence-2 uses the existing MLX-VLM dependency as an optional, independently
+# unloadable text-grounding provider for standard ComfyUI masks.
+from .florence_mask_nodes import (  # noqa: E402
+    NODE_CLASS_MAPPINGS as FLORENCE_MASK_NODE_CLASS_MAPPINGS,
+)
+from .florence_mask_nodes import (  # noqa: E402
+    NODE_DISPLAY_NAME_MAPPINGS as FLORENCE_MASK_NODE_DISPLAY_NAME_MAPPINGS,
+)
+
+NODE_CLASS_MAPPINGS.update(FLORENCE_MASK_NODE_CLASS_MAPPINGS)
+NODE_DISPLAY_NAME_MAPPINGS.update(FLORENCE_MASK_NODE_DISPLAY_NAME_MAPPINGS)

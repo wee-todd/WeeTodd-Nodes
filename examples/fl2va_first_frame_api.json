@@ -32,7 +32,7 @@
       "sampling_method": "euler"
     }
   },
-  "3": {"class_type": "LoadImage", "inputs": {"image": "first_frame.png"}},
+  "3": {"class_type": "LoadImage", "inputs": {"image": ""}},
   "4": {"class_type": "WeeToddH3FirstFrame", "inputs": {"first_frame": ["3", 0]}},
   "5": {
     "class_type": "WeeToddH3KeyframeEncode",

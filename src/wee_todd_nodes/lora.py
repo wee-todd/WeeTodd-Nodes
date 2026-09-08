@@ -6,6 +6,8 @@ import math
 from dataclasses import dataclass
 from pathlib import Path
 
+from wee_todd_mlx.adapter_contract import inspect_adapter
+
 from .preflight import read_safetensors_header
 
 
@@ -13,10 +15,16 @@ def _adapter_targets(names: tuple[str, ...]) -> set[str]:
     targets = set()
     for name in names:
         for ending in (
+            ".lora_A.turbo.weight",
+            ".lora_B.turbo.weight",
+            ".lora_A.default.weight",
+            ".lora_B.default.weight",
             ".lora_A.weight",
             ".lora_B.weight",
             ".lora_down.weight",
             ".lora_up.weight",
+            ".lora_a.weight",
+            ".lora_b.weight",
         ):
             if name.endswith(ending):
                 targets.add(name[: -len(ending)])
@@ -52,18 +60,27 @@ class H3LoRASpec:
             raise ValueError("MiniMax H3 LoRA start_after_evaluations must be zero or greater.")
 
         header = read_safetensors_header(path)
+        # The common contract rejects mixed schemas, malformed ranks, and unknown
+        # tensor fields before either the paged or resident engine can allocate.
+        contract = inspect_adapter(path, allow_exact_deltas=True)
         names = header.tensor_names
-        targets = _adapter_targets(names)
+        targets = {str(pair["target"]) for pair in contract["pairs"]}
         if not targets:
             raise ValueError("The selected safetensors file contains no supported LoRA targets.")
         for target in targets:
             a_names = {
+                target + ".lora_A.turbo.weight",
+                target + ".lora_A.default.weight",
                 target + ".lora_A.weight",
                 target + ".lora_down.weight",
+                target + ".lora_a.weight",
             }
             b_names = {
+                target + ".lora_B.turbo.weight",
+                target + ".lora_B.default.weight",
                 target + ".lora_B.weight",
                 target + ".lora_up.weight",
+                target + ".lora_b.weight",
             }
             if not a_names.intersection(names) or not b_names.intersection(names):
                 raise ValueError(f"LoRA target {target!r} does not contain a complete A/B pair.")
@@ -87,16 +104,78 @@ class H3LoRASpec:
     def resolved_profile(self) -> str:
         if self.profile != "auto":
             return self.profile
-        return "turbo" if "turbo" in Path(self.path).name.lower() else "standard"
+        metadata = inspect_adapter(Path(self.path).expanduser(), allow_exact_deltas=True)[
+            "metadata"
+        ]
+        declared = str(
+            metadata.get("adapter_profile")
+            or metadata.get("profile")
+            or metadata.get("distillation_profile")
+            or ""
+        ).strip().lower()
+        if declared in {"turbo", "distilled", "dmd"}:
+            return "turbo"
+        if declared in {"standard", "base", "quality"}:
+            return "standard"
+        for key in ("inference_steps", "num_inference_steps", "steps"):
+            try:
+                if 1 <= int(metadata.get(key, 0)) <= 8:
+                    return "turbo"
+            except (TypeError, ValueError):
+                pass
+        # Ambiguous metadata must not let a downloaded filename alter schedule math.
+        return "standard"
+
+    @property
+    def profile_classification_basis(self) -> str:
+        if self.profile != "auto":
+            return "explicit user selection"
+        metadata = inspect_adapter(Path(self.path).expanduser(), allow_exact_deltas=True)[
+            "metadata"
+        ]
+        if any(
+            metadata.get(key) not in (None, "")
+            for key in (
+                "adapter_profile",
+                "profile",
+                "distillation_profile",
+                "inference_steps",
+                "num_inference_steps",
+                "steps",
+            )
+        ):
+            return "checkpoint metadata"
+        return "metadata ambiguous; source-independent standard default"
 
     @property
     def tensor_bytes(self) -> int:
         return read_safetensors_header(self.path).tensor_bytes
 
     @property
+    def structural_descriptor(self) -> dict[str, object]:
+        report = inspect_adapter(Path(self.path).expanduser(), allow_exact_deltas=True)
+        return {
+            "contract": report["format"],
+            "pair_schemas": report["pair_schemas"],
+            "ranks": report["ranks"],
+            "target_fingerprint": report["target_fingerprint"],
+            "target_count": len(report["pairs"]),
+            "exact_delta_count": len(report["exact_deltas"]),
+            "declared_scaling": report["declared_scaling"],
+        }
+
+    @property
     def resolved_qkv_layout(self) -> str:
         if self.qkv_layout != "auto":
             return self.qkv_layout
+        metadata = inspect_adapter(Path(self.path).expanduser(), allow_exact_deltas=True)[
+            "metadata"
+        ]
+        declared = str(metadata.get("qkv_layout") or metadata.get("qkv_fusion") or "").lower()
+        if any(marker in declared for marker in ("contiguous", "concat", "block diagonal")):
+            return "contiguous_qkv"
+        if any(marker in declared for marker in ("interleaved", "per-head")):
+            return "native_interleaved"
         return "contiguous_qkv" if self.resolved_profile == "turbo" else "native_interleaved"
 
     def engine_request(self) -> dict[str, object]:
@@ -158,7 +237,9 @@ class H3LoRAStack:
                 "file": Path(spec.path).name,
                 "strength": spec.strength,
                 "profile": spec.resolved_profile,
+                "profile_classification_basis": spec.profile_classification_basis,
                 "qkv_layout": spec.resolved_qkv_layout,
+                "structural_descriptor": spec.structural_descriptor,
                 "tensor_bytes": spec.tensor_bytes,
                 "adaln_input_grid": (
                     Path(spec.adaln_input_grid).name if spec.adaln_input_grid else None

@@ -1,4 +1,5 @@
 .DS_Store
+._*
 .venv/
 .agents/
 __pycache__/
@@ -31,3 +32,14 @@ algorithm_search_captures/
 .env.*
 !.env.example
 *.token
+
+# Studio documents and exported jobs contain local paths and private prompts.
+*.weetodd
+*.weetodd-media/
+*.weetodd-job.json
+*.weetodd-job.json.txt
+
+# Local acceptance recipes contain machine paths and private input assets.
+/benchmarks/h3_acceptance/
+/benchmarks/ltx23_acceptance/
+/benchmarks/ltx25_acceptance/

@@ -5,7 +5,7 @@ from __future__ import annotations
 import gc
 import json
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from threading import RLock
 from typing import Any
@@ -13,6 +13,7 @@ from typing import Any
 from .conditioning import H3Conditioning, H3TextEncoderSpec
 from .continuation import H3ContinuationContext, validate_continuation_for_sample
 from .lora import H3LoRAStack
+from .phase_memory import measured_phase
 from .preflight import H3ComponentSetSpec, validate_task_partition
 from .preview import H3PreviewConfig, H3PreviewSession
 from .runtime import H3GenerationConfig
@@ -77,6 +78,21 @@ class H3TransformerSpec:
 
 
 @dataclass(frozen=True)
+class H3LearnedLatentUpscalerSpec:
+    """Deferred MLX checkpoint selection for learned H3 video-latent upscaling."""
+
+    checkpoint: str
+
+    def validate(self) -> Path:
+        source = Path(self.checkpoint).expanduser()
+        if not source.is_file():
+            raise FileNotFoundError(f"H3 learned latent upscaler not found: {source}")
+        if source.suffix.lower() != ".safetensors":
+            raise ValueError("H3 learned latent upscaler must be a SafeTensors checkpoint.")
+        return source
+
+
+@dataclass(frozen=True)
 class H3Latents:
     """Adapter contract for synchronized undecoded MLX video and audio latents."""
 
@@ -121,13 +137,22 @@ class H3Latents:
     projection_backend_report: dict[str, Any] | None = None
     projection_backend_runtime: dict[str, Any] | None = None
     paging_report: dict[str, Any] | None = None
+    block_residency_report: dict[str, Any] | None = None
     text_encoder_paging_report: dict[str, Any] | None = None
     refinement_source_width: int | None = None
     refinement_source_height: int | None = None
     refinement_strength: float | None = None
     refinement_audio_preserved: bool = False
+    refinement_upscaler_report: dict[str, int | float | str | bool] | None = None
+    refinement_condition_rows_resized: bool = False
     preview_report: tuple[dict[str, Any], ...] = ()
     prepared_state_report: dict[str, int | float | str | None] | None = None
+    sol_attention_report: dict[str, Any] | None = None
+    fast_h3_approximation_report: dict[str, Any] | None = None
+    vdn_report: dict[str, Any] | None = None
+    phase_memory: dict[str, Any] | None = None
+    conditioning_cache_report: dict[str, Any] | None = None
+    fun_control_report: dict[str, Any] | None = None
 
 
 SamplerFactory = Callable[[H3TransformerSpec], Any]
@@ -158,8 +183,11 @@ class H3TransformerCache:
         self._spec: H3TransformerSpec | None = None
         self._schedule_key: tuple | None = None
         self._lora_key = None
+        self._vdn_key = None
         self._lora_report: tuple[dict[str, Any], ...] = ()
         self._projection_backend_report: dict[str, Any] | None = None
+        self._fun_control_key = None
+        self._fun_control_model: Any = None
         self._sampler: Any = None
 
     @property
@@ -167,6 +195,7 @@ class H3TransformerCache:
         with self._lock:
             return self._sampler is not None
 
+    @measured_phase("transformer")
     def sample(
         self,
         spec: H3TransformerSpec,
@@ -174,28 +203,56 @@ class H3TransformerCache:
         config: H3GenerationConfig,
         *,
         unload_after: bool = True,
+        block_residency: str = "checkpoint_default",
         step_callback=None,
         easycache=None,
         blockcache=None,
         trajectory_forecast=None,
+        sol_attention=None,
+        fastvideo=None,
+        vdn=None,
         continuation: H3ContinuationContext | None = None,
         refinement_source: H3Latents | None = None,
         refinement_strength: float = 1.0,
         refinement_resize_method: str = "bilinear",
+        refinement_learned_upscaler: H3LearnedLatentUpscalerSpec | None = None,
+        refinement_upscaler_callback=None,
         loras: H3LoRAStack | None = None,
         preview_config: H3PreviewConfig | None = None,
         preview_callback=None,
         prepare_stage: Callable[[], None] | None = None,
+        fun_control_spec=None,
+        fun_control_latent=None,
     ) -> H3Latents:
         spec.validate()
         config.validate()
+        if (fun_control_spec is None) != (fun_control_latent is None):
+            raise ValueError("H3 Fun ControlNet requires both a checkpoint spec and control latent")
+        fun_control_key = None
+        if fun_control_spec is not None:
+            control_path = fun_control_spec.validate()
+            fun_control_key = (str(control_path.resolve()), float(fun_control_spec.strength))
+            if spec.task != "t2va" or conditioning.task != "t2va":
+                raise ValueError("H3 Fun ControlNet currently requires the native T2VA base path")
+        if block_residency not in {"checkpoint_default", "resident"}:
+            raise ValueError("H3 block_residency must be checkpoint_default or resident.")
+        if block_residency == "resident" and config.memory_mode == "low_memory_bf16":
+            raise ValueError("Resident H3 blocks require normal memory mode.")
+        if config.projection_backend == "mpp_resident_expanded_experimental" and (
+            block_residency != "resident" or config.memory_mode != "normal"
+        ):
+            raise ValueError(
+                "Expanded Q8 projections require explicit resident blocks and normal memory mode."
+            )
         continuation_text_only_fl2va = bool(
             spec.task == "fl2va"
             and continuation is not None
             and conditioning.condition_video_rows is None
             and not conditioning.keyframe_anchors
         )
-        expected_vision = spec.task in {"fl2va", "ref2va"} and not continuation_text_only_fl2va
+        expected_vision = (
+            spec.task == "fl2va" and not continuation_text_only_fl2va
+        ) or (spec.task == "ref2va" and conditioning.condition_video_rows is not None)
         if conditioning.task != spec.task:
             raise ValueError(
                 f"Conditioning task {conditioning.task!r} does not match "
@@ -215,9 +272,13 @@ class H3TransformerCache:
         ):
             raise ValueError("FL2VA conditioning requires encoded first/last-frame rows.")
         if spec.task == "ref2va" and (
-            conditioning.condition_video_rows is None or not conditioning.references
+            not conditioning.references
+            or (
+                conditioning.condition_video_rows is None
+                and conditioning.condition_audio_rows is None
+            )
         ):
-            raise ValueError("Ref2VA conditioning requires encoded visual reference rows.")
+            raise ValueError("Ref2VA conditioning requires encoded visual or audio reference rows.")
         if spec.task == "ref2va" and conditioning.keyframe_anchors:
             raise ValueError("Ref2VA conditioning cannot contain first/last-frame anchors.")
         if continuation is not None:
@@ -255,6 +316,25 @@ class H3TransformerCache:
             raise ValueError(
                 "Conditioning was produced by a different Qwen3-VL component specification."
             )
+        refinement_condition_rows_resized = False
+        if refinement_source is not None and spec.task == "fl2va":
+            from minimax_h3_mlx.hires_fix import resize_fl2va_condition_rows
+
+            conditioning = replace(
+                conditioning,
+                condition_video_rows=resize_fl2va_condition_rows(
+                    conditioning.condition_video_rows,
+                    conditioning.keyframe_anchors,
+                    source_height=refinement_source.height // 16,
+                    source_width=refinement_source.width // 16,
+                    target_height=config.height // 16,
+                    target_width=config.width // 16,
+                    # Condition rows are geometry constraints, not the visual refinement source.
+                    # Stable bilinear resizing matches the learned checkpoint's spatial stage.
+                    method="bilinear",
+                ),
+            )
+            refinement_condition_rows_resized = True
         condition_schedule_key = (
             continuation is not None,
             refinement_source is not None,
@@ -270,8 +350,39 @@ class H3TransformerCache:
             config.memory_mode,
             config.projection_backend,
             config.sampling_method,
+            config.inference_optimization,
+            block_residency,
             condition_schedule_key,
+            sol_attention,
+            fastvideo,
+            vdn.cache_key if vdn is not None else None,
         )
+        if vdn is not None:
+            vdn.validate()
+            vdn.validate_sampling(config, loras)
+            if spec.task != "t2va":
+                raise ValueError("VDN-H3 MLX currently supports T2VA only.")
+            if config.steps != vdn.schedule_points:
+                raise ValueError(
+                    "VDN-H3 sampling schedule does not match the selected checkpoint; "
+                    "use the config output from WeeTodd H3 VDN Checkpoint."
+                )
+            if any(
+                value is not None
+                for value in (
+                    easycache,
+                    blockcache,
+                    trajectory_forecast,
+                    sol_attention,
+                    fastvideo,
+                    continuation,
+                    refinement_source,
+                )
+            ):
+                raise ValueError(
+                    "VDN-H3 must run in isolation from cache, forecast, sparse-attention, "
+                    "FastVideo, continuation, and Hi Res Fix controls."
+                )
         loras = loras or H3LoRAStack()
         loras.validate_for_steps(config.steps)
         staged_lora = any(spec.start_after_evaluations > 0 for spec in loras.adapters)
@@ -303,10 +414,39 @@ class H3TransformerCache:
         accelerators = sum(
             value is not None for value in (easycache, blockcache, trajectory_forecast)
         )
+        if sol_attention is not None and accelerators:
+            raise ValueError(
+                "H3 Sol Attention must be validated without EasyCache, BlockCache, or "
+                "Trajectory Forecast. Disconnect the other accelerator."
+            )
+        if fastvideo is not None and getattr(fastvideo, "enabled", False) and accelerators:
+            raise ValueError(
+                "FastH3 FastVideo approximations require an isolated baseline run. Disconnect "
+                "EasyCache, BlockCache, and Trajectory Forecast."
+            )
         if accelerators > 1:
             raise ValueError(
                 "EasyCache, BlockCache, and Trajectory Forecast are mutually exclusive."
             )
+        if fun_control_spec is not None and any(
+            value is not None
+            for value in (
+                easycache,
+                blockcache,
+                trajectory_forecast,
+                sol_attention,
+                fastvideo,
+                vdn,
+                continuation,
+                refinement_source,
+            )
+        ):
+            raise ValueError(
+                "H3 Fun ControlNet must run without cache, forecast, VDN, sparse-attention, "
+                "or FastH3 approximation controls until those combinations are qualified"
+            )
+        if fun_control_spec is not None and loras.adapters:
+            raise ValueError("H3 Fun ControlNet with LoRA stacks is not qualified yet")
         if continuation is not None and (easycache is not None or blockcache is not None):
             raise ValueError(
                 "H3 continuation supports dense sampling or Trajectory Forecast. Disconnect "
@@ -323,26 +463,83 @@ class H3TransformerCache:
             )
         if prepare_stage is not None:
             prepare_stage()
+        initial_video_latents = None
+        initial_audio_latents = None
+        refinement_upscaler_report = None
+        if refinement_source is not None:
+            import mlx.core as mx
+
+            if refinement_learned_upscaler is not None:
+                # A warm transformer from the first pass must not overlap the temporary learned
+                # upscaler. Reloading it after this stage is cheaper than increasing peak memory.
+                self.unload()
+                from minimax_h3_mlx.learned_latent_upscaler import (
+                    upscale_h3_video_latents_learned,
+                )
+
+                initial_video_latents, refinement_upscaler_report = (
+                    upscale_h3_video_latents_learned(
+                        refinement_source.video,
+                        config.height // 16,
+                        config.width // 16,
+                        refinement_learned_upscaler.validate(),
+                        progress_callback=refinement_upscaler_callback,
+                    )
+                )
+            else:
+                from minimax_h3_mlx.hires_fix import resize_video_latents
+
+                initial_video_latents = resize_video_latents(
+                    refinement_source.video,
+                    config.height // 16,
+                    config.width // 16,
+                    method=refinement_resize_method,
+                )
+            initial_audio_latents = refinement_source.audio
+            mx.eval(initial_video_latents, initial_audio_latents)
         lora_key = loras.cache_key
+        vdn_key = vdn.cache_key if vdn is not None else None
         with self._lock:
             if (
                 self._sampler is None
                 or self._spec != spec
                 or self._schedule_key != schedule_key
                 or self._lora_key != lora_key
+                or self._vdn_key != vdn_key
+                or self._fun_control_key != fun_control_key
             ):
                 self._release_locked()
                 try:
                     self._sampler = self._factory(spec)
+                    if block_residency == "resident":
+                        from minimax_h3_mlx.paged_checkpoint import materialize_paged_blocks
+
+                        self._sampler.dit.block_residency_report = materialize_paged_blocks(
+                            self._sampler.dit
+                        )
                     self._spec = spec
                     self._schedule_key = schedule_key
                     self._lora_key = lora_key
+                    self._vdn_key = vdn_key
+                    self._fun_control_key = fun_control_key
                     from minimax_h3_mlx.projection import configure_projection_backend
 
                     backend_report = configure_projection_backend(
                         self._sampler.dit, config.projection_backend
                     )
                     self._projection_backend_report = backend_report.to_dict()
+                    if vdn is not None:
+                        from minimax_h3_mlx.vdn import load_vdn_runtime
+
+                        vdn_runtime = load_vdn_runtime(vdn.engine_request())
+                        vdn_runtime.inference.mpp = backend_report.resolved == "mpp_experimental"
+                        self._sampler.dit.set_vdn_runtime(vdn_runtime)
+                    if fun_control_spec is not None:
+                        from minimax_h3_mlx.controlnet import load_fun_controlnet
+
+                        self._fun_control_model = load_fun_controlnet(
+                            fun_control_spec.validate()
+                        )
                     if loras.adapters:
                         from minimax_h3_mlx.lora import apply_lora_stack
 
@@ -353,26 +550,67 @@ class H3TransformerCache:
                             item["path"] = Path(item["path"]).name
                             sanitized.append(item)
                         self._lora_report = tuple(sanitized)
+                    if config.inference_optimization != "off":
+                        from minimax_h3_mlx.inference_optimizations import (
+                            configure_inference_optimizations,
+                        )
+
+                        self._projection_backend_report["inference_optimization"] = (
+                            configure_inference_optimizations(
+                                self._sampler.dit, config.inference_optimization
+                            )
+                        )
                 except BaseException:
                     self._release_locked()
                     raise
             try:
                 self._sampler.dit.set_attention_query_chunk_size(config.attention_query_chunk_size)
-                initial_video_latents = None
-                initial_audio_latents = None
-                if refinement_source is not None:
-                    from minimax_h3_mlx.hires_fix import resize_video_latents
+                sol_setter = getattr(self._sampler.dit, "set_sol_attention_config", None)
+                if sol_attention is not None and sol_setter is None:
+                    raise RuntimeError("The active H3 engine does not support MLX Sol Attention.")
+                if sol_attention is not None and config.attention_query_chunk_size is not None:
+                    from minimax_h3_mlx.vsa_h3 import FastH3VSAConfig
 
-                    initial_video_latents = resize_video_latents(
-                        refinement_source.video,
-                        config.height // 16,
-                        config.width // 16,
-                        method=refinement_resize_method,
+                    if isinstance(sol_attention, FastH3VSAConfig):
+                        # VSA owns its bounded gathered-query batches. The ordinary dense query
+                        # chunk is neither used nor compatible with that route.
+                        self._sampler.dit.set_attention_query_chunk_size(None)
+                    else:
+                        raise ValueError(
+                            "MLX Sol Attention requires unchunked attention queries. Use normal "
+                            "memory mode or disable attention query chunking."
+                        )
+                if sol_setter is not None:
+                    sol_setter(sol_attention)
+                fastvideo_setter = getattr(
+                    self._sampler.dit, "set_fast_h3_approximation_config", None
+                )
+                if fastvideo is not None and fastvideo_setter is None:
+                    raise RuntimeError(
+                        "The active H3 engine does not support FastVideo approximation controls."
                     )
-                    initial_audio_latents = refinement_source.audio
-                    import mlx.core as mx
-
-                    mx.eval(initial_video_latents, initial_audio_latents)
+                if fastvideo_setter is not None:
+                    fastvideo_setter(fastvideo)
+                head_group_size = config.attention_head_group_size
+                row_group_size = config.ffn_row_group_size
+                head_setter = getattr(self._sampler.dit, "set_attention_head_chunk_size", None)
+                row_setter = getattr(self._sampler.dit, "set_ffn_row_chunk_size", None)
+                if head_group_size is not None and head_setter is None:
+                    raise RuntimeError(
+                        "The active H3 engine does not support attention-head chunking."
+                    )
+                if row_group_size is not None and row_setter is None:
+                    raise RuntimeError("The active H3 engine does not support FFN row chunking.")
+                if head_setter is not None:
+                    head_setter(head_group_size)
+                if row_setter is not None:
+                    row_setter(row_group_size)
+                if self._fun_control_model is not None:
+                    self._fun_control_model.set_chunk_sizes(
+                        query_rows=config.attention_query_chunk_size,
+                        attention_heads=head_group_size,
+                        ffn_rows=row_group_size,
+                    )
                 preview_session = (
                     H3PreviewSession(preview_config) if preview_config is not None else None
                 )
@@ -401,6 +639,18 @@ class H3TransformerCache:
                         raise RuntimeError(update.reject_reason)
 
                 try:
+                    vdn_runtime = getattr(self._sampler.dit, "vdn_runtime", None)
+                    if vdn_runtime is not None:
+                        vdn_runtime.begin_run()
+                    fun_control = None
+                    if fun_control_spec is not None:
+                        from minimax_h3_mlx.controlnet import H3FunControlCondition
+
+                        fun_control = H3FunControlCondition(
+                            self._fun_control_model,
+                            fun_control_latent,
+                            float(fun_control_spec.strength),
+                        )
                     result = self._sampler.sample_latents(
                         conditioning.embeddings,
                         conditioning.token_tags,
@@ -437,6 +687,7 @@ class H3TransformerCache:
                         initial_audio_latents=initial_audio_latents,
                         refinement_strength=refinement_strength,
                         preserve_initial_audio=refinement_source is not None,
+                        fun_control=fun_control,
                     )
                 finally:
                     if preview_session is not None:
@@ -444,8 +695,20 @@ class H3TransformerCache:
                 from minimax_h3_mlx.projection import mpp_runtime_status
 
                 paged = getattr(self._sampler.dit, "paged_blocks", None)
+                resolved_sol = getattr(self._sampler.dit, "last_sol_attention_config", None)
+                sol_reporter = getattr(self._sampler.dit, "sol_attention_report", None)
 
                 latents = H3Latents(
+                    conditioning_cache_report=getattr(conditioning, "cache_report", None),
+                    fun_control_report=(
+                        {
+                            "checkpoint": Path(fun_control_spec.checkpoint).name,
+                            "strength": float(fun_control_spec.strength),
+                            "injection_layers": list(self._fun_control_model.injection_layers),
+                        }
+                        if fun_control_spec is not None
+                        else None
+                    ),
                     video=result.video_latents,
                     audio=result.audio_latents,
                     num_frames=result.num_frames,
@@ -458,9 +721,7 @@ class H3TransformerCache:
                     easycache_resolved_threshold=getattr(
                         result, "easycache_resolved_threshold", None
                     ),
-                    easycache_reuse_strategy=getattr(
-                        result, "easycache_reuse_strategy", None
-                    ),
+                    easycache_reuse_strategy=getattr(result, "easycache_reuse_strategy", None),
                     easycache_cache_bytes=getattr(result, "easycache_cache_bytes", 0),
                     blockcache_hits=getattr(result, "blockcache_hits", 0),
                     blockcache_resolved_threshold=getattr(
@@ -505,6 +766,12 @@ class H3TransformerCache:
                     projection_backend_report=self._projection_backend_report,
                     projection_backend_runtime=mpp_runtime_status(),
                     paging_report=paged.report() if paged is not None else None,
+                    block_residency_report={
+                        **getattr(self._sampler.dit, "block_residency_report", {}),
+                        "requested": block_residency,
+                        "mode": "paged" if paged is not None else "resident",
+                        "keep_warm": not unload_after and config.memory_mode == "normal",
+                    },
                     text_encoder_paging_report=conditioning.paging_report,
                     refinement_source_width=(
                         refinement_source.width if refinement_source is not None else None
@@ -514,16 +781,31 @@ class H3TransformerCache:
                     ),
                     refinement_strength=getattr(result, "refinement_strength", None),
                     refinement_audio_preserved=getattr(result, "refinement_audio_preserved", False),
+                    refinement_upscaler_report=refinement_upscaler_report,
+                    refinement_condition_rows_resized=refinement_condition_rows_resized,
                     preview_report=tuple(preview_reports),
                     prepared_state_report={
                         "cache_hits": getattr(result, "prepared_state_cache_hits", 0),
                         "cache_builds": getattr(result, "prepared_state_cache_builds", 0),
                         "cache_bytes": getattr(result, "prepared_state_cache_bytes", 0),
-                        "build_seconds": getattr(
-                            result, "prepared_state_build_seconds", 0.0
-                        ),
+                        "build_seconds": getattr(result, "prepared_state_build_seconds", 0.0),
                         "key": getattr(result, "prepared_state_key", None),
                     },
+                    sol_attention_report=(
+                        sol_reporter()
+                        if sol_reporter is not None
+                        else asdict(resolved_sol)
+                        if resolved_sol is not None
+                        else None
+                    ),
+                    fast_h3_approximation_report=getattr(
+                        self._sampler.dit, "fast_h3_approximation_report", None
+                    ),
+                    vdn_report=(
+                        self._sampler.dit.vdn_report()
+                        if getattr(self._sampler.dit, "vdn_report", None) is not None
+                        else None
+                    ),
                     seconds_per_evaluation=result.seconds_per_evaluation,
                     total_seconds=result.total_seconds,
                     transformer_spec=spec,
@@ -556,6 +838,11 @@ class H3TransformerCache:
         self._spec = None
         self._schedule_key = None
         self._lora_key = None
+        self._vdn_key = None
+        if self._fun_control_model is not None:
+            self._fun_control_model.release()
+        self._fun_control_model = None
+        self._fun_control_key = None
         self._lora_report = ()
         self._projection_backend_report = None
         try:

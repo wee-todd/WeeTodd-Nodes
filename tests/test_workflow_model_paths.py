@@ -64,6 +64,24 @@ def test_portable_media_inputs_accepts_comfy_input_names():
     }
 
 
+def test_portable_media_inputs_accepts_unselected_portable_fields():
+    document = graph()
+    document.update(
+        {
+            "2": {"class_type": "LoadImage", "inputs": {"image": ""}},
+            "3": {"class_type": "LoadVideo", "inputs": {"file": ""}},
+            "4": {"class_type": "LoadAudio", "inputs": {"audio": ""}},
+        }
+    )
+
+    assert MODULE.portable_media_inputs(document) == {}
+    assert MODULE.unselected_media_inputs(document) == {
+        "2": "LoadImage",
+        "3": "LoadVideo",
+        "4": "LoadAudio",
+    }
+
+
 @pytest.mark.parametrize("value", ["/tmp/private.png", "../outside.png"])
 def test_portable_media_inputs_rejects_machine_or_parent_paths(value):
     document = graph()
@@ -93,6 +111,21 @@ def test_missing_media_inputs_reports_every_missing_file(tmp_path):
     }
 
 
+def test_media_preflight_does_not_bypass_host_path_rejection(tmp_path):
+    (tmp_path / "existing.png").write_bytes(b"existing")
+    document = {"1": {"class_type": "LoadImage", "inputs": {"image": "existing.png"}}}
+
+    def reject(name):
+        raise ValueError("resolved path is outside the input folder")
+
+    folder_paths = SimpleNamespace(
+        get_annotated_filepath=reject,
+        get_input_directory=lambda: str(tmp_path),
+    )
+    missing = MODULE.missing_media_inputs(document, folder_paths)
+    assert "host rejected path" in missing["1"]
+
+
 def test_missing_component_paths_reports_all_missing_values(tmp_path):
     existing = tmp_path / "transformer"
     existing.mkdir()
@@ -116,3 +149,33 @@ def test_every_shipped_h3_api_workflow_has_portable_component_paths():
     for path in sorted((ROOT / "examples").glob("h3_*_api.json")):
         document = MODULE.load_api_workflow(path)
         MODULE.portable_component_paths(document)
+        MODULE.validate_fasth3_profile_wiring(document)
+
+
+@pytest.mark.parametrize(
+    "field", ["config", "sol_attention", "production_profile_info", "fastvideo"]
+)
+def test_speed_workflow_preflight_rejects_disconnected_profile_outputs(field):
+    document = MODULE.load_api_workflow(ROOT / "examples/h3_fasth3_40layer_768x448_api.json")
+    del document["7"]["inputs"][field]
+    with pytest.raises(ValueError, match=field):
+        MODULE.validate_fasth3_profile_wiring(document)
+
+
+def test_speed_workflow_preflight_rejects_competing_modifier():
+    document = MODULE.load_api_workflow(ROOT / "examples/h3_fasth3_40layer_768x448_api.json")
+    document["7"]["inputs"]["loras"] = ["10", 0]
+    with pytest.raises(ValueError, match="cannot be combined with loras"):
+        MODULE.validate_fasth3_profile_wiring(document)
+
+
+def test_resident_vdn_preflight_discloses_memory_estimate_exclusions():
+    document = graph()
+    document["2"] = {"class_type": "WeeToddH3Sample", "inputs": {"block_residency": "resident"}}
+    document["3"] = {"class_type": MODULE.VDN_NODE, "inputs": {}}
+    policy = MODULE.sampling_memory_policy(document)
+    assert policy["sample_block_residency"] == ["resident"]
+    assert len(policy["memory_estimate_notes"]) == 2
+    document["2"]["inputs"]["block_residency"] = "unknown"
+    with pytest.raises(ValueError, match="residency"):
+        MODULE.sampling_memory_policy(document)

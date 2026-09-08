@@ -1,5 +1,6 @@
 import json
 import sys
+from dataclasses import replace
 from types import SimpleNamespace
 
 import mlx.core as mx
@@ -10,6 +11,8 @@ from wee_todd_nodes.nodes import (
     NODE_CLASS_MAPPINGS,
     WeeToddH3ComponentLoader,
     WeeToddH3EasyCache,
+    WeeToddH3FastH3ProductionProfile,
+    WeeToddH3FastVideoApproximation,
     WeeToddH3FirstFrame,
     WeeToddH3FirstLastFrame,
     WeeToddH3Frames,
@@ -18,12 +21,14 @@ from wee_todd_nodes.nodes import (
     WeeToddH3LastFrame,
     WeeToddH3LatentHiresFix,
     WeeToddH3LoRALoader,
+    WeeToddH3LowMemoryTuning,
     WeeToddH3QuantizedTransformerLoader,
     WeeToddH3ReferenceAudio,
     WeeToddH3ReferenceEncode,
     WeeToddH3ReferenceImage,
     WeeToddH3ReferenceStrength,
     WeeToddH3ReferenceVideo,
+    WeeToddH3SolAttention,
     WeeToddH3TrajectoryForecast,
     WeeToddH3ValidatedSamplingPreset,
     _frames_from_manifest,
@@ -34,6 +39,16 @@ from wee_todd_nodes.nodes import (
     _safe_output_target,
     _save_h3_preview_contact_sheet,
 )
+
+
+def test_h3_low_memory_tuning_is_composable():
+    from wee_todd_nodes.runtime import H3GenerationConfig
+
+    tuned = WeeToddH3LowMemoryTuning().apply(
+        H3GenerationConfig(memory_mode="low_memory_bf16"), "2", "128"
+    )[0]
+    assert tuned.attention_head_chunk_size == "2"
+    assert tuned.ffn_row_chunk_size == "128"
 
 
 def test_live_preview_contact_sheet_is_published_atomically(tmp_path, monkeypatch):
@@ -76,6 +91,363 @@ def test_easycache_exposes_fresh_head_core_residual_strategy_without_changing_de
     assert fresh_heads.allow_turbo_experimental is True
 
 
+def test_sol_attention_profiles_resolve_to_bounded_engine_policies():
+    config, raw = WeeToddH3SolAttention().configure("balanced", 0.1, 0.0, 0.5, 9, 8192)
+    assert config.enabled is True
+    assert config.tau == 1.0
+    assert config.start_percent == 0.25
+    assert config.end_percent == 1.0
+    assert config.dense_blocks == 3
+    assert json.loads(raw)["exact_prefix"].startswith("automatic")
+
+    vsa, raw_vsa = WeeToddH3SolAttention().configure("fasth3_vsa_90", 0.1, 0.0, 0.5, 9, 8192)
+    assert vsa.sparsity == 0.9
+    assert vsa.query_tile_batch == 8
+    assert json.loads(raw_vsa)["backend"] == "mlx_grouped_sdpa_vsa_h3"
+
+    metal, raw_metal = WeeToddH3SolAttention().configure(
+        "fasth3_vsa_90_metal", 0.1, 0.0, 0.5, 9, 8192
+    )
+    assert metal.consumer_backend == "metal_indexed"
+    assert metal.block_stack_preorder is True
+    metal_info = json.loads(raw_metal)
+    assert metal_info["status"] == "validated_numerically_approximate"
+    assert metal_info["storage_layout"] == "compact_preordered"
+
+
+def test_fastvideo_approximation_profiles_disclose_their_scope():
+    config, raw = WeeToddH3FastVideoApproximation().configure(
+        "combined_40_pairing", 50, False, 4, 30
+    )
+    info = json.loads(raw)
+
+    assert config.active_layers == 40
+    assert config.pair_target_video is True
+    assert info["status"] == "generatively_approximate"
+    assert info["prefix_policy"].startswith("text, condition video, and audio")
+
+
+def test_fasth3_production_profile_is_fail_closed_and_selects_compact_backend(tmp_path):
+    from wee_todd_nodes.preflight import H3ComponentSetSpec
+    from wee_todd_nodes.runtime import H3GenerationConfig
+
+    transformer = tmp_path / "weetodd-fasth3-vsa-datafree-q8-paged"
+    components = H3ComponentSetSpec(
+        checkpoint=str(tmp_path / "FL2VA"),
+        task="t2va",
+        transformer=str(transformer),
+    )
+    source = H3GenerationConfig(
+        duration_seconds=4.0,
+        steps=20,
+        seed=42,
+        width=768,
+        height=448,
+        sampling_method="res_multistep",
+    )
+
+    returned, configured, attention, raw, fastvideo = WeeToddH3FastH3ProductionProfile().apply(
+        components,
+        source,
+        "Balanced — compact indexed Metal (recommended)",
+        "768×448 — 2m 22s / 7.18 GB MLX",
+        4096,
+    )
+    info = json.loads(raw)
+
+    assert returned is components
+    assert fastvideo is None
+    assert configured.steps == 5
+    assert configured.sampling_method == "euler"
+    assert configured.seed == 42
+    assert (configured.width, configured.height) == (768, 448)
+    assert attention.consumer_backend == "metal_indexed"
+    assert attention.block_stack_preorder is True
+    assert attention.min_tokens == 4096
+    assert info["transformer_evaluations"] == 4
+    assert info["storage_layout"] == "compact_preordered"
+    assert info["attention_profile"] == "fasth3_vsa_90_metal"
+    assert info["resolution_selector"].startswith("768×448")
+    assert info["measurement"]["aligned_frames"] == 107
+
+    wrong_transformer = replace(components, transformer=str(tmp_path / "q8_extended_paged"))
+    with pytest.raises(ValueError, match="native VSA student transformer"):
+        WeeToddH3FastH3ProductionProfile().apply(
+            wrong_transformer,
+            source,
+            "Balanced — compact indexed Metal (recommended)",
+        )
+    with pytest.raises(ValueError, match="T2VA only"):
+        WeeToddH3FastH3ProductionProfile().apply(
+            replace(components, task="fl2va"),
+            source,
+            "Conservative — grouped MLX fallback",
+        )
+
+
+def test_fasth3_resolution_matrix_preserves_custom_config_and_warns_without_headroom(
+    tmp_path, monkeypatch
+):
+    from wee_todd_nodes.preflight import H3ComponentSetSpec
+    from wee_todd_nodes.runtime import H3GenerationConfig
+
+    components = H3ComponentSetSpec(
+        checkpoint=str(tmp_path / "FL2VA"),
+        task="t2va",
+        transformer=str(tmp_path / "weetodd-fasth3-vsa-datafree-q8-paged"),
+    )
+    monkeypatch.setattr(
+        WeeToddH3FastH3ProductionProfile,
+        "_hardware_report",
+        staticmethod(
+            lambda: {
+                "architecture": "arm64",
+                "chip": "Apple M2 Max",
+                "unified_memory_bytes": 16 * 1024**3,
+                "unified_memory_gib": 16.0,
+            }
+        ),
+    )
+    node = WeeToddH3FastH3ProductionProfile()
+    _, measured, _, measured_raw, _ = node.apply(
+        components,
+        H3GenerationConfig(duration_seconds=4.0, width=640, height=384),
+        "Balanced — compact indexed Metal (recommended)",
+        "1920×1088 — 17m 00s / 22.16 GB MLX",
+    )
+    measured_info = json.loads(measured_raw)
+
+    assert (measured.width, measured.height) == (1920, 1088)
+    assert measured.resolution_mode == "exact dimensions"
+    assert measured_info["hardware"]["policy"] == "advisory_only"
+    assert measured_info["measurement"]["applicable_to_current_selection"] is False
+    assert any("Detected Apple M2 Max" in warning for warning in measured_info["warnings"])
+    assert any("Limited measured headroom" in warning for warning in measured_info["warnings"])
+
+    _, preserved, _, preserved_raw, _ = node.apply(
+        components,
+        H3GenerationConfig(duration_seconds=5.0, width=640, height=384),
+        "Balanced — compact indexed Metal (recommended)",
+        "Keep Generation Config",
+    )
+    preserved_info = json.loads(preserved_raw)
+    assert (preserved.width, preserved.height) == (640, 384)
+    assert preserved_info["measurement"] is None
+    assert any("outside the measured" in warning for warning in preserved_info["warnings"])
+
+
+def _fasth3_speed_fixture(tmp_path):
+    from wee_todd_nodes.preflight import H3ComponentSetSpec
+    from wee_todd_nodes.runtime import H3GenerationConfig
+
+    node = WeeToddH3FastH3ProductionProfile()
+    transformer = tmp_path / node._TRANSFORMER
+    transformer.mkdir()
+    (transformer / "paged_manifest.json").write_text(
+        json.dumps(
+            {
+                "format": "weetodd-h3-paged-v1",
+                "source": node._SOURCE,
+                "source_revision": node._SOURCE_REVISION,
+                "num_blocks": 50,
+                "attention": "vsa_h3_64_90",
+                "sampling": {"schedule_points": 5, "transformer_evaluations": 4},
+            }
+        )
+    )
+    (transformer / "quant_config.json").write_text(json.dumps({
+        "bits": 8, "group_size": 64, "quantize_core": True, "quantize_adaln": True,
+        "adaln_bits": 8, "overrides": {},
+    }))
+    components = H3ComponentSetSpec(
+        checkpoint=str(tmp_path / "FL2VA"), transformer=str(transformer)
+    )
+    return node.apply(
+        components,
+        H3GenerationConfig(duration_seconds=4.0, width=768, height=448),
+        "Speed candidate — compact Metal + 40 layers",
+    )
+
+
+def test_fasth3_speed_profile_has_explicit_thinning_output_and_unmeasured_reference(tmp_path):
+    components, config, attention, raw, fastvideo = _fasth3_speed_fixture(tmp_path)
+    info = WeeToddH3FastH3ProductionProfile.validate_sampling_inputs(
+        raw, components, config, attention, fastvideo
+    )
+    assert fastvideo.active_layers == 40
+    assert fastvideo.pair_target_video is False
+    assert info["layers_per_evaluation"] == 40
+    assert info["expected_attention_calls"] == 160
+    assert info["measurement"]["applicable_to_current_selection"] is False
+    assert info["status"] == "generatively_approximate_candidate"
+    assert any("listening acceptance" in warning for warning in info["warnings"])
+    assert WeeToddH3FastH3ProductionProfile.RETURN_NAMES[3:] == ("profile_info", "fastvideo")
+
+
+@pytest.mark.parametrize(
+    "mutation,match",
+    [
+        ("disconnected", "fastvideo output"),
+        ("wrong_layers", "fastvideo output"),
+        ("pairing", "fastvideo output"),
+        ("attention", "attention changed"),
+        ("schedule", "four evaluations"),
+        ("canvas", "config changed"),
+        ("modifier", "cannot be combined"),
+        ("checkpoint", "validated native Q8"),
+        ("disabled_attention", "attention changed"),
+        ("metadata_counts", "execution counts changed"),
+    ],
+)
+def test_fasth3_speed_contract_rejects_miswired_or_changed_policy_before_load(
+    tmp_path, mutation, match
+):
+    components, config, attention, raw, fastvideo = _fasth3_speed_fixture(tmp_path)
+    modifiers = ()
+    if mutation == "disconnected":
+        fastvideo = None
+    elif mutation == "wrong_layers":
+        fastvideo = replace(fastvideo, active_layers=39)
+    elif mutation == "pairing":
+        fastvideo = replace(fastvideo, pair_target_video=True)
+    elif mutation == "attention":
+        attention = replace(attention, consumer_backend="grouped_sdpa")
+    elif mutation == "schedule":
+        config = replace(config, steps=9)
+    elif mutation == "canvas":
+        config = replace(config, width=640)
+    elif mutation == "modifier":
+        modifiers = (object(),)
+    elif mutation == "checkpoint":
+        (components.resolved_paths()["transformer"] / "paged_manifest.json").write_text("{}")
+    elif mutation == "disabled_attention":
+        attention = replace(attention, enabled=False)
+    elif mutation == "metadata_counts":
+        info = json.loads(raw)
+        info["layers_per_evaluation"] = 50
+        raw = json.dumps(info)
+    with pytest.raises(ValueError, match=match):
+        WeeToddH3FastH3ProductionProfile.validate_sampling_inputs(
+            raw, components, config, attention, fastvideo, modifiers=modifiers
+        )
+
+
+def test_fasth3_speed_publication_requires_actual_layer_and_attention_evidence():
+    info = {"contract_version": 1, "layers_per_evaluation": 40}
+    latents = SimpleNamespace(
+        transformer_evaluations=4,
+        fast_h3_approximation_report={
+            "executed_layers": 40,
+            "skipped_layers": 10,
+            "active_layer_indices": [*range(38), 48, 49],
+            "skipped_layer_indices": list(range(38, 48)),
+        },
+        sol_attention_report={
+            "executed_calls": 160,
+            "fallback_calls": 0,
+            "storage_layout": "compact_preordered",
+        },
+    )
+    WeeToddH3FastH3ProductionProfile.validate_execution(info, latents)
+    latents.sol_attention_report["executed_calls"] = 200
+    with pytest.raises(RuntimeError, match="execution proof failed"):
+        WeeToddH3FastH3ProductionProfile.validate_execution(info, latents)
+
+
+def test_fasth3_speed_failed_execution_proof_releases_warm_transformer(tmp_path, monkeypatch):
+    from wee_todd_nodes.nodes import WeeToddH3Sample
+
+    components, config, attention, raw, fastvideo = _fasth3_speed_fixture(tmp_path)
+    released = []
+    monkeypatch.setattr(
+        "wee_todd_nodes.nodes.TRANSFORMER_RUNTIME",
+        SimpleNamespace(
+            sample=lambda *args, **kwargs: SimpleNamespace(transformer_evaluations=4),
+            unload=lambda: released.append(True),
+        ),
+    )
+    with pytest.raises(RuntimeError, match="execution proof failed"):
+        WeeToddH3Sample().sample(
+            components, SimpleNamespace(), config, False,
+            sol_attention=attention, production_profile_info=raw, fastvideo=fastvideo,
+        )
+    assert released == [True]
+
+
+def test_invalid_production_metadata_is_rejected_before_weighted_runtime(monkeypatch):
+    from wee_todd_nodes.nodes import WeeToddH3Sample
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError("invalid metadata must not load weights")
+
+    monkeypatch.setattr(
+        "wee_todd_nodes.nodes.TRANSFORMER_RUNTIME", SimpleNamespace(sample=unexpected)
+    )
+    with pytest.raises(ValueError, match="valid JSON"):
+        WeeToddH3Sample().sample(None, None, None, True, production_profile_info="not-json")
+
+
+def test_fasth3_advisory_memory_budget_matrix_is_explicitly_simulated(tmp_path, monkeypatch):
+    from wee_todd_nodes.preflight import H3ComponentSetSpec
+    from wee_todd_nodes.runtime import H3GenerationConfig
+
+    components = H3ComponentSetSpec(
+        checkpoint=str(tmp_path / "FL2VA"),
+        task="t2va",
+        transformer=str(tmp_path / "weetodd-fasth3-vsa-datafree-q8-paged"),
+    )
+    monkeypatch.setattr(
+        WeeToddH3FastH3ProductionProfile,
+        "_hardware_report",
+        staticmethod(
+            lambda: {
+                "architecture": "arm64",
+                "chip": "Apple M3 Ultra",
+                "unified_memory_bytes": 256 * 1024**3,
+                "unified_memory_gib": 256.0,
+            }
+        ),
+    )
+    expected_comfortable_rows = {8.0: 0, 16.0: 4, 24.0: 5, 32.0: 6, 48.0: 6, 64.0: 6}
+    profile = WeeToddH3FastH3ProductionProfile()
+
+    for budget_gib, comfortable_rows in expected_comfortable_rows.items():
+        for index, resolution_preset in enumerate(profile._RESOLUTION_MATRIX):
+            _, _, _, raw, _ = profile.apply(
+                components,
+                H3GenerationConfig(duration_seconds=4.0, width=768, height=448),
+                "Balanced — compact indexed Metal (recommended)",
+                resolution_preset,
+                4096,
+                budget_gib,
+            )
+            info = json.loads(raw)
+            hardware = info["hardware"]
+            should_be_comfortable = index < comfortable_rows
+
+            assert hardware["advisory_memory_source"] == "manual_override"
+            assert hardware["advisory_budget_is_override"] is True
+            assert hardware["advisory_memory_budget_gib"] == budget_gib
+            assert hardware["validation_scope"] == ("warning_policy_only_not_lower_memory_hardware")
+            assert hardware["headroom_status"] == (
+                "comfortable" if should_be_comfortable else "limited"
+            )
+            assert any("does not simulate or validate" in item for item in info["warnings"])
+            assert any("Limited measured headroom" in item for item in info["warnings"]) is (
+                not should_be_comfortable
+            )
+
+    with pytest.raises(ValueError, match="finite non-negative"):
+        profile.apply(
+            components,
+            H3GenerationConfig(duration_seconds=4.0, width=768, height=448),
+            "Balanced — compact indexed Metal (recommended)",
+            "768×448 — 2m 22s / 7.18 GB MLX",
+            4096,
+            -1.0,
+        )
+
+
 def test_trim_timing_metadata_explicitly_authorizes_changed_frame_count():
     timing = {
         "context_frames_removed": 22,
@@ -84,9 +456,9 @@ def test_trim_timing_metadata_explicitly_authorizes_changed_frame_count():
         "sample_rate": 32000,
     }
 
-    assert _parse_media_timing_info(
-        json.dumps(timing), image_frames=102, sample_rate=32000
-    ) == timing
+    assert (
+        _parse_media_timing_info(json.dumps(timing), image_frames=102, sample_rate=32000) == timing
+    )
     with pytest.raises(ValueError, match="frame count"):
         _parse_media_timing_info(json.dumps(timing), image_frames=101, sample_rate=32000)
     with pytest.raises(ValueError, match="sample rate"):
@@ -132,7 +504,13 @@ def test_sampling_metadata_preserves_exact_prompt(monkeypatch):
     )
 
     _, metadata = WeeToddH3Sample().sample(
-        "components", conditioning, H3GenerationConfig(steps=3), True
+        "components",
+        conditioning,
+        H3GenerationConfig(steps=3),
+        True,
+        production_profile_info=json.dumps(
+            {"profile": "balanced", "warnings": [], "resolution_selector": "768×448"}
+        ),
     )
 
     parsed = json.loads(metadata)
@@ -142,6 +520,11 @@ def test_sampling_metadata_preserves_exact_prompt(monkeypatch):
         "text_encoder": {"format": "weetodd-h3-qwen-paged-v1"},
     }
     assert parsed["prepared_state"] is None
+    assert parsed["production_profile"] == {
+        "profile": "balanced",
+        "resolution_selector": "768×448",
+        "warnings": [],
+    }
 
 
 def test_hires_fix_resolves_target_and_preserves_audio_contract(monkeypatch):
@@ -225,19 +608,46 @@ def test_hires_fix_resolves_target_and_preserves_audio_contract(monkeypatch):
 
 
 def test_expected_nodes_are_registered():
-    assert len(NODE_CLASS_MAPPINGS) == 54
+    assert len(NODE_CLASS_MAPPINGS) == 119
+    assert "WeeToddLTX23LoRALoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3ComponentLoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3QuantizedTransformerLoader" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3LearnedLatentUpscalerLoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3Preflight" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3TokenBudget" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3LowMemoryTuning" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3FirstFrame" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3LastFrame" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3FirstLastFrame" in NODE_CLASS_MAPPINGS
+    assert "WeeToddCorridorKeyModelLoader" in NODE_CLASS_MAPPINGS
+    assert "WeeToddCorridorKeyAutoHint" in NODE_CLASS_MAPPINGS
+    assert "WeeToddCorridorKeyMaskRefine" in NODE_CLASS_MAPPINGS
+    assert "WeeToddCorridorKeyKeyer" in NODE_CLASS_MAPPINGS
+    assert "WeeToddCorridorKeyComposite" in NODE_CLASS_MAPPINGS
+    assert "WeeToddCorridorKeyUnload" in NODE_CLASS_MAPPINGS
+    assert "WeeToddFlorence2ModelLoader" in NODE_CLASS_MAPPINGS
+    assert "WeeToddFlorence2TextMask" in NODE_CLASS_MAPPINGS
+    assert "WeeToddFlorence2Unload" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3ChainedTimeline" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3Frames" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3TimedKeyframe" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3ReferenceImage" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3ReferenceVideo" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3ReferenceAudio" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3TimelineVisualGuide" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3TimelineAudioGuide" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX25GenerateChained" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX25Keyframe" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX25GeneratedKeyframes" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX25DFRTemporalRefinement" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX25LoRALoader" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX25ICLoRALoader" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX25MSRLoader" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX25MSRReferenceStack" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX25ICLoRAControlGuide" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX25CrossViewDualReferenceGuide" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX25ICLoRAPipelineMode" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX25ReferenceSheetGuide" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3KeyframeEncode" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3TimedKeyframeEncode" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3ReferenceEncode" in NODE_CLASS_MAPPINGS
@@ -250,9 +660,13 @@ def test_expected_nodes_are_registered():
     assert "WeeToddH3Sample" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3LatentHiresFix" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3EasyCache" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3SolAttention" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3FastH3ProductionProfile" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3FastVideoApproximation" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3BlockCache" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3HierarchicalBlockCache" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3LoRALoader" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3VDNCheckpoint" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3ValidatedSamplingPreset" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3UnloadTransformer" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3VideoVAEDecode" in NODE_CLASS_MAPPINGS
@@ -267,14 +681,36 @@ def test_expected_nodes_are_registered():
     assert "WeeToddLTX23GenerationConfig" in NODE_CLASS_MAPPINGS
     assert "WeeToddLTX23Preflight" in NODE_CLASS_MAPPINGS
     assert "WeeToddLTX23Generate" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX23VideoExtension" in NODE_CLASS_MAPPINGS
     assert "WeeToddLTX23UpscalerLoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddLTX23UpscalePublish" in NODE_CLASS_MAPPINGS
     assert "WeeToddLTX23Unload" in NODE_CLASS_MAPPINGS
     assert "WeeToddLTX25ComponentLoader" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX25GuidedModelLoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddLTX25GenerationConfig" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX25QualityMode" in NODE_CLASS_MAPPINGS
     assert "WeeToddLTX25Preflight" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX25MediaConditioning" in NODE_CLASS_MAPPINGS
     assert "WeeToddLTX25Generate" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX25VideoUpscale" in NODE_CLASS_MAPPINGS
     assert "WeeToddLTX25Unload" in NODE_CLASS_MAPPINGS
+    assert "WeeToddMLXCannyPreprocessor" in NODE_CLASS_MAPPINGS
+    assert "WeeToddMLXVideoDepthLoader" in NODE_CLASS_MAPPINGS
+    assert "WeeToddMLXVideoDepthPreprocessor" in NODE_CLASS_MAPPINGS
+    assert "WeeToddMLXDWPoseLoader" in NODE_CLASS_MAPPINGS
+    assert "WeeToddMLXDWPosePreprocessor" in NODE_CLASS_MAPPINGS
+    assert "WeeToddMLXTEEDLoader" in NODE_CLASS_MAPPINGS
+    assert "WeeToddMLXTEEDPreprocessor" in NODE_CLASS_MAPPINGS
+    assert "WeeToddMLXFastDepthLoader" in NODE_CLASS_MAPPINGS
+    assert "WeeToddMLXFastDepthPreprocessor" in NODE_CLASS_MAPPINGS
+    assert "WeeToddMLXNormalMapPreprocessor" in NODE_CLASS_MAPPINGS
+    assert "WeeToddMLXLineArtLoader" in NODE_CLASS_MAPPINGS
+    assert "WeeToddMLXLineArtPreprocessor" in NODE_CLASS_MAPPINGS
+    assert "WeeToddMLXMotionTrackGuide" in NODE_CLASS_MAPPINGS
+    assert "WeeToddOpticalFlowMotionTracks" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX25CrossViewCameraOrbit" in NODE_CLASS_MAPPINGS
+    assert "WeeToddLTX25CrossViewWarp" in NODE_CLASS_MAPPINGS
+    assert "WeeToddMLXPreprocessorUnload" in NODE_CLASS_MAPPINGS
 
 
 def test_continuation_context_defaults_to_quality_first_22_frames():
@@ -283,6 +719,26 @@ def test_continuation_context_defaults_to_quality_first_22_frames():
 
     assert specification[0] == ["5", "22", "39", "56"]
     assert specification[1]["default"] == "22"
+
+
+def test_ltx25_component_loader_preserves_empty_optional_paths(monkeypatch):
+    node_class = NODE_CLASS_MAPPINGS["WeeToddLTX25ComponentLoader"]
+    monkeypatch.setattr(
+        "wee_todd_nodes.ltx25_nodes._resolve_component",
+        lambda value, _categories: f"/models/{value}",
+    )
+
+    (spec,) = node_class().specify(
+        "transformer.safetensors",
+        "text_encoder.safetensors",
+        "video_vae.safetensors",
+        "audio_vae.safetensors",
+        "",
+        "",
+    )
+
+    assert spec.spatial_upscaler_path == ""
+    assert spec.duration_head_path == ""
 
 
 def test_lora_loader_exposes_qkv_layout_and_staged_activation(tmp_path):
@@ -346,6 +802,29 @@ def test_validated_sampling_preset_applies_dense_and_trajectory_policies():
     assert dense_info["policy"] == "dense"
     assert dense_info["transformer_evaluations_without_forecast"] == 19
 
+    fasth3, fasth3_loras, fasth3_forecast, fasth3_raw = node.apply(
+        source,
+        "FastH3 Preview v1 — Native dense student — 5 points / 4 evaluations",
+    )
+    fasth3_info = json.loads(fasth3_raw)
+    assert fasth3.steps == 5
+    assert fasth3_loras is None
+    assert fasth3_forecast is None
+    assert fasth3_info["policy"] == "distilled_checkpoint"
+    assert fasth3_info["required_transformer"] == "weetodd-fasth3-dense-q8-paged"
+    assert fasth3_info["source"]["tasks"] == ["t2va"]
+
+    vsa_config, vsa_lora, vsa_forecast, vsa_raw = node.apply(
+        source,
+        "FastH3 Preview v1 — Native VSA student — 5 points / 4 evaluations",
+    )
+    vsa_info = json.loads(vsa_raw)
+    assert vsa_config.steps == 5
+    assert vsa_lora is None
+    assert vsa_forecast is None
+    assert vsa_info["required_transformer"] == "weetodd-fasth3-vsa-datafree-q8-paged"
+    assert vsa_info["required_attention_profile"] == "fasth3_vsa_90_metal"
+
     replay, replay_loras, replay_forecast, replay_raw = node.apply(
         source,
         "Trajectory speed + offline replay — 20 points / up to 11 evaluations",
@@ -388,8 +867,7 @@ def test_validated_chained_context_presets_match_measured_policies(tmp_path, mon
     from wee_todd_nodes.runtime import H3GenerationConfig
 
     lora_name = (
-        "minimax_h3_fl2v_lightx2v_turbo_4step_v0.1_comfy_"
-        "resized_avg_rank_21_bf16.safetensors"
+        "minimax_h3_fl2v_lightx2v_turbo_4step_v0.1_comfy_resized_avg_rank_21_bf16.safetensors"
     )
     path = tmp_path / lora_name
     mx.save_safetensors(
@@ -415,10 +893,7 @@ def test_validated_chained_context_presets_match_measured_policies(tmp_path, mon
 
     replay, loras, forecast, replay_raw = node.apply(
         source,
-        (
-            "Chained context — Trajectory target-only replay — "
-            "20 points / up to 11 evaluations"
-        ),
+        ("Chained context — Trajectory target-only replay — 20 points / up to 11 evaluations"),
     )
     replay_info = json.loads(replay_raw)
     assert replay.steps == 20
@@ -444,10 +919,7 @@ def test_validated_chained_context_presets_match_measured_policies(tmp_path, mon
             "minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors",
         ),
         (
-            (
-                "Turbo — drbaph v4 step-600 — 384p low-memory — "
-                "5 points / 4 evaluations"
-            ),
+            ("Turbo — drbaph v4 step-600 — 384p low-memory — 5 points / 4 evaluations"),
             "minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors",
         ),
         (
@@ -455,10 +927,7 @@ def test_validated_chained_context_presets_match_measured_policies(tmp_path, mon
             "minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors",
         ),
         (
-            (
-                "Staged Turbo — drbaph v4 step-600 — 384p low-memory — "
-                "2 base + 4 Turbo evaluations"
-            ),
+            ("Staged Turbo — drbaph v4 step-600 — 384p low-memory — 2 base + 4 Turbo evaluations"),
             "minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors",
         ),
         (
@@ -522,9 +991,7 @@ def test_validated_sampling_preset_builds_each_lazy_turbo_stack(
         assert info["transformer_evaluations_without_forecast"] == 4
 
 
-def test_validated_15_second_comparison_presets_record_measured_boundaries(
-    tmp_path, monkeypatch
-):
+def test_validated_15_second_comparison_presets_record_measured_boundaries(tmp_path, monkeypatch):
     from wee_todd_nodes.runtime import H3GenerationConfig
 
     filename = "minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors"
@@ -691,6 +1158,12 @@ def test_reference_nodes_build_one_ordered_stack():
     assert [reference.kind for reference in references.references] == ["image", "video", "audio"]
 
 
+def test_reference_video_node_exposes_conservative_automatic_density():
+    choices, options = WeeToddH3ReferenceVideo.INPUT_TYPES()["optional"]["temporal_density"]
+    assert "automatic (conservative, experimental)" in choices
+    assert options["default"] == "all frames (recommended)"
+
+
 def test_keyframe_encode_stages_qwen_and_video_vae(monkeypatch):
     from wee_todd_nodes.conditioning import H3Conditioning
 
@@ -853,16 +1326,21 @@ def test_reference_encode_stages_qwen_and_both_vaes(monkeypatch):
     conditioning, encoded_info = WeeToddH3ReferenceEncode().encode(
         SimpleNamespace(task="ref2va"), config, stack, "A reference test."
     )
+    info = json.loads(encoded_info)
 
     assert calls == [("text", 2), ("video_vae", 2), ("audio_vae", 2)]
     assert conditioning.condition_video_rows.shape == (32, 96)
     assert conditioning.condition_audio_rows.shape == (20, 32)
     assert conditioning.references == tuple(prepared)
-    assert json.loads(encoded_info)["staged_releases"] == {
+    assert info["staged_releases"] == {
         "text_encoder": ["released-for-text_encoder"],
         "video_vae": ["released-for-video_vae"],
         "audio_vae": ["released-for-audio_vae"],
     }
+    assert info["reference_feature_reuse"] == (
+        "encoded_once_and_reused_for_every_transformer_evaluation"
+    )
+    assert info["references"][0]["temporal_density_resolved"] == 1.0
 
 
 def test_trajectory_forecast_node_exposes_opt_in_bootstrap():
@@ -1087,7 +1565,7 @@ def test_generation_config_node_returns_validated_value():
     assert config.aspect_ratio == "16:9"
     assert config.memory_mode == "low_memory_bf16"
     assert config.attention_query_chunk_size == 1024
-    assert config.projection_backend == "mlx"
+    assert config.projection_backend == "auto"
     assert config.sampling_method == "euler"
     assert resolved == "1344 × 768 pixels — 16:9 — 768 px short edge"
 
@@ -1109,6 +1587,14 @@ def test_generation_config_exposes_clear_ratio_size_controls():
     assert slider["step"] == 32
     assert slider["display"] == "slider"
     assert inputs["optional"]["sampling_method"][0] == ["euler", "res_multistep"]
+    assert inputs["required"]["projection_backend"][0] == [
+        "auto",
+        "mlx",
+        "mpp_experimental",
+        "m5_low_bit_experimental",
+        "mpp_resident_expanded_experimental",
+    ]
+    assert inputs["required"]["projection_backend"][1]["default"] == "auto"
 
 
 def test_manual_nonstandard_resolution_records_custom_aspect_ratio():

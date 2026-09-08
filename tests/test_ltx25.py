@@ -1,10 +1,56 @@
+import inspect
 import json
+import sys
+from dataclasses import replace
+from pathlib import Path
+from types import SimpleNamespace
 
+import mlx.core as mx
 import numpy as np
 import pytest
 from safetensors.numpy import save_file
 
+from ltx25_mlx.audio_driven import (
+    prepare_audio_driven_conditioning,
+    prepare_publication_audio,
+)
+from ltx25_mlx.components import LTX25VideoDecoder
+from ltx25_mlx.crossview import (
+    CrossViewPose,
+    build_crossview_warp,
+    clear_crossview_geometry_cache,
+    parse_crossview_keyframes,
+    sample_crossview_path,
+)
+from ltx25_mlx.dfr import (
+    DFRTemporalImageAnchor,
+    choose_dfr_segment_length,
+    extract_dfr_temporal_image_anchors,
+    plan_dfr_temporal_tiles,
+    resolve_dfr_canvas,
+    scale_dfr_temporal_image_anchors,
+    select_dfr_generated_slot_tokens,
+    stitch_dfr_temporal_tiles,
+)
+from ltx25_mlx.duration_head import LTX25DurationHead, seconds_to_ltx25_frames
 from ltx25_mlx.gemma_pack import gemma4_mlx_model_config, remap_gemma4_weight_key
+from ltx25_mlx.generated_keyframes import (
+    GeneratedKeyframeSlots,
+    evenly_spaced_keyframe_positions,
+    set_generated_keyframe_marker,
+)
+from ltx25_mlx.ic_lora import (
+    encode_reference_video_conditioning,
+    plan_ingredients_reference_grid,
+)
+from ltx25_mlx.msr import (
+    LTX25MSRConditioning,
+    load_ltx25_msr_slot_state,
+    ltx25_msr_slot_embedding,
+    plan_ltx25_msr_reference_grid,
+    plan_ltx25_msr_reference_layout,
+)
+from ltx25_mlx.pipeline import LTX25DistilledPipeline
 from ltx25_mlx.runtime import (
     LTX25_GENERATION_PRESETS,
     LTX25ComponentSpec,
@@ -12,8 +58,2098 @@ from ltx25_mlx.runtime import (
     LTX25RuntimeCache,
     apply_ltx25_generation_preset,
     backend_capability,
+    resolve_ltx25_dfr_recipe,
+    resolve_ltx25_runtime_config,
 )
-from wee_todd_nodes.ltx25_nodes import WeeToddLTX25GenerationConfig
+from ltx25_mlx.transformer import (
+    _LTX25_CANONICAL_IC_TARGETS,
+    _LTX25_MSR_SLOT_SHAPES,
+    _fuse_non_block_loras,
+    _load_normalized_ltx25_lora,
+    _structural_ltx25_adapter_family,
+    _validate_ltx25_msr_header,
+    inspect_ltx25_ic_lora,
+    inspect_ltx25_lora,
+    remap_comfy_transformer_key,
+)
+from ltx25_mlx.upscale import (
+    LTX25_INPUT_SIZE_POLICIES,
+    LTX25_PIXEL_SPATIAL_MODE,
+    LTX25_SOURCE_FRAME_ANCHORS,
+    LTX25_UPSCALE_MODES,
+    _host_audio,
+    _host_audio_or_silence,
+    _host_video,
+)
+from ltx25_mlx.video_only import LTX25VideoOnlyX0Model
+from wee_todd_nodes.control_preprocessors import (
+    WeeToddLTX25CrossViewCameraOrbit,
+    WeeToddLTX25CrossViewWarp,
+)
+from wee_todd_nodes.ltx25_nodes import (
+    LTX25_QUALITY_MODES,
+    LTX25KeyframeStack,
+    LTX25MediaConditioningStack,
+    LTX25MSRReference,
+    LTX25MSRReferenceStack,
+    WeeToddLTX25AutoDuration,
+    WeeToddLTX25CrossViewDualReferenceGuide,
+    WeeToddLTX25DFRDetailing,
+    WeeToddLTX25DFRTemporalRefinement,
+    WeeToddLTX25DiffVAEOptimization,
+    WeeToddLTX25GenerateChained,
+    WeeToddLTX25GeneratedKeyframes,
+    WeeToddLTX25GenerationConfig,
+    WeeToddLTX25GuidedModelLoader,
+    WeeToddLTX25ICLoRAControlGuide,
+    WeeToddLTX25ICLoRALoader,
+    WeeToddLTX25ICLoRAPipelineMode,
+    WeeToddLTX25Keyframe,
+    WeeToddLTX25LoRALoader,
+    WeeToddLTX25MediaConditioning,
+    WeeToddLTX25MSRLoader,
+    WeeToddLTX25MSRReferenceStack,
+    WeeToddLTX25QualityMode,
+    WeeToddLTX25ReferenceSheetGuide,
+    WeeToddLTX25VideoUpscale,
+)
+
+
+def _rank450_lora(path):
+    save_file(
+        {
+            "diffusion_model.adaln_single.emb.timestep_embedder.linear_1.lora_A.weight": (
+                np.zeros((2, 4), dtype=np.float32)
+            ),
+            "diffusion_model.adaln_single.emb.timestep_embedder.linear_1.lora_B.weight": (
+                np.zeros((4, 2), dtype=np.float32)
+            ),
+        },
+        path,
+        metadata={
+            "model_version": "2.5.0",
+            "lora_rank": "450",
+            "lora_alpha": "450",
+        },
+    )
+    return path
+
+
+def test_ltx25_duration_head_matches_constant_log_seconds():
+    import mlx.core as mx
+    from mlx.utils import tree_flatten
+
+    head = LTX25DurationHead(
+        video_dim=4,
+        audio_dim=2,
+        hidden_dim=4,
+        num_queries=1,
+        num_heads=2,
+        mlp_hidden=4,
+    )
+    weights = [(name, mx.zeros_like(value)) for name, value in tree_flatten(head.parameters())]
+    # A zero network with this final bias predicts exp(log(2.5)) seconds.
+    weights = [
+        (name, mx.array([np.log(2.5)], dtype=value.dtype) if name == "mlp_out.bias" else value)
+        for name, value in weights
+    ]
+    head.load_weights(weights, strict=True)
+    seconds = head(video_tokens=mx.zeros((1, 3, 4), dtype=mx.bfloat16))
+    mx.eval(seconds)
+    assert float(seconds.item()) == pytest.approx(2.5, abs=0.02)
+
+
+@pytest.mark.parametrize(
+    ("seconds", "expected"),
+    ((2.375, 57), (5.0, 113), (0.1, 25), (99.0, 473)),
+)
+def test_ltx25_duration_snaps_to_official_temporal_grid(seconds, expected):
+    assert seconds_to_ltx25_frames(seconds, frame_rate=24.0) == expected
+
+
+def test_ltx25_auto_duration_modifier_is_explicit_and_bounded():
+    source = LTX25GenerationConfig(duration_seconds=5.0)
+    updated, raw = WeeToddLTX25AutoDuration().apply(source, 2.0, 12.0)
+    assert source.duration_mode == "manual"
+    assert updated.duration_mode == "automatic"
+    assert updated.duration_seconds == 5.0
+    assert updated.auto_duration_min_seconds == 2.0
+    assert updated.auto_duration_max_seconds == 12.0
+    assert json.loads(raw)["scope"] == "one-shot generation"
+    with pytest.raises(ValueError, match="bounds"):
+        WeeToddLTX25AutoDuration().apply(source, 10.0, 2.0)
+
+
+def test_ltx25_generated_keyframes_modifier_preserves_base_workflow_contract():
+    source = LTX25GenerationConfig()
+    updated = WeeToddLTX25GeneratedKeyframes().apply(source, 3)[0]
+    assert source.generated_keyframes == 0
+    assert updated.generated_keyframes == 3
+
+
+def test_ltx25_diffvae_modifier_preserves_base_node_schema():
+    source = LTX25GenerationConfig()
+    updated, raw = WeeToddLTX25DiffVAEOptimization().apply(source, "deferred_stage4", 512, 4, 32)
+    assert source.diffvae_optimization == "combined"
+    assert updated.diffvae_optimization == "deferred_stage4"
+    assert json.loads(raw)["applies_only_to"] == "Diffusion VAE checkpoints"
+
+
+def test_ltx25_diffvae_modifier_accepts_metal_na3d_experiment():
+    updated, raw = WeeToddLTX25DiffVAEOptimization().apply(
+        LTX25GenerationConfig(), "metal_na3d_experimental", 512, 4, 32
+    )
+    assert updated.diffvae_optimization == "metal_na3d_experimental"
+    assert json.loads(raw)["optimization"] == "metal_na3d_experimental"
+
+
+def test_ltx25_diffvae_modifier_accepts_query_tiled_metal_na3d_experiment():
+    updated, raw = WeeToddLTX25DiffVAEOptimization().apply(
+        LTX25GenerationConfig(), "metal_na3d_query_tiled_experimental", 65536, 4, 32
+    )
+    assert updated.diffvae_query_chunk_size == 65536
+    assert json.loads(raw)["optimization"] == "metal_na3d_query_tiled_experimental"
+
+
+@pytest.mark.parametrize(
+    ("optimization", "expected_backend"),
+    (
+        ("combined", "einsum"),
+        ("metal_na3d_experimental", "metal"),
+        ("metal_na3d_query_tiled_experimental", "metal_tiled"),
+    ),
+)
+def test_ltx25_video_decoder_maps_diffvae_attention_backend(
+    monkeypatch, tmp_path, optimization, expected_backend
+):
+    import ltx25_mlx.components as components
+    import ltx25_mlx.diffusion_vae as diffusion_vae
+
+    checkpoint = tmp_path / "diffusion-vae.safetensors"
+    checkpoint.touch()
+    metadata = {"vae": {"decoder": {"_class_name": "DiffusionDecoder"}}}
+    monkeypatch.setattr(components, "_metadata_config", lambda _path: metadata)
+    monkeypatch.setattr(components, "_cleanup", lambda: None)
+    calls = {}
+    sentinel = object()
+
+    def fake_loader(path, config, **kwargs):
+        calls.update(path=path, config=config, **kwargs)
+        return sentinel
+
+    monkeypatch.setattr(diffusion_vae, "load_diffusion_video_decoder", fake_loader)
+    decoder = LTX25VideoDecoder(checkpoint, diffvae_optimization=optimization)
+
+    assert decoder.load() is sentinel
+    assert calls["attention_backend"] == expected_backend
+
+
+def test_ltx25_lora_loader_builds_lazy_ordered_stack(tmp_path):
+    spec = _bundle(tmp_path)
+    adapter = tmp_path / "motion.safetensors"
+    save_file(
+        {
+            "transformer_blocks.0.attn1.to_q.lora_A.weight": np.zeros((2, 4), dtype=np.float32),
+            "transformer_blocks.0.attn1.to_q.lora_B.weight": np.zeros((4, 2), dtype=np.float32),
+        },
+        adapter,
+        metadata={"model_version": "2.5.0"},
+    )
+
+    attached, raw = WeeToddLTX25LoRALoader().attach(spec, str(adapter), 0.75)
+    assert spec.loras == ()
+    assert attached.loras == ((str(adapter), 0.75),)
+    assert json.loads(raw)["adapter_pairs"] == 1
+    report = attached.validate()
+    lora_component = report["components"][-1]
+    assert lora_component["component"] == "transformer_lora_1"
+    assert lora_component["strength"] == 0.75
+    assert lora_component["adapter_role"] == "transformer_lora"
+    assert report["checkpoint_bytes"] >= adapter.stat().st_size
+
+
+def test_ltx25_ic_lora_loader_lists_comfy_lora_roots(monkeypatch):
+    installed = [
+        "LTX-2.5/crossview.safetensors",
+        "shared/ingredients.safetensors",
+        "LTX-2.5/crossview.safetensors",
+    ]
+    monkeypatch.setitem(
+        sys.modules,
+        "folder_paths",
+        SimpleNamespace(
+            get_filename_list=lambda category: installed if category == "loras" else []
+        ),
+    )
+
+    choices = WeeToddLTX25ICLoRALoader.INPUT_TYPES()["required"]["ic_lora"][0]
+
+    assert choices == ["LTX-2.5/crossview.safetensors", "shared/ingredients.safetensors"]
+
+
+def test_ltx25_ic_lora_loader_has_portable_choices_without_comfy(monkeypatch):
+    monkeypatch.setitem(
+        sys.modules,
+        "folder_paths",
+        SimpleNamespace(get_filename_list=lambda _category: []),
+    )
+
+    choices = WeeToddLTX25ICLoRALoader.INPUT_TYPES()["required"]["ic_lora"][0]
+
+    assert "LTX-2.5/LTX2.3-22B_IC-LoRA-CrossView-Warp_v2_6000.safetensors" in choices
+    assert "ltx-2.3-22b-ic-lora-ingredients-0.9.safetensors" in choices
+
+
+def test_ltx25_distilled_lora_header_is_generic_transformer_adapter(tmp_path):
+    adapter = tmp_path / "distilled.safetensors"
+    save_file(
+        {
+            "diffusion_model.adaln_single.emb.timestep_embedder.linear_1.lora_A.weight": np.zeros(
+                (2, 4), dtype=np.float32
+            ),
+            "diffusion_model.adaln_single.emb.timestep_embedder.linear_1.lora_B.weight": np.zeros(
+                (4, 2), dtype=np.float32
+            ),
+        },
+        adapter,
+        metadata={"model_version": "2.5.0", "lora_rank": "2", "lora_alpha": "2"},
+    )
+
+    report = inspect_ltx25_lora(adapter)
+    assert report["adapter_role"] == "transformer_lora"
+    assert report["reference_downscale_factor"] == 1
+    assert report["lora_rank"] == 2
+    assert report["lora_alpha"] == 2
+
+
+def test_ltx25_down_up_schema_normalizes_and_applies_per_target_alpha(tmp_path):
+    adapter = tmp_path / "renamed-community-adapter.safetensors"
+    save_file(
+        {
+            "base_model.model.transformer.transformer_blocks.0.attn1.to_q.lora_down.weight": (
+                np.ones((2, 4), dtype=np.float32)
+            ),
+            "base_model.model.transformer.transformer_blocks.0.attn1.to_q.lora_up.weight": (
+                np.ones((4, 2), dtype=np.float32)
+            ),
+            "base_model.model.transformer.transformer_blocks.0.attn1.to_q.alpha": np.array(
+                1.0, dtype=np.float32
+            ),
+        },
+        adapter,
+        metadata={"model_version": "2.5.0"},
+    )
+
+    weights, report = _load_normalized_ltx25_lora(adapter)
+
+    prefix = "transformer_blocks.0.attn1.to_q"
+    assert report["pair_schemas"] == ["down_up"]
+    assert report["scaling_convention"] == "per_target_alpha_over_pair_rank"
+    assert set(weights) == {prefix + ".lora_A.weight", prefix + ".lora_B.weight"}
+    assert mx.array_equal(weights[prefix + ".lora_A.weight"], mx.ones((2, 4)))
+    assert mx.array_equal(weights[prefix + ".lora_B.weight"], mx.full((4, 2), 0.5))
+
+
+def test_ltx25_default_peft_schema_uses_global_alpha_rank_ratio(tmp_path):
+    adapter = tmp_path / "anything.safetensors"
+    save_file(
+        {
+            "diffusion_model.transformer_blocks.0.attn1.to_q.lora_A.default.weight": np.ones(
+                (2, 4), dtype=np.float32
+            ),
+            "diffusion_model.transformer_blocks.0.attn1.to_q.lora_B.default.weight": np.ones(
+                (4, 2), dtype=np.float32
+            ),
+        },
+        adapter,
+        metadata={"model_version": "2.5", "lora_rank": "4", "lora_alpha": "2"},
+    )
+
+    weights, report = _load_normalized_ltx25_lora(adapter)
+
+    key = "transformer_blocks.0.attn1.to_q.lora_B.weight"
+    assert report["pair_schemas"] == ["default"]
+    assert report["scaling_convention"] == "global_alpha_over_global_rank"
+    assert mx.array_equal(weights[key], mx.full((4, 2), 0.5))
+
+
+def test_ltx25_kohya_global_scaling_metadata_is_normalized(tmp_path):
+    adapter = tmp_path / "kohya-metadata.safetensors"
+    save_file(
+        {
+            "transformer_blocks.0.attn1.to_q.lora_A.weight": np.ones(
+                (2, 4), dtype=np.float32
+            ),
+            "transformer_blocks.0.attn1.to_q.lora_B.weight": np.ones(
+                (4, 2), dtype=np.float32
+            ),
+        },
+        adapter,
+        metadata={
+            "model_version": "2.5",
+            "ss_network_dim": "4",
+            "ss_network_alpha": "1",
+        },
+    )
+
+    weights, report = _load_normalized_ltx25_lora(adapter)
+
+    assert report["lora_rank"] == 4
+    assert report["lora_alpha"] == 1
+    assert mx.array_equal(
+        weights["transformer_blocks.0.attn1.to_q.lora_B.weight"],
+        mx.full((4, 2), 0.25),
+    )
+
+
+def test_ltx25_conflicting_global_scaling_metadata_fails(tmp_path):
+    adapter = tmp_path / "conflicting.safetensors"
+    save_file(
+        {
+            "transformer_blocks.0.attn1.to_q.lora_A.weight": np.zeros(
+                (2, 4), dtype=np.float32
+            ),
+            "transformer_blocks.0.attn1.to_q.lora_B.weight": np.zeros(
+                (4, 2), dtype=np.float32
+            ),
+        },
+        adapter,
+        metadata={"model_version": "2.5", "lora_alpha": "2", "network_alpha": "1"},
+    )
+
+    with pytest.raises(ValueError, match="conflicting alpha metadata"):
+        inspect_ltx25_lora(adapter)
+
+
+def test_ltx25_metadata_free_standard_lora_uses_exact_target_shape(tmp_path):
+    adapter = tmp_path / "renamed-without-model-metadata.safetensors"
+    save_file(
+        {
+            "base_model.model.transformer_blocks.0.attn1.to_q.lora_A.weight": np.zeros(
+                (2, 4096), dtype=np.float16
+            ),
+            "base_model.model.transformer_blocks.0.attn1.to_q.lora_B.weight": np.zeros(
+                (4096, 2), dtype=np.float16
+            ),
+        },
+        adapter,
+    )
+
+    report = inspect_ltx25_lora(adapter)
+
+    assert report["compatibility"] == "structural_ltx_2_5_22b"
+    assert report["adapter_family"] == "standard"
+    assert report["normalized_target_count"] == 1
+    assert report["classification_basis"] == (
+        "no task-conditioning metadata or auxiliary tensors"
+    )
+
+
+def test_ltx25_declared_native_lora_still_rejects_unknown_targets(tmp_path):
+    adapter = tmp_path / "unknown.safetensors"
+    save_file(
+        {
+            "diffusion_model.not_a_real_projection.lora_A.weight": np.zeros(
+                (2, 4), dtype=np.float16
+            ),
+            "diffusion_model.not_a_real_projection.lora_B.weight": np.zeros(
+                (4, 2), dtype=np.float16
+            ),
+        },
+        adapter,
+        metadata={"model_version": "2.5"},
+    )
+
+    with pytest.raises(ValueError, match="incompatible targets include"):
+        inspect_ltx25_lora(adapter)
+
+
+def test_ltx25_non_block_lora_targets_are_fused_independently():
+    import mlx.core as mx
+
+    weights = {
+        "adaln.weight": mx.zeros((2, 2), dtype=mx.float32),
+        "transformer_blocks.0.proj.weight": mx.zeros((2, 2), dtype=mx.float32),
+    }
+    adapter = {
+        "adaln.lora_A.weight": mx.eye(2, dtype=mx.float32),
+        "adaln.lora_B.weight": mx.eye(2, dtype=mx.float32),
+        "transformer_blocks.0.proj.lora_A.weight": mx.eye(2, dtype=mx.float32),
+        "transformer_blocks.0.proj.lora_B.weight": mx.eye(2, dtype=mx.float32),
+    }
+
+    fused = dict(_fuse_non_block_loras(weights, [(adapter, 0.5)]))
+    assert set(fused) == {"adaln.weight"}
+    assert mx.array_equal(fused["adaln.weight"], mx.eye(2, dtype=mx.float32) * 0.5)
+
+
+def test_ltx25_dfr_modifier_selects_stage2_pixel_spatial_lora(tmp_path):
+    adapter = tmp_path / "detail.safetensors"
+    save_file(
+        {
+            "transformer_blocks.0.attn1.to_q.lora_A.weight": np.zeros((2, 4), dtype=np.float32),
+            "transformer_blocks.0.attn1.to_q.lora_B.weight": np.zeros((4, 2), dtype=np.float32),
+        },
+        adapter,
+        metadata={
+            "model_version": "2.5.0",
+            "reference_downscale_factor": "2",
+            "reference_spatial_scale_factor": "2",
+        },
+    )
+    config, raw = WeeToddLTX25DFRDetailing().apply(
+        LTX25GenerationConfig(duration_seconds=2.0), str(adapter), 1.0
+    )
+    report = json.loads(raw)
+    assert config.dfr_enabled is True
+    assert config.generated_keyframes == 0
+    assert report["generated_keyframe_positions"] == [24, 48]
+    assert report["audio_source"] == "stage_1"
+
+
+def test_ltx25_dfr_recipe_detects_official_rank_450_adapter():
+    config = LTX25GenerationConfig(dfr_enabled=True)
+    report = {
+        "components": [
+            {
+                "adapter_role": "transformer_lora",
+                "lora_rank": 450,
+                "lora_alpha": 450,
+            }
+        ]
+    }
+    assert resolve_ltx25_dfr_recipe(config, report) == "official_dev_distilled_lora"
+    assert resolve_ltx25_dfr_recipe(config, {"components": []}) == "fused_distilled_experimental"
+    assert resolve_ltx25_dfr_recipe(LTX25GenerationConfig(), report) == "disabled"
+
+
+def test_ltx25_timed_keyframes_are_composable_and_validate_window():
+    image = np.zeros((1, 64, 64, 3), dtype=np.float32)
+    node = WeeToddLTX25Keyframe()
+    stack, _ = node.append(image, 0, 1.0)
+    stack, info = node.append(image, 120, 0.7, stack)
+    assert isinstance(stack, LTX25KeyframeStack)
+    stack.validate(121)
+    assert json.loads(info)["keyframes"] == [
+        {"frame_index": 0, "strength": 1.0},
+        {"frame_index": 120, "strength": 0.7},
+    ]
+    with pytest.raises(ValueError, match="outside"):
+        stack.validate(120)
+
+
+def test_ltx25_media_conditioning_composes_image_keyframes():
+    image = np.zeros((1, 32, 32, 3), dtype=np.float32)
+    node = WeeToddLTX25MediaConditioning()
+
+    stack, raw = node.append("image_keyframe", 8, 8, 0.75, images=image)
+
+    assert isinstance(stack, LTX25MediaConditioningStack)
+    stack.validate_for_generation(17)
+    assert json.loads(raw)["items"] == [
+        {
+            "end_frame": 8,
+            "role": "image_keyframe",
+            "start_frame": 8,
+            "strength": 0.75,
+            "attention_strength": 1.0,
+        }
+    ]
+
+
+def test_ltx25_media_conditioning_accepts_video_reference_and_infers_end_frame():
+    images = np.zeros((9, 32, 32, 3), dtype=np.float32)
+    stack = WeeToddLTX25MediaConditioning().append("video_reference", 4, 4, 1.0, images=images)[0]
+    stack.validate_for_generation(17)
+    assert stack.items[0].end_frame == 12
+
+
+def test_ltx25_media_conditioning_accepts_one_frozen_audio_source():
+    audio = {
+        "waveform": np.zeros((1, 2, 16000), dtype=np.float32),
+        "sample_rate": 16000,
+    }
+    stack = WeeToddLTX25MediaConditioning().append("audio_reference", 0, 0, 1.0, audio=audio)[0]
+    stack.validate_for_generation(121)
+    with pytest.raises(ValueError, match="strength must be 1.0"):
+        WeeToddLTX25MediaConditioning().append("audio_reference", 0, 0, 0.5, audio=audio)
+
+
+def test_ltx25_audio_driven_conditioning_freezes_tokens_and_preserves_source(
+    monkeypatch,
+):
+    import mlx.core as mx
+
+    class Conditioner:
+        def load(self):
+            return object(), object()
+
+    class Patchifier:
+        def patchify(self, latent):
+            del latent
+            return mx.ones((1, 3, 128), dtype=mx.bfloat16), 3
+
+    monkeypatch.setattr(
+        "ltx_core_mlx.model.audio_vae.encode_audio",
+        lambda waveform, sample_rate, encoder, processor: mx.zeros(
+            (1, 8, 2, 16), dtype=mx.bfloat16
+        ),
+    )
+    source = np.linspace(-0.5, 0.5, 8000, dtype=np.float32)[None, None]
+    tokens, publication, report = prepare_audio_driven_conditioning(
+        audio={"waveform": source, "sample_rate": 8000},
+        audio_conditioner=Conditioner(),
+        audio_patchifier=Patchifier(),
+        target_tokens=5,
+        duration_seconds=1.0,
+    )
+    assert tokens.shape == (1, 5, 128)
+    assert publication.shape == (1, 2, 8000)
+    assert np.array_equal(np.asarray(publication)[0, 0], source[0, 0])
+    assert report.conditioning_sample_rate == 16000
+    assert report.output_policy == "original_audio_trim_or_silence_pad"
+
+
+def test_ltx25_publication_audio_preserves_source_without_conditioning():
+    source = np.linspace(-0.25, 0.25, 4000, dtype=np.float32)[None, None]
+    publication, report = prepare_publication_audio(
+        audio={"waveform": source, "sample_rate": 8000},
+        duration_seconds=1.0,
+    )
+
+    resolved = np.asarray(publication)
+    assert resolved.shape == (1, 2, 8000)
+    assert np.array_equal(resolved[0, 0, :4000], source[0, 0])
+    assert np.array_equal(resolved[0, 1, :4000], source[0, 0])
+    assert np.count_nonzero(resolved[..., 4000:]) == 0
+    assert report.source_samples == 4000
+    assert report.published_samples == 8000
+
+
+def test_ltx25_generate_and_save_muxes_publication_audio(tmp_path):
+    pipeline = object.__new__(LTX25DistilledPipeline)
+    pipeline.last_timings = {}
+    pipeline.last_passthrough_audio = None
+    pipeline.last_num_frames = 121
+    pipeline.last_output_frame_rate = 24.0
+    pipeline.low_memory = False
+    pipeline.generate_two_stage = lambda **_kwargs: (object(), object())
+    captured = {}
+
+    class VideoDecoder:
+        def decode_and_stream(self, _latent, output_path, *, frame_rate, audio_path):
+            captured.update(
+                output_path=output_path,
+                frame_rate=frame_rate,
+                audio_exists=bool(audio_path) and Path(audio_path).is_file(),
+            )
+            return output_path
+
+    pipeline.video_decoder_block = VideoDecoder()
+    pipeline.audio_decoder_block = object()
+    output = tmp_path / "publication-audio.mp4"
+    source_audio = {
+        "waveform": np.zeros((1, 2, 40000), dtype=np.float32),
+        "sample_rate": 8000,
+    }
+
+    result = pipeline.generate_and_save(
+        output_path=str(output),
+        frame_rate=24.0,
+        publication_audio=source_audio,
+    )
+
+    assert result == str(output)
+    assert captured == {
+        "output_path": str(output),
+        "frame_rate": 24.0,
+        "audio_exists": True,
+    }
+    assert pipeline.last_timings["audio_publication"] == "original_source_audio"
+    assert pipeline.last_timings["publication_audio"]["published_samples"] == 40333
+
+
+def test_ltx25_ic_lora_loader_rejects_structurally_unclassified_task_adapter(tmp_path):
+    spec = _bundle(tmp_path)
+    adapter = tmp_path / "reference.safetensors"
+    save_file(
+        {
+            "transformer_blocks.0.attn1.to_q.lora_A.weight": np.zeros((2, 4), dtype=np.float32),
+            "transformer_blocks.0.attn1.to_q.lora_B.weight": np.zeros((4, 2), dtype=np.float32),
+        },
+        adapter,
+        metadata={
+            "model_version": "2.5.0",
+            "reference_downscale_factor": "1",
+            "reference_temporal_scale_factor": "1",
+        },
+    )
+    with pytest.raises(ValueError, match="task cannot be determined"):
+        WeeToddLTX25ICLoRALoader().attach(spec, str(adapter), 0.8)
+    with pytest.raises(ValueError, match="dedicated"):
+        WeeToddLTX25LoRALoader().attach(spec, str(adapter), 0.8)
+
+
+def test_ltx25_runtime_rejects_structurally_unclassified_task_adapter(tmp_path):
+    spec = _bundle(tmp_path)
+    adapter = tmp_path / "renamed-unknown-task.safetensors"
+    save_file(
+        {
+            "transformer_blocks.0.attn1.to_q.lora_A.weight": np.zeros(
+                (2, 4), dtype=np.float32
+            ),
+            "transformer_blocks.0.attn1.to_q.lora_B.weight": np.zeros(
+                (4, 2), dtype=np.float32
+            ),
+        },
+        adapter,
+        metadata={
+            "model_version": "2.5.0",
+            "reference_downscale_factor": "1",
+            "reference_temporal_scale_factor": "1",
+        },
+    )
+
+    with pytest.raises(ValueError, match="task cannot be determined"):
+        replace(spec, ic_loras=((str(adapter), 0.8),)).validate()
+
+
+def test_ltx25_ic_lora_loader_stacks_crossview_plus_ingredients(monkeypatch, tmp_path):
+    crossview = tmp_path / "crossview.safetensors"
+    ingredients = tmp_path / "ingredients.safetensors"
+    crossview.write_bytes(b"crossview")
+    ingredients.write_bytes(b"ingredients")
+    reports = {
+        str(crossview): {
+            "path": crossview,
+            "adapter_role": "ic_lora",
+            "adapter_family": "crossview_warp",
+            "ic_lora_task": "reference_conditioning",
+            "reference_downscale_factor": 1,
+            "reference_temporal_scale_factor": 1,
+        },
+        str(ingredients): {
+            "path": ingredients,
+            "adapter_role": "ic_lora",
+            "adapter_family": "ingredients_reference_sheet",
+            "ic_lora_task": "reference_conditioning",
+            "reference_downscale_factor": 1,
+            "reference_temporal_scale_factor": 1,
+        },
+    }
+    monkeypatch.setattr(
+        "wee_todd_nodes.ltx25_nodes._resolve_component",
+        lambda value, _folders: Path(value),
+    )
+    monkeypatch.setattr(
+        "ltx25_mlx.transformer.inspect_ltx25_lora",
+        lambda path: dict(reports[str(path)]),
+    )
+    loader = WeeToddLTX25ICLoRALoader()
+    first, _ = loader.attach(_bundle(tmp_path), str(crossview), 1.0)
+    stacked, raw = loader.attach(first, str(ingredients), 0.8)
+
+    assert stacked.ic_loras == ((str(crossview), 1.0), (str(ingredients), 0.8))
+    assert json.loads(raw)["stack_size"] == 2
+
+
+def test_ltx25_ic_lora_loader_rejects_duplicate_family(monkeypatch, tmp_path):
+    first_path = tmp_path / "crossview-a.safetensors"
+    second_path = tmp_path / "crossview-b.safetensors"
+    first_path.write_bytes(b"a")
+    second_path.write_bytes(b"b")
+    monkeypatch.setattr(
+        "wee_todd_nodes.ltx25_nodes._resolve_component",
+        lambda value, _folders: Path(value),
+    )
+    monkeypatch.setattr(
+        "ltx25_mlx.transformer.inspect_ltx25_lora",
+        lambda path: {
+            "path": path,
+            "adapter_role": "ic_lora",
+            "adapter_family": "crossview_warp",
+            "ic_lora_task": "reference_conditioning",
+            "reference_downscale_factor": 1,
+            "reference_temporal_scale_factor": 1,
+        },
+    )
+    loader = WeeToddLTX25ICLoRALoader()
+    first, _ = loader.attach(_bundle(tmp_path), str(first_path), 1.0)
+
+    with pytest.raises(ValueError, match="distinct adapter family"):
+        loader.attach(first, str(second_path), 1.0)
+
+
+def test_ltx25_pixel_spatial_ic_lora_is_not_accepted_as_general_reference(tmp_path):
+    spec = _bundle(tmp_path)
+    adapter = tmp_path / "pixel-spatial.safetensors"
+    save_file(
+        {
+            "transformer_blocks.0.attn1.to_q.lora_A.weight": np.zeros((2, 4), dtype=np.float32),
+            "transformer_blocks.0.attn1.to_q.lora_B.weight": np.zeros((4, 2), dtype=np.float32),
+        },
+        adapter,
+        metadata={
+            "model_version": "2.5.0",
+            "reference_downscale_factor": "2",
+            "reference_spatial_scale_factor": "2",
+        },
+    )
+    assert inspect_ltx25_lora(adapter)["ic_lora_task"] == "pixel_spatial_upscaler"
+    with pytest.raises(ValueError, match="Pixel-Spatial Upscaler"):
+        WeeToddLTX25ICLoRALoader().attach(spec, str(adapter), 1.0)
+
+
+def test_ltx25_ic_reference_is_encoded_in_memory_with_timeline_offset():
+    import mlx.core as mx
+
+    class Encoder:
+        def encode(self, pixels):
+            assert pixels.shape == (1, 3, 9, 64, 64)
+            return mx.zeros((1, 128, 2, 2, 2), dtype=mx.bfloat16)
+
+    conditioning, report = encode_reference_video_conditioning(
+        images=np.zeros((10, 80, 100, 3), dtype=np.float32),
+        video_encoder=Encoder(),
+        target_height=64,
+        target_width=64,
+        target_num_frames=25,
+        frame_rate=24.0,
+        start_frame=8,
+        end_frame=17,
+        strength=0.9,
+        attention_strength=1.0,
+    )
+    assert conditioning.reference_latent.shape == (1, 8, 128)
+    assert float(conditioning.reference_positions[0, 0, 0]) >= 8 / 24
+    assert report.encoded_frames == 9
+    assert report.dropped_tail_frames == 1
+    assert report.encoded_width == report.encoded_height == 64
+
+
+def test_ltx25_ingredients_reference_sheet_repeats_one_image_to_full_clip():
+    import mlx.core as mx
+
+    class Encoder:
+        def encode(self, pixels):
+            assert pixels.shape == (1, 3, 121, 64, 64)
+            return mx.zeros((1, 128, 16, 2, 2), dtype=mx.bfloat16)
+
+    conditioning, report = encode_reference_video_conditioning(
+        images=np.zeros((1, 80, 100, 3), dtype=np.float32),
+        video_encoder=Encoder(),
+        target_height=64,
+        target_width=64,
+        target_num_frames=121,
+        frame_rate=24.0,
+        start_frame=0,
+        end_frame=120,
+        strength=1.0,
+        attention_strength=1.0,
+        control_type="ingredients_reference_sheet",
+    )
+
+    assert conditioning.reference_latent.shape == (1, 64, 128)
+    assert report.source_frames == 1
+    assert report.encoded_frames == 121
+    assert report.conditioning_mode == "static_reference_sheet_repeated_to_target"
+    assert report.reference_size_policy == "quality"
+    assert report.reference_token_count == 64
+    assert report.target_token_count == 64
+    assert report.dense_attention_multiplier_vs_target == 4.0
+    assert report.attention_mask_layout == "none"
+
+    with pytest.raises(ValueError, match="at least 121 generated frames"):
+        encode_reference_video_conditioning(
+            images=np.zeros((1, 64, 64, 3), dtype=np.float32),
+            video_encoder=Encoder(),
+            target_height=64,
+            target_width=64,
+            target_num_frames=9,
+            frame_rate=24.0,
+            start_frame=0,
+            end_frame=8,
+            strength=1.0,
+            attention_strength=1.0,
+            control_type="ingredients_reference_sheet",
+        )
+
+
+def test_ltx25_ingredients_compact_attention_mask_has_two_templates():
+    import mlx.core as mx
+    from ltx_core_mlx.conditioning.types.latent_cond import LatentState
+
+    class Encoder:
+        def encode(self, _pixels):
+            return mx.zeros((1, 128, 16, 2, 2), dtype=mx.bfloat16)
+
+    conditioning, report = encode_reference_video_conditioning(
+        images=np.zeros((1, 64, 64, 3), dtype=np.float32),
+        video_encoder=Encoder(),
+        target_height=64,
+        target_width=64,
+        target_num_frames=121,
+        frame_rate=24.0,
+        start_frame=0,
+        end_frame=120,
+        strength=1.0,
+        attention_strength=0.7,
+        control_type="ingredients_reference_sheet",
+        compact_attention_mask=True,
+    )
+    target = mx.zeros((1, 64, 128), dtype=mx.bfloat16)
+    state = LatentState(
+        latent=target,
+        clean_latent=target,
+        denoise_mask=mx.ones((1, 64, 1), dtype=mx.bfloat16),
+        positions=mx.zeros((1, 64, 3), dtype=mx.float32),
+    )
+    applied = conditioning.apply(state, (16, 2, 2))
+    mx.eval(applied.attention_mask)
+
+    assert applied.attention_mask.shape == (1, 2, 128)
+    assert applied.attention_mask[0, 0, :64].tolist() == [1.0] * 64
+    assert applied.attention_mask[0, 1, 64:].tolist() == [1.0] * 64
+    assert report.attention_mask_layout == "compact_two_row_suffix"
+
+
+@pytest.mark.parametrize(
+    ("policy", "expected"),
+    (
+        ("quality", (448, 768)),
+        ("balanced", (288, 512)),
+        ("speed", (224, 384)),
+    ),
+)
+def test_ltx25_ingredients_reference_grid_policies(policy, expected):
+    assert (
+        plan_ingredients_reference_grid(
+            source_height=448,
+            source_width=768,
+            target_height=768,
+            target_width=1344,
+            policy=policy,
+        )
+        == expected
+    )
+
+
+def test_ltx25_ingredients_reference_grid_rejects_unknown_policy():
+    with pytest.raises(ValueError, match="Unsupported Ingredients reference size policy"):
+        plan_ingredients_reference_grid(
+            source_height=448,
+            source_width=768,
+            target_height=768,
+            target_width=1344,
+            policy="mystery",
+        )
+
+
+def test_ltx25_reference_sheet_node_formats_trained_prompt_contract():
+    sheet = np.zeros((1, 64, 96, 3), dtype=np.float32)
+
+    stack, prompt, raw = WeeToddLTX25ReferenceSheetGuide().append(
+        sheet,
+        "One actor turnaround and one clean prop panel.",
+        "The actor lifts the prop in a fixed medium shot.",
+        1.0,
+        1.0,
+    )
+
+    assert stack.items[0].control_type == "ingredients_reference_sheet"
+    assert prompt.startswith("Reference sheet: One actor turnaround")
+    assert "\n\nGenerated video: The actor lifts" in prompt
+    assert json.loads(raw)["recommended_pipeline"] == "single_stage_full_resolution"
+
+
+def test_ltx25_reference_sheet_node_records_balanced_reference_policy():
+    sheet = np.zeros((1, 448, 768, 3), dtype=np.float32)
+    stack, _prompt, raw = WeeToddLTX25ReferenceSheetGuide().append(
+        sheet,
+        "Two distinct actors.",
+        "They exchange a cautious glance in one fixed shot.",
+        1.0,
+        1.0,
+        "balanced",
+    )
+
+    info = json.loads(raw)
+    assert stack.items[0].reference_size_policy == "balanced"
+    assert info["planned_maximum_reference_size"] == [512, 288]
+    assert info["estimated_reference_rows_at_121_frames"] == 2304
+    assert info["quality_warning"]
+
+
+def test_ltx25_ic_lora_pipeline_mode_enables_official_single_stage_geometry():
+    config, raw = WeeToddLTX25ICLoRAPipelineMode().apply(
+        LTX25GenerationConfig(width=768, height=448),
+        "CFG++ quality — 8 steps / 15 real forwards",
+    )
+
+    config.validate()
+    assert config.ic_lora_single_stage is True
+    assert config.stage2_steps == 0
+    assert config.stage1_sampler == "euler_ancestral_cfg_pp"
+    assert config.stage1_forward_passes == 15
+    assert config.cfg_pp_batched is False
+    assert config.real_forward_passes == 15
+    assert config.negative_prompt == ""
+    assert json.loads(raw)["ic_lora_stage_scope"] == "full_resolution_complete_generation"
+    assert json.loads(raw)["recommended_ingredients_lora_strength"] == 1.2
+
+
+def test_ltx25_sol_attention_requires_single_stage():
+    from wee_todd_nodes.ltx25_nodes import (
+        WeeToddLTX25SingleStage,
+        WeeToddLTX25SolAttention,
+    )
+
+    config = LTX25GenerationConfig(width=1344, height=768, low_memory=False)
+    single_stage, _ = WeeToddLTX25SingleStage().apply(
+        config,
+        "full resolution — 8 real forwards",
+    )
+    configured, raw = WeeToddLTX25SolAttention().apply(single_stage, "speed")
+    assert configured.ic_lora_single_stage is True
+    assert configured.stage2_steps == 0
+    assert configured.sol_attention_profile == "speed"
+    assert json.loads(raw)["minimum_video_tokens"] == 16000
+
+
+def test_ltx25_sol_attention_paged_profile_requires_streaming():
+    resident = LTX25GenerationConfig(
+        width=1344,
+        height=768,
+        ic_lora_single_stage=True,
+        stage2_steps=0,
+        sol_attention_profile="paged_speed",
+    )
+    with pytest.raises(ValueError, match="requires low-RAM"):
+        resident.validate()
+
+    paged = replace(resident, low_ram_streaming=True)
+    paged.validate()
+
+    with pytest.raises(ValueError, match="requires the paged_speed"):
+        replace(paged, sol_attention_profile="speed").validate()
+
+
+def test_ltx25_sol_attention_patches_only_video_self_attention_and_tracks_context():
+    from ltx_core_mlx.model.transformer.attention import Attention
+
+    from ltx25_mlx.sol_attention import (
+        configure_ltx25_sol_attention,
+        set_ltx25_sol_context,
+    )
+    from wee_todd_mlx.sol_attention import SolAttentionConfig
+
+    class Block:
+        def __init__(self):
+            self.attn1 = Attention(128, num_heads=1, head_dim=128)
+            self.attn2 = Attention(128, num_heads=1, head_dim=128)
+
+    class Model:
+        def __init__(self):
+            self.transformer_blocks = [Block(), Block()]
+
+    model = Model()
+    original_cross_class = model.transformer_blocks[0].attn2.__class__
+    report = configure_ltx25_sol_attention(
+        model,
+        SolAttentionConfig(enabled=True, min_tokens=64, start_percent=0.0, dense_blocks=0),
+    )
+    set_ltx25_sol_context(model, step_index=3, total_steps=8, exact_suffix_rows=17)
+    set_ltx25_sol_context(model, step_index=4, total_steps=8)
+
+    assert report["patched_video_self_attention"] == 2
+    assert model.transformer_blocks[0].attn1.__class__.__name__ == "_LTX25SolVideoAttention"
+    assert model.transformer_blocks[0].attn2.__class__ is original_cross_class
+    assert model._weetodd_sol_state.step_index == 4
+    assert model._weetodd_sol_state.total_steps == 8
+    assert model._weetodd_sol_state.exact_suffix_rows == 17
+
+
+def test_ltx25_sol_attention_exact_suffix_matches_dense_attention():
+    import copy
+
+    import mlx.core as mx
+    from ltx_core_mlx.model.transformer.attention import Attention
+    from mlx.utils import tree_map
+
+    from ltx25_mlx.sol_attention import (
+        configure_ltx25_sol_attention,
+        set_ltx25_sol_context,
+    )
+    from wee_todd_mlx.sol_attention import SolAttentionConfig
+
+    class Block:
+        def __init__(self, attention):
+            self.attn1 = attention
+
+    class Model:
+        def __init__(self, attention):
+            self.transformer_blocks = [Block(attention)]
+
+    mx.random.seed(18)
+    dense = Attention(128, num_heads=1, head_dim=128)
+    dense.update(tree_map(lambda value: value.astype(mx.bfloat16), dense.parameters()))
+    sparse = copy.deepcopy(dense)
+    model = Model(sparse)
+    configure_ltx25_sol_attention(
+        model,
+        SolAttentionConfig(enabled=True, min_tokens=64, start_percent=0.0, dense_blocks=0),
+    )
+    set_ltx25_sol_context(model, step_index=0, total_steps=1, exact_suffix_rows=64)
+    mx.random.seed(19)
+    inputs = mx.random.normal((1, 64, 128)).astype(mx.bfloat16)
+    expected = dense(inputs)
+    actual = sparse(inputs)
+    mx.eval(expected, actual)
+    delta = actual.astype(mx.float32) - expected.astype(mx.float32)
+    relative_l2 = mx.sqrt(mx.sum(delta * delta) / mx.sum(expected.astype(mx.float32) ** 2))
+    assert float(relative_l2.item()) < 1.0e-4
+
+
+def test_ltx25_sol_attention_exact_masked_suffix_matches_dense_attention():
+    import copy
+
+    import mlx.core as mx
+    from ltx_core_mlx.model.transformer.attention import Attention
+    from mlx.utils import tree_map
+
+    from ltx25_mlx.sol_attention import (
+        configure_ltx25_sol_attention,
+        ltx25_sol_attention_report,
+        set_ltx25_sol_context,
+    )
+    from wee_todd_mlx.sol_attention import SolAttentionConfig
+
+    class Block:
+        def __init__(self, attention):
+            self.attn1 = attention
+
+    class Model:
+        def __init__(self, attention):
+            self.transformer_blocks = [Block(attention)]
+
+    dense = Attention(128, num_heads=1, head_dim=128)
+    dense.update(tree_map(lambda value: value.astype(mx.bfloat16), dense.parameters()))
+    sparse = copy.deepcopy(dense)
+    model = Model(sparse)
+    policy = configure_ltx25_sol_attention(
+        model,
+        SolAttentionConfig(enabled=True, min_tokens=64, start_percent=0.0, dense_blocks=0),
+    )
+    set_ltx25_sol_context(model, step_index=0, total_steps=1, exact_suffix_rows=128)
+    mx.random.seed(23)
+    inputs = mx.random.normal((1, 128, 128)).astype(mx.bfloat16)
+    mask = mx.ones((1, 128, 128), dtype=mx.bfloat16)
+    mask = mask.at[:, :64, 64:].multiply(0.35)
+    mask = mask.at[:, 64:, :64].multiply(0.35)
+    expected = dense(inputs, attention_mask=mask)
+    actual = sparse(inputs, attention_mask=mask)
+    mx.eval(expected, actual)
+    delta = actual.astype(mx.float32) - expected.astype(mx.float32)
+    relative_l2 = mx.sqrt(mx.sum(delta * delta) / mx.sum(expected.astype(mx.float32) ** 2))
+    report = ltx25_sol_attention_report(model, policy)
+
+    assert float(relative_l2.item()) < 1.0e-4
+    assert report["sparse_kernel_calls"] == 1
+    assert report["unsupported_fallback_calls"] == 0
+
+
+def test_ltx25_sol_attention_compact_mask_matches_full_mask_exact_route():
+    import copy
+
+    import mlx.core as mx
+    from ltx_core_mlx.model.transformer.attention import Attention
+    from mlx.utils import tree_map
+
+    from ltx25_mlx.sol_attention import (
+        configure_ltx25_sol_attention,
+        ltx25_sol_attention_report,
+        set_ltx25_sol_context,
+    )
+    from wee_todd_mlx.sol_attention import SolAttentionConfig
+
+    class Block:
+        def __init__(self, attention):
+            self.attn1 = attention
+
+    class Model:
+        def __init__(self, attention):
+            self.transformer_blocks = [Block(attention)]
+
+    dense = Attention(128, num_heads=1, head_dim=128)
+    dense.update(tree_map(lambda value: value.astype(mx.bfloat16), dense.parameters()))
+    sparse = copy.deepcopy(dense)
+    model = Model(sparse)
+    policy = configure_ltx25_sol_attention(
+        model,
+        SolAttentionConfig(enabled=True, min_tokens=64, start_percent=0.0, dense_blocks=0),
+    )
+    set_ltx25_sol_context(model, step_index=0, total_steps=1, exact_suffix_rows=64)
+    mx.random.seed(29)
+    inputs = mx.random.normal((1, 128, 128)).astype(mx.bfloat16)
+    target_template = mx.concatenate([mx.ones((1, 64)), mx.full((1, 64), 0.35)], axis=1).astype(
+        mx.bfloat16
+    )
+    reference_template = mx.concatenate([mx.full((1, 64), 0.35), mx.ones((1, 64))], axis=1).astype(
+        mx.bfloat16
+    )
+    compact = mx.stack([target_template, reference_template], axis=1)
+    full = mx.concatenate(
+        [
+            mx.broadcast_to(target_template[:, None, :], (1, 64, 128)),
+            mx.broadcast_to(reference_template[:, None, :], (1, 64, 128)),
+        ],
+        axis=1,
+    )
+    expected = dense(inputs, attention_mask=full)
+    actual = sparse(inputs, attention_mask=compact)
+    mx.eval(expected, actual)
+    delta = actual.astype(mx.float32) - expected.astype(mx.float32)
+    relative_l2 = mx.sqrt(mx.sum(delta * delta) / mx.sum(expected.astype(mx.float32) ** 2))
+    report = ltx25_sol_attention_report(model, policy)
+
+    assert float(relative_l2.item()) < 1.0e-4
+    assert compact.size * 64 == full.size
+    assert report["sparse_kernel_calls"] == 1
+    assert report["unsupported_fallback_calls"] == 0
+
+
+def test_ltx25_compact_mask_materializes_for_dense_fallback():
+    import mlx.core as mx
+
+    from wee_todd_mlx.sol_attention import materialize_compact_attention_mask
+
+    target_template = mx.array([[1.0, 1.0, 0.5, 0.5]], dtype=mx.bfloat16)
+    reference_template = mx.array([[0.5, 0.5, 1.0, 1.0]], dtype=mx.bfloat16)
+    compact = mx.stack([target_template, reference_template], axis=1)
+
+    full = materialize_compact_attention_mask(compact)
+    mx.eval(full)
+
+    assert full.shape == (1, 4, 4)
+    assert full[0, :2, :].tolist() == [[1.0, 1.0, 0.5, 0.5]] * 2
+    assert full[0, 2:, :].tolist() == [[0.5, 0.5, 1.0, 1.0]] * 2
+
+
+def test_ltx25_grouped_compact_mask_materializes_with_reference_cross_attention():
+    import mlx.core as mx
+
+    from wee_todd_mlx.sol_attention import materialize_compact_attention_mask
+
+    compact = mx.array(
+        [
+            [
+                [1.0, 1.0, 0.7, 0.7, 0.4, 0.4],
+                [0.7, 0.7, 1.0, 1.0, 1.0, 1.0],
+                [0.4, 0.4, 1.0, 1.0, 1.0, 1.0],
+            ]
+        ],
+        dtype=mx.bfloat16,
+    )
+
+    full = materialize_compact_attention_mask(compact, (2, 2))
+    mx.eval(full)
+
+    assert full.shape == (1, 6, 6)
+    assert full[0, :2, :].tolist() == [compact[0, 0, :].tolist()] * 2
+    assert full[0, 2:4, :].tolist() == [compact[0, 1, :].tolist()] * 2
+    assert full[0, 4:, :].tolist() == [compact[0, 2, :].tolist()] * 2
+
+
+def test_ltx25_msr_conditioning_builds_grouped_compact_mask_and_positions():
+    import mlx.core as mx
+    from ltx_core_mlx.conditioning.types.latent_cond import LatentState
+
+    target = mx.zeros((1, 64, 128), dtype=mx.bfloat16)
+    positions = mx.zeros((1, 64, 3), dtype=mx.float32)
+    state = LatentState(
+        latent=target,
+        clean_latent=target,
+        denoise_mask=mx.ones((1, 64, 1), dtype=mx.bfloat16),
+        positions=positions,
+    )
+    groups = (
+        {
+            "tokens": mx.ones((1, 64, 128), dtype=mx.bfloat16),
+            "positions": mx.full((1, 64, 3), -2.0),
+            "strength": 0.8,
+            "attention_strength": 0.7,
+        },
+        {
+            "tokens": mx.full((1, 64, 128), 2.0, dtype=mx.bfloat16),
+            "positions": mx.full((1, 64, 3), -1.0),
+            "strength": 0.6,
+            "attention_strength": 0.4,
+        },
+    )
+
+    output = LTX25MSRConditioning(groups, compact_attention_mask=True).apply(state, (1, 8, 8))
+    mx.eval(
+        output.latent,
+        output.denoise_mask,
+        output.positions,
+        output.attention_mask,
+    )
+
+    assert output.latent.shape == (1, 192, 128)
+    assert output.positions.shape == (1, 192, 3)
+    assert output.attention_mask.shape == (1, 3, 192)
+    assert output.denoise_mask[0, 64, 0].item() == pytest.approx(0.2, abs=0.01)
+    assert output.denoise_mask[0, 128, 0].item() == pytest.approx(0.4, abs=0.01)
+    assert output.attention_mask[0, 1, 128:].tolist() == [1.0] * 64
+    assert output.attention_mask[0, 2, 64:128].tolist() == [1.0] * 64
+
+
+def test_ltx25_msr_fourier_slot_embedding_matches_numpy_reference():
+    import mlx.core as mx
+
+    rng = np.random.default_rng(47)
+    state_np = {
+        "frequencies": rng.normal(size=(16,)).astype(np.float32),
+        "net.0.weight": rng.normal(size=(256, 33)).astype(np.float32),
+        "net.0.bias": rng.normal(size=(256,)).astype(np.float32),
+        "net.2.weight": rng.normal(size=(128, 256)).astype(np.float32),
+        "net.2.bias": rng.normal(size=(128,)).astype(np.float32),
+    }
+    state = {name: mx.array(value) for name, value in state_np.items()}
+    scaled = np.array([3.0 / 16.0], dtype=np.float32)
+    phases = scaled[0] * state_np["frequencies"]
+    features = np.concatenate([scaled, np.sin(phases), np.cos(phases)])
+    hidden = features @ state_np["net.0.weight"].T + state_np["net.0.bias"]
+    hidden = hidden / (1.0 + np.exp(-hidden))
+    expected = hidden @ state_np["net.2.weight"].T + state_np["net.2.bias"]
+
+    actual = ltx25_msr_slot_embedding(3, state)
+    mx.eval(actual)
+
+    np.testing.assert_allclose(np.asarray(actual), expected, rtol=1.0e-5, atol=1.0e-4)
+
+
+def test_ltx25_msr_quality_grid_matches_native_target_size():
+    assert plan_ltx25_msr_reference_grid(
+        source_height=480,
+        source_width=640,
+        target_height=768,
+        target_width=1344,
+        policy="quality",
+    ) == (768, 1344)
+    height, width = plan_ltx25_msr_reference_grid(
+        source_height=768,
+        source_width=1344,
+        target_height=768,
+        target_width=1344,
+        policy="speed",
+    )
+    assert height * width <= 384 * 224
+
+
+def test_ltx25_msr_sol_auto_uses_aligned_quality_layout():
+    assert plan_ltx25_msr_reference_layout(
+        source_height=768,
+        source_width=1280,
+        target_height=640,
+        target_width=1152,
+        policy="sol_auto",
+        reference_frames="auto",
+        sol_enabled=True,
+    ) == (640, 1152, 25, 2880, False)
+
+
+def test_ltx25_msr_sol_auto_adjusts_only_reference_canvas():
+    height, width, frames, rows, adjusted = plan_ltx25_msr_reference_layout(
+        source_height=768,
+        source_width=1280,
+        target_height=608,
+        target_width=1088,
+        policy="sol_auto",
+        reference_frames="auto",
+        sol_enabled=True,
+    )
+    assert (height, width, frames, rows, adjusted) == (608, 1024, 25, 2432, True)
+    assert rows % 64 == 0
+
+
+def test_ltx25_msr_auto_preserves_quality_dense_default():
+    assert plan_ltx25_msr_reference_layout(
+        source_height=768,
+        source_width=1280,
+        target_height=640,
+        target_width=1152,
+        policy="sol_auto",
+        reference_frames="auto",
+        sol_enabled=False,
+    ) == (640, 1152, 33, 3600, False)
+
+
+@pytest.mark.parametrize(
+    ("priority", "expected"),
+    [
+        ("supporting", (384, 768, 25, 1152, True)),
+        ("background", (288, 512, 25, 576, True)),
+    ],
+)
+def test_ltx25_msr_priority_selects_aligned_density_tiers(priority, expected):
+    assert (
+        plan_ltx25_msr_reference_layout(
+            source_height=768,
+            source_width=1280,
+            target_height=640,
+            target_width=1152,
+            policy="sol_auto",
+            reference_frames="auto",
+            sol_enabled=True,
+            reference_priority=priority,
+        )
+        == expected
+    )
+
+
+def test_ltx25_msr_header_requires_exact_slot_and_adapter_contract():
+    prefix = "diffusion_model.reference_slot_embedding."
+    shapes = {prefix + name: shape for name, shape in _LTX25_MSR_SLOT_SHAPES.items()}
+    metadata = {
+        "reference_slot_embedding_type": "fourier_mlp",
+        "reference_token_order": "prepend",
+        "reference_slot_time_offsets": "pic1_based_negative_time",
+        "reference_scale_factors_variable": "True",
+    }
+    base = {
+        "adapter_family": "multi_subject_reference",
+        "adapter_pairs": 480,
+        "adapter_ranks": [128],
+    }
+
+    report = _validate_ltx25_msr_header(metadata, shapes, base)
+    assert report["slot_prefix"] == prefix
+    assert report["maximum_references"] == 5
+    assert report["reference_scale_factors_variable"] is True
+
+    invalid = dict(shapes)
+    invalid[prefix + "net.2.weight"] = (64, 256)
+    with pytest.raises(ValueError, match="net.2.weight"):
+        _validate_ltx25_msr_header(metadata, invalid, base)
+
+
+def test_ltx25_msr_slot_state_loads_bfloat16_with_native_mlx(monkeypatch, tmp_path):
+    import mlx.core as mx
+
+    prefix = "diffusion_model.reference_slot_embedding."
+    arrays = {
+        prefix + name: mx.ones(shape, dtype=mx.bfloat16)
+        for name, shape in _LTX25_MSR_SLOT_SHAPES.items()
+    }
+    arrays["diffusion_model.transformer_blocks.0.attn1.to_q.lora_A.weight"] = mx.zeros(
+        (2, 2), dtype=mx.bfloat16
+    )
+    checkpoint = tmp_path / "msr-bfloat16.safetensors"
+    mx.save_safetensors(checkpoint, arrays)
+    monkeypatch.setattr(
+        "ltx25_mlx.transformer.inspect_ltx25_msr_lora",
+        lambda _path: {
+            "slot_prefix": prefix,
+            "slot_shapes": _LTX25_MSR_SLOT_SHAPES,
+        },
+    )
+
+    state = load_ltx25_msr_slot_state(checkpoint)
+
+    assert set(state) == set(_LTX25_MSR_SLOT_SHAPES)
+    assert all(value.dtype == mx.bfloat16 for value in state.values())
+    assert all(tuple(state[name].shape) == shape for name, shape in _LTX25_MSR_SLOT_SHAPES.items())
+
+
+def test_ltx25_msr_reference_stack_orders_background_last_and_labels_prompt():
+    image = np.zeros((1, 64, 64, 3), dtype=np.float32)
+    background = LTX25MSRReference(
+        image=image,
+        role="background",
+        description="the moonlit laboratory",
+        strength=1.0,
+        attention_strength=0.8,
+        reference_frames=25,
+        reference_size_policy="balanced",
+    )
+    subject = LTX25MSRReference(
+        image=image,
+        role="subject",
+        description="the red robot",
+        strength=0.9,
+        attention_strength=1.0,
+        reference_frames=33,
+        reference_size_policy="quality",
+    )
+
+    stack = LTX25MSRReferenceStack().append(background).append(subject)
+    assert [item.role for item in stack.ordered()] == ["subject", "background"]
+    assert stack.prompt_guide().splitlines() == [
+        "Image 1 provides the subject: the red robot",
+        "Image 2 provides the background: the moonlit laboratory",
+    ]
+    outputs = WeeToddLTX25MSRReferenceStack().append(
+        image,
+        "object",
+        "a brass telescope",
+        1.0,
+        1.0,
+        "25",
+        "speed",
+    )
+    assert outputs[0].references[0].role == "object"
+
+    with pytest.raises(ValueError, match="at most one background"):
+        stack.append(background)
+
+
+def test_ltx25_msr_reference_stack_auto_assigns_density_priorities():
+    image = np.zeros((1, 64, 64, 3), dtype=np.float32)
+    node = WeeToddLTX25MSRReferenceStack()
+    stack = None
+    for index in range(5):
+        stack, _, _ = node.append(
+            image,
+            "subject",
+            f"subject {index + 1}",
+            1.0,
+            1.0,
+            "auto",
+            "sol_auto",
+            reference_priority="auto",
+            previous_references=stack,
+        )
+
+    assert [item.reference_priority for item in stack.references] == [
+        "primary",
+        "primary",
+        "supporting",
+        "supporting",
+        "background",
+    ]
+
+
+def test_ltx25_msr_loader_owns_the_single_ic_lora(monkeypatch, tmp_path):
+    checkpoint = tmp_path / "LTX-2.5-Licon-MSR-V1.safetensors"
+    checkpoint.write_bytes(b"header-only-test")
+    monkeypatch.setattr(
+        "wee_todd_nodes.ltx25_nodes._resolve_component",
+        lambda _value, _folders: checkpoint,
+    )
+    monkeypatch.setattr(
+        "ltx25_mlx.transformer.inspect_ltx25_msr_lora",
+        lambda path: {
+            "path": path,
+            "adapter_family": "multi_subject_reference",
+            "adapter_pairs": 480,
+            "adapter_ranks": [128],
+        },
+    )
+    model = LTX25ComponentSpec(
+        transformer_path="transformer.safetensors",
+        text_encoder_path="text_encoder.safetensors",
+        video_vae_path="video_vae.safetensors",
+        audio_vae_path="audio_vae.safetensors",
+        spatial_upscaler_path="spatial_upscaler.safetensors",
+    )
+
+    attached, raw = WeeToddLTX25MSRLoader().attach(model, checkpoint.name, 0.9)
+
+    assert attached.ic_loras == ((str(checkpoint), 0.9),)
+    assert attached.msr_lora_path == str(checkpoint)
+    assert json.loads(raw)["slot_loading"] == "lazy_five_tensor_load"
+
+    with pytest.raises(ValueError, match="only active IC-LoRA"):
+        WeeToddLTX25MSRLoader().attach(attached, checkpoint.name, 1.0)
+
+
+def test_ltx25_sol_attention_grouped_compact_mask_matches_dense_exact_route():
+    import copy
+
+    import mlx.core as mx
+    from ltx_core_mlx.model.transformer.attention import Attention
+    from mlx.utils import tree_map
+
+    from ltx25_mlx.sol_attention import (
+        configure_ltx25_sol_attention,
+        ltx25_sol_attention_report,
+        set_ltx25_sol_context,
+    )
+    from wee_todd_mlx.sol_attention import (
+        SolAttentionConfig,
+        materialize_compact_attention_mask,
+    )
+
+    class Block:
+        def __init__(self, attention):
+            self.attn1 = attention
+
+    class Model:
+        def __init__(self, attention):
+            self.transformer_blocks = [Block(attention)]
+
+    dense = Attention(128, num_heads=1, head_dim=128)
+    dense.update(tree_map(lambda value: value.astype(mx.bfloat16), dense.parameters()))
+    sparse = copy.deepcopy(dense)
+    model = Model(sparse)
+    policy = configure_ltx25_sol_attention(
+        model,
+        SolAttentionConfig(enabled=True, min_tokens=64, start_percent=0.0, dense_blocks=0),
+    )
+    set_ltx25_sol_context(
+        model,
+        step_index=0,
+        total_steps=1,
+        exact_suffix_rows=128,
+        exact_suffix_groups=(64, 64),
+    )
+    mx.random.seed(53)
+    inputs = mx.random.normal((1, 192, 128)).astype(mx.bfloat16)
+    compact = mx.array(
+        [
+            [
+                [1.0] * 64 + [0.7] * 64 + [0.4] * 64,
+                [0.7] * 64 + [1.0] * 64 + [1.0] * 64,
+                [0.4] * 64 + [1.0] * 64 + [1.0] * 64,
+            ]
+        ],
+        dtype=mx.bfloat16,
+    )
+    full = materialize_compact_attention_mask(compact, (64, 64))
+    expected = dense(inputs, attention_mask=full)
+    actual = sparse(inputs, attention_mask=compact)
+    mx.eval(expected, actual)
+    delta = actual.astype(mx.float32) - expected.astype(mx.float32)
+    relative_l2 = mx.sqrt(mx.sum(delta * delta) / mx.sum(expected.astype(mx.float32) ** 2))
+    report = ltx25_sol_attention_report(model, policy)
+
+    assert float(relative_l2.item()) < 1.0e-4
+    assert compact.size * 64 == full.size
+    assert report["sparse_kernel_calls"] == 1
+    assert report["unsupported_fallback_calls"] == 0
+
+
+def test_ltx25_sol_attention_casts_fp32_projected_qkv_to_bf16_kernel():
+    import mlx.core as mx
+    from ltx_core_mlx.model.transformer.attention import Attention
+
+    from ltx25_mlx.sol_attention import (
+        configure_ltx25_sol_attention,
+        ltx25_sol_attention_report,
+    )
+    from wee_todd_mlx.sol_attention import SolAttentionConfig
+
+    class Block:
+        def __init__(self):
+            self.attn1 = Attention(128, num_heads=1, head_dim=128)
+
+    class Model:
+        def __init__(self):
+            self.transformer_blocks = [Block()]
+
+    model = Model()
+    report = configure_ltx25_sol_attention(
+        model,
+        SolAttentionConfig(enabled=True, min_tokens=64, start_percent=0.0, dense_blocks=0),
+    )
+    output = model.transformer_blocks[0].attn1(mx.random.normal((1, 64, 128)))
+    mx.eval(output)
+    report = ltx25_sol_attention_report(model, report)
+
+    assert report["sparse_kernel_calls"] == 1
+    assert report["bf16_projection_cast_calls"] == 1
+    assert report["observed_projected_dtype"] == "mlx.core.float32"
+    assert report["observed_kernel_dtype"] == "mlx.core.bfloat16"
+    assert report["exact_suffix_rows"] == 0
+    assert report["approximation_candidate_rows"] == 64
+    assert report["compiled_exact_suffix_rows"] is None
+    assert report["exact_routes"] == 2
+    assert report["approximate_routes"] == 0
+    assert report["avoided_key_row_units"] == 0
+
+
+def test_ltx25_bf16_dense_control_uses_same_cast_without_sparse_kernel():
+    import mlx.core as mx
+    from ltx_core_mlx.model.transformer.attention import Attention
+
+    from ltx25_mlx.sol_attention import (
+        configure_ltx25_sol_attention,
+        ltx25_sol_attention_report,
+    )
+    from wee_todd_mlx.sol_attention import SolAttentionConfig
+
+    class Block:
+        def __init__(self):
+            self.attn1 = Attention(128, num_heads=1, head_dim=128)
+
+    class Model:
+        def __init__(self):
+            self.transformer_blocks = [Block()]
+
+    model = Model()
+    report = configure_ltx25_sol_attention(
+        model,
+        SolAttentionConfig(enabled=True, min_tokens=64, start_percent=0.0, dense_blocks=0),
+        force_dense_bf16=True,
+    )
+    output = model.transformer_blocks[0].attn1(mx.random.normal((1, 64, 128)))
+    mx.eval(output)
+    report = ltx25_sol_attention_report(model, report)
+
+    assert report["resolved_backend"] == "mlx_dense_bf16_control"
+    assert report["executed_calls"] == 1
+    assert report["sparse_kernel_calls"] == 0
+    assert report["dense_bf16_control_calls"] == 1
+    assert report["bf16_projection_cast_calls"] == 1
+    assert report["observed_projected_dtype"] == "mlx.core.float32"
+    assert report["observed_kernel_dtype"] == "mlx.core.bfloat16"
+
+
+def test_ltx25_sol_attention_preserves_compiled_paged_block_and_route_telemetry():
+    from types import SimpleNamespace
+
+    import mlx.core as mx
+    import mlx.nn as nn
+    from ltx_core_mlx.model.transformer.attention import Attention
+
+    from ltx25_mlx.sol_attention import (
+        configure_ltx25_sol_attention,
+        ltx25_sol_attention_report,
+        set_ltx25_sol_context,
+    )
+    from wee_todd_mlx.sol_attention import SolAttentionConfig
+
+    class Block(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.attn1 = Attention(128, num_heads=1, head_dim=128)
+
+        def __call__(self, *, video_hidden, audio_hidden, block_idx=0, **_kwargs):
+            return self.attn1(video_hidden), audio_hidden
+
+    class Model:
+        def __init__(self):
+            block = Block()
+            self.inner = SimpleNamespace(
+                transformer_blocks=[block],
+                config=SimpleNamespace(num_layers=2),
+            )
+            object.__setattr__(self, "_shared_block", block)
+            object.__setattr__(self, "_compiled_block", mx.compile(block, inputs=block))
+
+    model = Model()
+    policy = configure_ltx25_sol_attention(
+        model,
+        SolAttentionConfig(
+            enabled=True,
+            min_tokens=64,
+            start_percent=0.0,
+            dense_blocks=0,
+        ),
+    )
+    initial_compiled = model._compiled_block
+    set_ltx25_sol_context(
+        model,
+        step_index=0,
+        total_steps=2,
+        exact_suffix_rows=64,
+    )
+    assert model._compiled_block is not initial_compiled
+    video, audio = model._compiled_block(
+        video_hidden=mx.random.normal((1, 64, 128)),
+        audio_hidden=mx.zeros((1, 2, 4)),
+        block_idx=1,
+    )
+    mx.eval(video, audio)
+    report = ltx25_sol_attention_report(model, policy)
+
+    assert policy["streaming_compiled"] is True
+    assert policy["patched_video_self_attention"] == 2
+    assert report["executed_calls"] == 1
+    assert report["route_by_block"]["1"]["exact_routes"] == 2
+    assert report["fallback_calls"] == 0
+    assert report["exact_suffix_rows"] == 64
+    assert report["approximation_candidate_rows"] == 0
+    assert report["compiled_exact_suffix_rows"] == 64
+
+    set_ltx25_sol_context(model, step_index=1, total_steps=2)
+    previous_compiled = model._compiled_block
+    set_ltx25_sol_context(
+        model,
+        step_index=0,
+        total_steps=2,
+        exact_suffix_rows=0,
+    )
+    assert model._compiled_block is not previous_compiled
+    assert model._weetodd_sol_state.evidence.total_calls == 0
+    assert model._weetodd_sol_state.route_records == []
+
+
+def test_ltx25_ic_lora_pipeline_mode_allows_explicit_batched_cfg_pp():
+    config, raw = WeeToddLTX25ICLoRAPipelineMode().apply(
+        LTX25GenerationConfig(width=768, height=448),
+        "CFG++ quality — 8 steps / 15 real forwards",
+        "batched",
+    )
+
+    config.validate()
+    assert config.cfg_pp_batched is True
+    assert json.loads(raw)["cfg_pp_execution"] == "batched"
+
+
+@pytest.mark.parametrize(("schedule", "forwards"), [("balanced", 12), ("speed", 10)])
+def test_ltx25_ic_lora_pipeline_mode_resolves_hybrid_cfg_pp(schedule, forwards):
+    config, raw = WeeToddLTX25ICLoRAPipelineMode().apply(
+        LTX25GenerationConfig(width=768, height=448),
+        "CFG++ quality — 8 steps / 15 real forwards",
+        "serial",
+        schedule,
+    )
+
+    config.validate()
+    assert config.stage1_forward_passes == forwards
+    assert json.loads(raw)["cfg_pp_schedule"] == schedule
+
+
+def test_ltx25_ic_lora_pipeline_mode_preserves_eight_forward_fast_option():
+    config, raw = WeeToddLTX25ICLoRAPipelineMode().apply(
+        LTX25GenerationConfig(width=768, height=448),
+        "Fast single stage — 8 ancestral steps / 8 real forwards",
+    )
+
+    config.validate()
+    assert config.ic_lora_single_stage is True
+    assert config.stage2_steps == 0
+    assert config.stage1_sampler == "euler_ancestral"
+    assert config.stage1_forward_passes == 8
+    assert json.loads(raw)["mode"] == "single_stage_fast"
+
+
+def test_ltx25_two_stage_union_control_requires_reference_grid_alignment():
+    config = LTX25GenerationConfig(width=768, height=448)
+
+    with pytest.raises(ValueError, match="divisible by 128x128"):
+        config.validate(reference_downscale_factor=2)
+
+    replace(config, height=512).validate(reference_downscale_factor=2)
+    replace(config, ic_lora_single_stage=True, stage2_steps=0).validate(
+        reference_downscale_factor=2
+    )
+
+
+def test_ltx25_pipeline_scopes_ic_lora_to_requested_stage(monkeypatch):
+    from ltx25_mlx import pipeline as pipeline_module
+
+    loaded = []
+
+    class Transformer:
+        pass
+
+    def fake_load(path, **kwargs):
+        loaded.append((path, kwargs["loras"]))
+        return Transformer()
+
+    monkeypatch.setattr(pipeline_module, "load_ltx25_transformer", fake_load)
+    pipe = pipeline_module.LTX25DistilledPipeline.__new__(pipeline_module.LTX25DistilledPipeline)
+    pipe.transformer_path = "transformer.safetensors"
+    pipe.low_ram_streaming = False
+    pipe.feed_forward_backend = "reference_fp32"
+    pipe.loras = (("style.safetensors", 0.5),)
+    pipe.ic_loras = (("reference.safetensors", 1.0),)
+    pipe.dit = None
+    pipe._loaded_loras = None
+    pipe._loaded_transformer_path = None
+    pipe.feed_forward_report = None
+    pipe.paged_transformer_report = None
+
+    pipe._load_transformer(include_ic_loras=True)
+    pipe._load_transformer(include_ic_loras=False)
+
+    assert loaded[0][1] == (
+        ("style.safetensors", 0.5),
+        ("reference.safetensors", 1.0),
+    )
+    assert loaded[1][1] == (("style.safetensors", 0.5),)
+
+
+def test_ltx25_generate_and_save_preserves_validated_sampler_controls():
+    pipe = LTX25DistilledPipeline.__new__(LTX25DistilledPipeline)
+    captured = {}
+
+    def stop_after_capture(*, frame_rate, **kwargs):
+        captured.update({"frame_rate": frame_rate, **kwargs})
+        raise RuntimeError("captured")
+
+    pipe.generate_two_stage = stop_after_capture
+    with pytest.raises(RuntimeError, match="captured"):
+        pipe.generate_and_save(
+            output_path="unused.mp4",
+            frame_rate=24.0,
+            stage1_sigmas=(1.0, 0.0),
+            stage2_sigmas=(0.0,),
+            stage1_sampler="euler_ancestral_cfg_pp",
+            stage2_sampler="euler",
+            stage1_eta=1.0,
+            stage1_s_noise=1.0,
+        )
+
+    assert "stage1_sigmas" not in captured
+    assert "stage2_sigmas" not in captured
+    assert captured["stage1_sampler"] == "euler_ancestral_cfg_pp"
+    assert captured["stage2_sampler"] == "euler"
+    assert captured["stage1_eta"] == 1.0
+    assert captured["stage1_s_noise"] == 1.0
+
+
+@pytest.mark.parametrize(
+    ("mode_index", "pipeline_mode", "stage1_steps", "stage1_sampler", "stg_scale"),
+    (
+        (0, "distilled", 8, "euler_ancestral", 0.0),
+        (1, "guided", 30, "euler_guided", 1.0),
+        (2, "guided_hq", 15, "res_2s_guided", 0.0),
+    ),
+)
+def test_ltx25_quality_mode_pins_complete_recipe(
+    mode_index, pipeline_mode, stage1_steps, stage1_sampler, stg_scale
+):
+    updated, raw = WeeToddLTX25QualityMode().apply(
+        LTX25GenerationConfig(),
+        LTX25_QUALITY_MODES[mode_index],
+        "bad output",
+    )
+
+    assert updated.pipeline_mode == pipeline_mode
+    assert updated.stage1_steps == stage1_steps
+    assert updated.stage1_sampler == stage1_sampler
+    assert updated.stage2_steps == 3
+    assert updated.stg_scale == stg_scale
+    assert json.loads(raw)["requires_guided_model_loader"] == (mode_index != 0)
+
+
+def test_ltx25_generated_keyframes_use_even_interior_pixel_frames():
+    assert evenly_spaced_keyframe_positions(3, 121) == (30, 60, 90)
+    slots = GeneratedKeyframeSlots((30, 60, 90), spatial_dims=(16, 4, 6), frame_rate=24.0)
+    assert slots.token_count == 72
+
+
+def test_ltx25_dfr_canvas_matches_official_segment_policy():
+    assert choose_dfr_segment_length(48) == 24
+    assert choose_dfr_segment_length(96) == 32
+    assert resolve_dfr_canvas(49) == (49, 24, (24, 48))
+    assert resolve_dfr_canvas(41) == (49, 24, (24, 48))
+
+
+def test_ltx25_dfr_temporal_tiles_are_gapless_after_discarded_lead_in():
+    import mlx.core as mx
+
+    tiles = plan_dfr_temporal_tiles((48, 96), 97, 2)
+    assert [(tile.pixel_start, tile.pixel_end) for tile in tiles] == [(0, 48), (0, 96)]
+    assert [tile.drop_latent_prefix for tile in tiles] == [0, 7]
+    latents = [
+        mx.full((1, 1, tile.latent_end_exclusive - tile.latent_start, 1, 1), index)
+        for index, tile in enumerate(tiles)
+    ]
+    stitched = stitch_dfr_temporal_tiles(latents, tiles)
+    assert stitched.shape == (1, 1, 13, 1, 1)
+    assert stitched[:, :, :7].tolist() == latents[0].tolist()
+
+
+def test_ltx25_dfr_temporal_image_anchors_reuse_encoded_rows_and_scale_frames():
+    import mlx.core as mx
+
+    class First:
+        frame_indices = [0]
+        clean_latent = mx.arange(24).reshape(1, 6, 4)
+        strength = 1.0
+
+    class Middle:
+        frame_idx = 17
+        keyframe_latent = mx.arange(24, 48).reshape(1, 6, 4)
+        strength = 0.7
+
+    anchors = extract_dfr_temporal_image_anchors([First(), Middle()], latent_h=2, latent_w=3)
+    assert [anchor.pixel_frame for anchor in anchors] == [0, 17]
+    assert [anchor.replace for anchor in anchors] == [True, False]
+    assert anchors[0].latent_tokens.tolist() == First.clean_latent.tolist()
+    scaled = scale_dfr_temporal_image_anchors(anchors)
+    assert [anchor.pixel_frame for anchor in scaled] == [0, 34]
+    assert scaled[1].strength == pytest.approx(0.7)
+    assert scaled[1].latent_tokens.tolist() == Middle.keyframe_latent.tolist()
+
+
+def test_ltx25_dfr_temporal_image_anchor_rejects_duplicate_frames():
+    from types import SimpleNamespace
+
+    import mlx.core as mx
+
+    duplicate = DFRTemporalImageAnchor(8, mx.zeros((1, 4, 2)), 1.0, False)
+    with pytest.raises(ValueError, match="distinct"):
+        # Exercise extraction's collision contract through two keyframe-like values.
+        extract_dfr_temporal_image_anchors(
+            [
+                SimpleNamespace(
+                    frame_idx=duplicate.pixel_frame,
+                    keyframe_latent=duplicate.latent_tokens,
+                    strength=1.0,
+                ),
+                SimpleNamespace(
+                    frame_idx=duplicate.pixel_frame,
+                    keyframe_latent=duplicate.latent_tokens,
+                    strength=0.8,
+                ),
+            ],
+            latent_h=2,
+            latent_w=2,
+        )
+
+
+def test_ltx25_dfr_temporal_slots_are_selected_after_appended_anchors():
+    import mlx.core as mx
+
+    generated = mx.full((1, 4, 2), 1)
+    explicit_anchor = mx.full((1, 2, 2), 2)
+    generated_slot = mx.full((1, 2, 2), 3)
+    result = mx.concatenate([generated, explicit_anchor, generated_slot], axis=1)
+    selected = select_dfr_generated_slot_tokens(result, 2)
+    assert selected.tolist() == generated_slot.tolist()
+
+
+def test_ltx25_dfr_temporal_modifier_preserves_audio_policy(tmp_path):
+    adapter = tmp_path / "detail.safetensors"
+    save_file(
+        {
+            "transformer_blocks.0.attn1.to_q.lora_A.weight": np.zeros((2, 4), dtype=np.float32),
+            "transformer_blocks.0.attn1.to_q.lora_B.weight": np.zeros((4, 2), dtype=np.float32),
+        },
+        adapter,
+        metadata={
+            "model_version": "2.5.0",
+            "reference_downscale_factor": "2",
+            "reference_spatial_scale_factor": "2",
+        },
+    )
+    temporal = tmp_path / "temporal.safetensors"
+    save_file(
+        {"conv_in.weight": np.zeros((1,), dtype=np.float32)},
+        temporal,
+        metadata={
+            "config": json.dumps(
+                {
+                    "_class_name": "LatentUpsampler",
+                    "in_channels": 128,
+                    "dims": 3,
+                    "spatial_upsample": False,
+                    "temporal_upsample": True,
+                    "rational_resampler": True,
+                }
+            )
+        },
+    )
+    config, _ = WeeToddLTX25DFRDetailing().apply(
+        LTX25GenerationConfig(duration_seconds=2.0), str(adapter), 1.0
+    )
+    updated, raw = WeeToddLTX25DFRTemporalRefinement().apply(config, str(temporal), 1)
+    assert updated.dfr_temporal_rounds == 1
+    assert updated.dfr_temporal_upsampler_path == str(temporal)
+    assert json.loads(raw)["audio_policy"] == "preserve stage-one audio"
+
+
+def test_ltx25_video_only_transformer_skips_audio_contract():
+    import mlx.core as mx
+    from ltx_core_mlx.model.transformer.model import LTXModel, LTXModelConfig
+
+    transformer = LTXModel(
+        LTXModelConfig(
+            num_layers=1,
+            video_dim=8,
+            audio_dim=4,
+            video_num_heads=2,
+            audio_num_heads=1,
+            video_head_dim=4,
+            audio_head_dim=4,
+            av_cross_num_heads=1,
+            av_cross_head_dim=4,
+            video_patch_channels=4,
+            audio_patch_channels=4,
+            ff_mult=2.0,
+            timestep_embedding_dim=8,
+            positional_embedding_max_pos=(20, 32, 32),
+            audio_positional_embedding_max_pos=(20,),
+        )
+    )
+    model = LTX25VideoOnlyX0Model(transformer)
+    latent = mx.zeros((1, 3, 4), dtype=mx.bfloat16)
+    output, audio = model(
+        video_latent=latent,
+        audio_latent=None,
+        sigma=mx.array([0.5], dtype=mx.bfloat16),
+        video_text_embeds=None,
+        audio_text_embeds=None,
+        video_positions=None,
+        audio_positions=None,
+        video_attention_mask=None,
+        audio_attention_mask=None,
+    )
+    mx.eval(output)
+    assert output.shape == latent.shape
+    assert bool(mx.all(mx.isfinite(output)).item())
+    assert audio is None
+
+
+def test_ltx25_generated_keyframes_accept_spatially_upscaled_stage1_seeds():
+    import mlx.core as mx
+    from ltx_core_mlx.conditioning.types.latent_cond import LatentState
+    from ltx_core_mlx.utils.positions import compute_video_positions
+
+    initial = mx.arange(4 * 128, dtype=mx.float32).reshape(1, 128, 1, 2, 2)
+    state = LatentState(
+        latent=mx.zeros((1, 4, 128), dtype=mx.float32),
+        clean_latent=mx.zeros((1, 4, 128), dtype=mx.float32),
+        denoise_mask=mx.ones((1, 4, 1), dtype=mx.float32),
+        positions=compute_video_positions(1, 2, 2, frame_rate=24.0),
+    )
+    output = GeneratedKeyframeSlots(
+        (24,),
+        spatial_dims=(1, 2, 2),
+        frame_rate=24.0,
+        initial_keyframes=initial,
+    ).apply(state, (1, 2, 2))
+    mx.eval(output.latent)
+    assert output.latent.shape == (1, 8, 128)
+    expected = initial.transpose(0, 2, 3, 4, 1).reshape(1, 4, 128)
+    assert mx.array_equal(output.latent[:, 4:], expected)
+
+
+def test_ltx25_generated_keyframe_marker_resolves_streaming_wrapper():
+    import mlx.core as mx
+    import mlx.nn as nn
+
+    class Inner(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.patchify_proj = nn.Linear(2, 2, bias=False)
+            self.keyframes_abs_pos_embedding = mx.array([[3.0, 5.0]])
+
+    class Streaming(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.inner = Inner()
+
+        def __getattr__(self, name):
+            try:
+                return super().__getattr__(name)
+            except AttributeError:
+                return getattr(super().__getattr__("inner"), name)
+
+    model = Streaming()
+    model.inner.patchify_proj.weight = mx.eye(2)
+    set_generated_keyframe_marker(model, 1)
+    output = model.inner.patchify_proj(mx.zeros((1, 2, 2)))
+    assert mx.array_equal(output[:, 0], mx.zeros((1, 2)))
+    assert mx.array_equal(output[:, 1], mx.array([[3.0, 5.0]]))
+    set_generated_keyframe_marker(model, 0)
+    assert mx.array_equal(model.inner.patchify_proj(mx.zeros((1, 2, 2))), mx.zeros((1, 2, 2)))
 
 
 def _component(path, **metadata):
@@ -118,6 +2254,138 @@ def test_ltx25_split_preflight_reads_metadata_without_weights(tmp_path):
     assert len(report["components"]) == 5
 
 
+def test_ltx25_preflight_accepts_one_baked_ic_lora(tmp_path):
+    spec = _bundle(tmp_path)
+    transformer = tmp_path / "transformer.safetensors"
+    _component(
+        transformer,
+        model_version="2.5.0",
+        gemma_source_checkpoint={"gemma_version": "gemma4-12b-ltx-v1"},
+        config={
+            "transformer": {
+                "caption_proj_before_connector": True,
+                "cross_attention_adaln": True,
+                "ff_bias": False,
+                "audio_ff_bias": True,
+                "use_prompt_adaln_single": True,
+                "use_keyframes_abs_pos_embedding": True,
+            }
+        },
+        weetodd_baked_loras=[
+            {
+                "file": "ingredients.safetensors",
+                "bytes": 1234,
+                "strength": 1.2,
+                "adapter_role": "ic_lora",
+                "adapter_family": "ingredients_reference_sheet",
+                "ic_lora_task": "reference_conditioning",
+                "reference_downscale_factor": 1,
+                "reference_temporal_scale_factor": 1,
+            }
+        ],
+    )
+
+    report = spec.validate(require_spatial_upscaler=False)
+
+    baked = next(item for item in report["components"] if item["component"] == "baked_ic_lora")
+    assert baked["adapter_family"] == "ingredients_reference_sheet"
+    assert report["ic_lora_reference_downscale_factor"] == 1
+    assert report["ic_lora_reference_temporal_scale_factor"] == 1
+    guided = replace(
+        spec,
+        distilled_lora_path=str(_rank450_lora(tmp_path / "distilled.safetensors")),
+    )
+    with pytest.raises(ValueError, match="distilled generation mode"):
+        guided.validate("guided", require_spatial_upscaler=False)
+
+
+def test_ltx25_preflight_rejects_live_and_baked_ic_lora(tmp_path):
+    spec = _bundle(tmp_path)
+    transformer = tmp_path / "transformer.safetensors"
+    adapter = tmp_path / "ingredients.safetensors"
+    save_file(
+        {
+            "transformer_blocks.0.attn1.to_q.lora_A.weight": np.zeros((2, 4), dtype=np.float32),
+            "transformer_blocks.0.attn1.to_q.lora_B.weight": np.zeros((4, 2), dtype=np.float32),
+        },
+        adapter,
+        metadata={
+            "model_version": "2.5.0",
+            "adapter_family": "ingredients_reference_sheet",
+            "reference_downscale_factor": "1",
+            "reference_temporal_scale_factor": "1",
+        },
+    )
+    _component(
+        transformer,
+        model_version="2.5.0",
+        gemma_source_checkpoint={"gemma_version": "gemma4-12b-ltx-v1"},
+        config={
+            "transformer": {
+                "caption_proj_before_connector": True,
+                "cross_attention_adaln": True,
+                "ff_bias": False,
+                "audio_ff_bias": True,
+                "use_prompt_adaln_single": True,
+                "use_keyframes_abs_pos_embedding": True,
+            }
+        },
+        weetodd_baked_loras=[
+            {
+                "file": adapter.name,
+                "adapter_role": "ic_lora",
+                "adapter_family": "ingredients_reference_sheet",
+                "ic_lora_task": "reference_conditioning",
+                "reference_downscale_factor": 1,
+                "reference_temporal_scale_factor": 1,
+            }
+        ],
+    )
+    spec = replace(spec, ic_loras=((str(adapter), 1.2),))
+
+    with pytest.raises(ValueError, match="avoid applying the adapter twice"):
+        spec.validate(require_spatial_upscaler=False)
+
+
+def test_ltx25_single_stage_preflight_does_not_require_spatial_upscaler(tmp_path):
+    spec = replace(_bundle(tmp_path), spatial_upscaler_path="")
+
+    report = spec.validate(require_spatial_upscaler=False)
+
+    assert not any(item["component"] == "spatial_upscaler_path" for item in report["components"])
+    with pytest.raises(FileNotFoundError, match="spatial_upscaler_path"):
+        spec.validate()
+
+
+def test_ltx25_pipeline_constructor_allows_single_stage_without_upscaler():
+    parameter = inspect.signature(LTX25DistilledPipeline).parameters["spatial_upscaler_path"]
+
+    assert parameter.default == ""
+
+
+def test_ltx25_guided_loader_selects_dev_transformer_and_rank450_stage2_lora(monkeypatch, tmp_path):
+    spec = _bundle(tmp_path)
+    development = tmp_path / "development.safetensors"
+    development.write_bytes((tmp_path / "transformer.safetensors").read_bytes())
+    distilled_lora = _rank450_lora(tmp_path / "distilled-lora.safetensors")
+    monkeypatch.setattr(
+        "wee_todd_nodes.ltx25_nodes._resolve_component",
+        lambda value, _categories: value,
+    )
+
+    updated, raw = WeeToddLTX25GuidedModelLoader().attach(
+        spec, str(development), str(distilled_lora)
+    )
+
+    assert updated.transformer_path == str(development)
+    assert updated.distilled_lora_path == str(distilled_lora)
+    assert json.loads(raw)["lora_rank"] == 450
+    report = updated.validate("guided")
+    assert report["model_version"] == "2.5.0"
+    with pytest.raises(ValueError, match="Guided Model Loader"):
+        updated.validate("distilled")
+
+
 def test_ltx25_preflight_rejects_23_transformer(tmp_path):
     spec = _bundle(tmp_path, version="2.3.0")
     with pytest.raises(ValueError, match="not identified as LTX 2.5"):
@@ -201,12 +2469,14 @@ def test_ltx25_config_pins_official_distilled_schedule_and_grid():
     assert config.delivered_duration_seconds == 5.0
     assert config.stage1_steps + config.stage2_steps == 11
     assert config.stage1_sampler == "euler_ancestral"
-    assert config.stage2_sampler == "euler_ancestral"
+    assert config.stage2_sampler == "euler"
+    assert config.stage1_forward_passes == 8
+    assert config.real_forward_passes == 11
     from ltx25_mlx.runtime import LTX25_STAGE2_SIGMAS
 
-    assert LTX25_STAGE2_SIGMAS == (0.85, 0.725, 0.421875, 0.0)
+    assert LTX25_STAGE2_SIGMAS == (0.909375, 0.725, 0.421875, 0.0)
     assert config.seed + config.ancestral_seed_offset == 10000
-    with pytest.raises(ValueError, match="eight stage-one and three stage-two"):
+    with pytest.raises(ValueError, match="eight stage-one steps"):
         LTX25GenerationConfig(stage2_steps=4).validate()
     with pytest.raises(ValueError, match="divisible"):
         LTX25GenerationConfig(width=736).validate()
@@ -217,6 +2487,662 @@ def test_ltx25_config_pins_official_distilled_schedule_and_grid():
             low_ram_streaming=True,
             feed_forward_backend="bf16_mpp_experimental",
         ).validate()
+    parity = LTX25GenerationConfig(
+        width=768,
+        height=448,
+        ic_lora_single_stage=True,
+        stage2_steps=0,
+        stage1_sampler="euler_ancestral_cfg_pp",
+        negative_prompt="",
+    )
+    parity.validate()
+    assert parity.real_forward_passes == 15
+    with pytest.raises(ValueError, match="single-stage IC-LoRA"):
+        replace(parity, ic_lora_single_stage=False, stage2_steps=3).validate()
+
+
+def test_ltx25_video_decoder_reports_direct_temporal_streaming(monkeypatch):
+    import mlx.core as mx
+
+    class FakeDecoder:
+        def decode_and_stream(self, *args, **kwargs):
+            self.call = (args, kwargs)
+
+    monkeypatch.setenv("LTX2_VAE_DECODE_BUDGET_GB", "0.00001")
+    wrapper = LTX25VideoDecoder("unused.safetensors")
+    wrapper._decoder = FakeDecoder()
+    latent = mx.zeros((1, 24, 16, 16, 24), dtype=mx.bfloat16)
+    assert wrapper.decode_and_stream(latent, "unused.mp4", frame_rate=24.0) == "unused.mp4"
+    assert wrapper.last_decode_report["publication"] == "direct_ffmpeg_stream"
+    assert wrapper.last_decode_report["temporal_tiling"] is True
+    assert wrapper.last_decode_report["tile_frames"] >= 16
+    assert wrapper.last_decode_report["overlap_frames"] < wrapper.last_decode_report["tile_frames"]
+
+
+def test_ltx25_video_upscaler_exposes_generic_movie_contract():
+    inputs = WeeToddLTX25VideoUpscale.INPUT_TYPES()["required"]
+    assert inputs["mode"][0] == list(LTX25_UPSCALE_MODES)
+    assert inputs["max_av_drift_seconds"][1]["default"] == 0.05
+    assert inputs["refinement_strength"][1]["default"] == 0.35
+    assert inputs["input_size_policy"][0] == list(LTX25_INPUT_SIZE_POLICIES)
+    assert inputs["input_size_policy"][1]["default"] == LTX25_INPUT_SIZE_POLICIES[0]
+    assert inputs["source_frame_anchors"][0] == list(LTX25_SOURCE_FRAME_ANCHORS)
+    assert inputs["source_frame_anchors"][1]["default"] == "first frame"
+    assert inputs["reference_strength"][1]["default"] == 0.7
+    assert inputs["low_ram_streaming"][1]["default"] is True
+    assert inputs["sol_attention_profile"][0] == ["disabled", "paged_speed"]
+    assert inputs["sol_attention_profile"][1]["default"] == "disabled"
+    assert LTX25_PIXEL_SPATIAL_MODE in inputs["mode"][0]
+    assert inputs["pixel_spatial_lora_strength"][1]["default"] == 1.0
+    assert "pixel-spatial-upscaler-x2" in inputs["pixel_spatial_lora"][1]["default"]
+    assert inputs["ffmpeg_path"][1]["default"] == ""
+    assert inputs["reuse_prompt_conditioning"][1]["default"] is True
+    assert inputs["max_output_frame_megapixels"][1]["default"] == 0.0
+    assert inputs["temporal_chunking"][0] == ["disabled", "auto scene-aware"]
+    assert inputs["temporal_chunking"][1]["default"] == "disabled"
+    assert inputs["chunk_frame_megapixels"][1]["default"] == 260.0
+    assert inputs["keep_chunks"][1]["default"] is False
+    assert set(WeeToddLTX25VideoUpscale.INPUT_TYPES()["optional"]) == {
+        "first_reference",
+        "last_reference",
+        "audio",
+    }
+    assert WeeToddLTX25VideoUpscale.OUTPUT_NODE is True
+
+
+def test_ltx25_upscaler_preserves_pixel_spatial_and_endpoint_conditionings():
+    from ltx25_mlx.upscale import _merge_refinement_conditionings
+
+    pixel_spatial = object()
+    first_frame = object()
+    last_frame = object()
+
+    merged = _merge_refinement_conditionings(
+        [pixel_spatial],
+        [first_frame, last_frame],
+    )
+
+    assert merged == [pixel_spatial, first_frame, last_frame]
+
+
+def test_ltx25_upscaler_marks_all_appended_reference_rows_exact_for_sol():
+    from types import SimpleNamespace
+
+    from ltx25_mlx.upscale import _upscale_sol_exact_suffix_rows
+
+    state = SimpleNamespace(latent=SimpleNamespace(shape=(1, 80640, 4096)))
+
+    assert _upscale_sol_exact_suffix_rows(state, 64512) == 16128
+
+
+def test_ltx25_upscaler_rejects_unknown_sol_profile(tmp_path):
+    from ltx25_mlx.upscale import upscale_video_to_file
+
+    with pytest.raises(ValueError, match="disabled or paged_speed"):
+        upscale_video_to_file(
+            None,
+            None,
+            None,
+            tmp_path / "unused.mp4",
+            mode=LTX25_PIXEL_SPATIAL_MODE,
+            prompt="test",
+            seed=1,
+            fps=24.0,
+            sol_attention_profile="speed",
+        )
+
+
+def test_ltx25_upscaler_requires_streaming_for_paged_sol(tmp_path):
+    from ltx25_mlx.upscale import upscale_video_to_file
+
+    with pytest.raises(ValueError, match="requires low_ram_streaming=true"):
+        upscale_video_to_file(
+            None,
+            None,
+            None,
+            tmp_path / "unused.mp4",
+            mode=LTX25_PIXEL_SPATIAL_MODE,
+            prompt="test",
+            seed=1,
+            fps=24.0,
+            sol_attention_profile="paged_speed",
+            low_ram_streaming=False,
+        )
+
+
+def test_ltx25_pixel_spatial_lora_header_and_key_mapping(tmp_path):
+    path = tmp_path / "pixel-spatial.safetensors"
+    save_file(
+        {
+            "diffusion_model.transformer_blocks.0.attn1.to_out.0.lora_A.weight": np.zeros(
+                (2, 4), dtype=np.float16
+            ),
+            "diffusion_model.transformer_blocks.0.attn1.to_out.0.lora_B.weight": np.zeros(
+                (4, 2), dtype=np.float16
+            ),
+        },
+        path,
+        metadata={"model_version": "2.5", "reference_downscale_factor": "2"},
+    )
+    report = inspect_ltx25_ic_lora(path)
+    assert report["model_version"] == "2.5"
+    assert report["reference_downscale_factor"] == 2
+    assert report["adapter_pairs"] == 1
+    assert (
+        remap_comfy_transformer_key(
+            "diffusion_model.transformer_blocks.0.attn1.to_out.0.lora_A.weight"
+        )
+        == "transformer_blocks.0.attn1.to_out.lora_A.weight"
+    )
+
+
+def test_ltx25_older_lora_rejects_incompatible_target_shape(tmp_path):
+    path = tmp_path / "wrong.safetensors"
+    save_file(
+        {
+            "diffusion_model.transformer_blocks.0.attn1.to_q.lora_A.weight": np.zeros(
+                (2, 4), dtype=np.float16
+            ),
+            "diffusion_model.transformer_blocks.0.attn1.to_q.lora_B.weight": np.zeros(
+                (4, 2), dtype=np.float16
+            ),
+        },
+        path,
+        metadata={"model_version": "2.3", "reference_downscale_factor": "2"},
+    )
+    with pytest.raises(ValueError, match="does not match the supported LTX 2.5 22B"):
+        inspect_ltx25_ic_lora(path)
+
+
+def test_ltx25_official_23_ic_lora_layout_is_accepted_for_25(tmp_path):
+    path = tmp_path / "ltx-2.3-22b-ic-lora-union-control-ref0.5.safetensors"
+    save_file(
+        {
+            "diffusion_model.transformer_blocks.0.attn1.to_q.lora_A.weight": np.zeros(
+                (2, 4096), dtype=np.float16
+            ),
+            "diffusion_model.transformer_blocks.0.attn1.to_q.lora_B.weight": np.zeros(
+                (4096, 2), dtype=np.float16
+            ),
+        },
+        path,
+        metadata={"model_version": "2.3.0", "reference_downscale_factor": "2"},
+    )
+
+    report = inspect_ltx25_ic_lora(path)
+
+    assert report["compatibility"] == "ltx_2_3_22b_bridge"
+    assert report["adapter_family"] == "unclassified_reference_conditioning"
+    assert report["classification_basis"] == "insufficient structural task evidence"
+
+
+def test_ltx25_control_guide_records_preprocessed_control_type():
+    frames = np.zeros((9, 64, 64, 3), dtype=np.float32)
+
+    stack, raw = WeeToddLTX25ICLoRAControlGuide().append(frames, "depth_map", 0, 8, 1.0, 1.0)
+
+    assert stack.items[0].control_type == "depth_map"
+    report = json.loads(raw)
+    assert report["control_groups"] == ["depth_map"]
+    assert report["preprocessing"] == "preprocessed_image_batch"
+
+
+def test_ltx25_crossview_warp_identity_pose_preserves_source():
+    clear_crossview_geometry_cache()
+    frames = np.linspace(0.0, 1.0, 9 * 8 * 8 * 3, dtype=np.float32).reshape(9, 8, 8, 3)
+    depth = np.linspace(0.1, 0.9, 9 * 8 * 8, dtype=np.float32).reshape(9, 8, 8, 1)
+
+    warp, report = build_crossview_warp(
+        frames,
+        depth,
+        azimuth=0.0,
+        elevation=0.0,
+        distance=1.0,
+        splat_radius=0,
+    )
+
+    valid = ~np.all(warp == np.array([1.0, 0.0, 1.0], dtype=np.float32), axis=-1)
+    assert valid.mean() > 0.95
+    assert np.allclose(warp[valid], frames[valid], atol=1e-6)
+    assert report["conditioning_contract"] == "crossview_warp_then_source"
+    assert report["frames"] == 9
+    assert report["projection_grid_cache_hit"] is False
+
+    _, warm_report = build_crossview_warp(
+        frames,
+        depth,
+        azimuth=0.0,
+        elevation=0.0,
+        distance=1.0,
+        splat_radius=0,
+    )
+    assert warm_report["projection_grid_cache_hit"] is True
+    assert clear_crossview_geometry_cache() == 1
+
+
+def test_ltx25_crossview_camera_contract_is_stable_and_drives_warp(monkeypatch):
+    node = WeeToddLTX25CrossViewCameraOrbit()
+    arguments = (-25.0, 10.0, 1.0, 55.0, 0.0, 6.0, False, True, "", "smooth")
+    camera, raw = node.configure(*arguments)
+    repeated, _ = node.configure(*arguments)
+    assert camera.path_id == repeated.path_id
+    assert json.loads(raw)["reliable_adapter_range"] is True
+
+    captured = {}
+
+    def fake_warp(source, depth, **kwargs):
+        captured.update(kwargs)
+        return np.asarray(source, dtype=np.float32), {"frames": int(source.shape[0])}
+
+    monkeypatch.setattr("ltx25_mlx.crossview.build_crossview_warp", fake_warp)
+    output, report_raw = WeeToddLTX25CrossViewWarp().warp(
+        np.zeros((1, 8, 8, 3), dtype=np.float32),
+        np.zeros((1, 8, 8, 1), dtype=np.float32),
+        90.0,
+        45.0,
+        2.0,
+        80.0,
+        0.5,
+        20.0,
+        True,
+        False,
+        "",
+        "linear",
+        camera=camera,
+    )
+    assert output.shape == (1, 8, 8, 3)
+    assert captured["azimuth"] == -25.0
+    assert captured["horizontal_fov"] == 55.0
+    report = json.loads(report_raw)
+    assert report["camera_path_id"] == camera.path_id
+    assert report["camera_source"] == "orbit node"
+
+
+def test_ltx25_crossview_camera_rejects_malformed_timeline():
+    with pytest.raises(ValueError, match="positive integer frame"):
+        WeeToddLTX25CrossViewCameraOrbit().configure(
+            -30.0,
+            15.0,
+            1.0,
+            50.0,
+            0.0,
+            6.0,
+            False,
+            True,
+            '[{"f":1.5,"az":0}]',
+            "smooth",
+        )
+
+
+def test_ltx25_crossview_path_uses_short_azimuth_arc_and_holds_endpoints():
+    default = CrossViewPose(1, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.05)
+    keyframes = parse_crossview_keyframes(
+        '[{"f":2,"az":170,"el":0,"dist":1},{"f":8,"az":-170,"el":20,"dist":1}]',
+        frame_count=9,
+        default_pose=default,
+    )
+
+    assert sample_crossview_path(keyframes, frame=1, interpolation="linear").azimuth == 170
+    middle = sample_crossview_path(keyframes, frame=5, interpolation="linear")
+    assert abs(abs(middle.azimuth) - 180.0) < 1e-6
+    assert sample_crossview_path(keyframes, frame=9, interpolation="linear").azimuth == -170
+
+
+def test_ltx25_crossview_dual_reference_guide_preserves_trained_order():
+    warp = np.zeros((9, 64, 96, 3), dtype=np.float32)
+    source = np.ones((9, 64, 96, 3), dtype=np.float32)
+
+    stack, raw = WeeToddLTX25CrossViewDualReferenceGuide().build(warp, source, 0, 8, 1.0, 1.0)
+    stack.validate_for_generation(9)
+
+    assert [item.reference_role for item in stack.items] == ["warp", "source"]
+    assert all(item.control_type == "crossview_warp" for item in stack.items)
+    assert json.loads(raw)["reference_order"] == ["warp", "source"]
+
+
+def test_ltx25_crossview_requires_source_audio_publication():
+    warp = np.zeros((9, 64, 96, 3), dtype=np.float32)
+    source = np.ones((9, 64, 96, 3), dtype=np.float32)
+    stack, _ = WeeToddLTX25CrossViewDualReferenceGuide().build(
+        warp, source, 0, 8, 1.0, 1.0
+    )
+
+    with pytest.raises(ValueError, match="requires the source soundtrack"):
+        stack.validate_publication_audio(None)
+
+    stack.validate_publication_audio(
+        {"waveform": np.zeros((1, 2, 48000), dtype=np.float32), "sample_rate": 48000}
+    )
+
+
+def test_ltx25_crossview_dual_reference_rejects_mismatched_media():
+    with pytest.raises(ValueError, match="identical frame counts and dimensions"):
+        WeeToddLTX25CrossViewDualReferenceGuide().build(
+            np.zeros((9, 64, 96, 3), dtype=np.float32),
+            np.zeros((9, 64, 64, 3), dtype=np.float32),
+            0,
+            8,
+            1.0,
+            1.0,
+        )
+
+
+@pytest.mark.parametrize(
+    ("downscale", "rank", "spatial_scale", "family"),
+    (
+        (1, 32, None, "crossview_warp"),
+        (1, 128, None, "ingredients_reference_sheet"),
+        (2, 32, None, "motion_track"),
+        (2, 64, None, "union_control"),
+        (2, 32, 2, "pixel_spatial_upscaler"),
+    ),
+)
+def test_ltx25_task_adapters_use_complete_structural_fingerprints(
+    downscale, rank, spatial_scale, family
+):
+    actual, basis = _structural_ltx25_adapter_family(
+        is_msr=False,
+        downscale=downscale,
+        temporal_scale=1,
+        spatial_scale=spatial_scale,
+        adapter_ranks={rank},
+        adapter_targets=set(_LTX25_CANONICAL_IC_TARGETS),
+    )
+    assert actual == family
+    assert "filename" not in basis
+
+
+def test_ltx25_explicit_task_descriptor_survives_partial_custom_layout(tmp_path):
+    adapter = tmp_path / "arbitrary-name.safetensors"
+    save_file(
+        {
+            "transformer_blocks.0.attn1.to_q.lora_A.weight": np.zeros(
+                (2, 4), dtype=np.float32
+            ),
+            "transformer_blocks.0.attn1.to_q.lora_B.weight": np.zeros(
+                (4, 2), dtype=np.float32
+            ),
+        },
+        adapter,
+        metadata={
+            "model_version": "2.5",
+            "adapter_family": "ingredients",
+            "reference_downscale_factor": "1",
+        },
+    )
+
+    report = inspect_ltx25_lora(adapter)
+
+    assert report["adapter_family"] == "ingredients_reference_sheet"
+    assert report["classification_basis"] == "explicit adapter_family checkpoint metadata"
+
+
+def test_ltx25_explicit_task_descriptor_cannot_conflict_with_structure(tmp_path):
+    adapter = tmp_path / "conflicting-family.safetensors"
+    save_file(
+        {
+            "transformer_blocks.0.attn1.to_q.lora_A.weight": np.zeros(
+                (2, 4), dtype=np.float32
+            ),
+            "transformer_blocks.0.attn1.to_q.lora_B.weight": np.zeros(
+                (4, 2), dtype=np.float32
+            ),
+        },
+        adapter,
+        metadata={
+            "model_version": "2.5",
+            "adapter_family": "union_control",
+            "reference_downscale_factor": "2",
+            "reference_spatial_scale_factor": "2",
+        },
+    )
+
+    with pytest.raises(ValueError, match="conflicts with its structural task signature"):
+        inspect_ltx25_lora(adapter)
+
+
+def test_ltx25_partial_task_adapter_is_not_classified_from_rank_and_scale():
+    assert _structural_ltx25_adapter_family(
+        is_msr=False,
+        downscale=1,
+        temporal_scale=1,
+        spatial_scale=None,
+        adapter_ranks={32},
+        adapter_targets={"transformer_blocks.0.attn1.to_q"},
+    )[0] == "unclassified_reference_conditioning"
+
+
+def test_ltx25_video_upscaler_validates_and_crops_generic_comfy_media():
+    frames = _host_video(np.zeros((9, 65, 99, 3), dtype=np.float32))
+    from ltx25_mlx.upscale import _prepare_video_size
+
+    frames, report = _prepare_video_size(frames, LTX25_INPUT_SIZE_POLICIES[1])
+    waveform, sample_rate = _host_audio(
+        {
+            "waveform": np.zeros((1, 1, 32000), dtype=np.float32),
+            "sample_rate": 32000,
+        }
+    )
+    assert frames.shape == (9, 64, 96, 3)
+    assert report["crop"] == {"left": 1, "top": 0, "right": 2, "bottom": 1}
+    assert waveform.shape == (2, 32000)
+    assert sample_rate == 32000
+    with pytest.raises(ValueError, match="divisible by 32"):
+        _prepare_video_size(
+            _host_video(np.zeros((9, 65, 96, 3), dtype=np.float32)),
+            LTX25_INPUT_SIZE_POLICIES[2],
+        )
+    with pytest.raises(ValueError, match="waveform and sample_rate"):
+        _host_audio({})
+
+
+def test_ltx25_video_upscaler_smart_grid_fit_preserves_aspect():
+    from ltx25_mlx.upscale import (
+        _nearest_aspect_grid_size,
+        _output_frame_megapixels,
+        _validate_output_workload,
+    )
+
+    assert _nearest_aspect_grid_size(432, 768, grid=32) == (448, 800)
+    assert _nearest_aspect_grid_size(1920, 1088, grid=32) == (1920, 1088)
+    assert _output_frame_megapixels(121, 1344, 768) == pytest.approx(499.580928)
+    with pytest.raises(ValueError, match="above the configured 400.0 limit"):
+        _validate_output_workload(121, 1344, 768, 400.0)
+    assert _validate_output_workload(121, 1344, 768, 0.0) == pytest.approx(499.580928)
+
+
+def test_ltx25_upscale_prompt_cache_is_bounded_and_clearable():
+    from ltx25_mlx.upscale import (
+        _PROMPT_CONDITIONING_CACHE,
+        _cached_prompt_conditioning,
+        _remember_prompt_conditioning,
+        clear_upscale_prompt_cache,
+    )
+
+    clear_upscale_prompt_cache()
+    _remember_prompt_conditioning(("a",), ("av", "aa", 128))
+    _remember_prompt_conditioning(("b",), ("bv", "ba", 256))
+    assert _cached_prompt_conditioning(("a",)) == ("av", "aa", 128)
+    _remember_prompt_conditioning(("c",), ("cv", "ca", 512))
+    assert ("b",) not in _PROMPT_CONDITIONING_CACHE
+    assert clear_upscale_prompt_cache() == 2
+    assert not _PROMPT_CONDITIONING_CACHE
+
+
+def test_ltx25_redetail_chunk_plan_covers_frames_and_prefers_scene_cut():
+    from ltx25_mlx.redetail import plan_redetail_chunks
+
+    chunks = plan_redetail_chunks(
+        121,
+        fps=24.0,
+        output_width=1536,
+        output_height=1024,
+        frame_megapixel_budget=70.0,
+        cut_frames=(39, 81),
+        min_chunk_frames=17,
+    )
+
+    assert [(chunk.start_frame, chunk.end_frame) for chunk in chunks] == [
+        (0, 39),
+        (39, 81),
+        (81, 121),
+    ]
+    assert chunks[0].boundary_reason == "scene cut"
+    assert chunks[0].vae_frames == 41
+    assert sum(chunk.input_frames for chunk in chunks) == 121
+
+
+def test_ltx25_redetail_scene_cut_detection_separates_hard_cut_from_motion():
+    from ltx25_mlx.redetail import detect_scene_cut_scores, scene_cut_candidates
+
+    video = np.zeros((7, 32, 32, 3), dtype=np.float32)
+    video[1:4] = np.linspace(0.0, 0.03, 3)[:, None, None, None]
+    video[4:] = 0.9
+    scores = detect_scene_cut_scores(video)
+
+    assert scene_cut_candidates(scores) == (4,)
+
+
+def test_ltx25_redetail_audio_bounds_tile_without_sample_gaps():
+    from ltx25_mlx.redetail import audio_sample_bounds
+
+    spans = [(0, 39), (39, 81), (81, 121)]
+    bounds = [
+        audio_sample_bounds(
+            start,
+            end,
+            fps=24.0,
+            sample_rate=48000,
+            total_samples=242000,
+        )
+        for start, end in spans
+    ]
+
+    assert bounds == [(0, 78000), (78000, 162000), (162000, 242000)]
+
+
+def test_ltx25_redetail_chunk_budget_rejects_subminimum_workload():
+    from ltx25_mlx.redetail import plan_redetail_chunks
+
+    with pytest.raises(ValueError, match="fewer than nine"):
+        plan_redetail_chunks(
+            121,
+            fps=24.0,
+            output_width=2688,
+            output_height=1536,
+            frame_megapixel_budget=30.0,
+        )
+
+
+def test_ltx25_redetail_chunk_publication_and_resume_without_weights(tmp_path, monkeypatch):
+    import subprocess
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    from ltx25_mlx.upscale import LTX25UpscaleResult, upscale_video_to_file
+    from minimax_h3_mlx.media import resolve_ffmpeg
+
+    try:
+        ffmpeg = resolve_ffmpeg()
+    except FileNotFoundError:
+        pytest.skip("ffmpeg is unavailable")
+    text = tmp_path / "gemma.safetensors"
+    transformer = tmp_path / "transformer.safetensors"
+    text.write_bytes(b"gemma")
+    transformer.write_bytes(b"transformer")
+    spec = SimpleNamespace(text_encoder_path=text, transformer_path=transformer)
+    calls = []
+
+    def fake_single(_spec, images, _audio, target, **_kwargs):
+        target = Path(target)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        frames = (np.clip(images, 0.0, 1.0) * 255).astype(np.uint8)
+        completed = subprocess.run(
+            [
+                str(ffmpeg.path),
+                "-y",
+                "-loglevel",
+                "error",
+                "-f",
+                "rawvideo",
+                "-pixel_format",
+                "rgb24",
+                "-video_size",
+                "64x64",
+                "-framerate",
+                "24",
+                "-i",
+                "-",
+                "-vf",
+                "scale=128:128",
+                "-an",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                str(target),
+            ],
+            input=frames.tobytes(),
+            capture_output=True,
+        )
+        assert completed.returncode == 0, completed.stderr.decode()
+        metadata = {"mlx_peak_bytes": len(frames)}
+        metadata_path = target.with_suffix(".json")
+        metadata_path.write_text(json.dumps(metadata))
+        calls.append(target)
+        return LTX25UpscaleResult(target, metadata_path, metadata)
+
+    monkeypatch.setattr("ltx25_mlx.upscale._upscale_video_to_file_single", fake_single)
+    images = np.linspace(0.0, 1.0, 98, dtype=np.float32)[:, None, None, None]
+    images = np.broadcast_to(images, (98, 64, 64, 3)).copy()
+    audio = {
+        "waveform": np.zeros((1, 2, 196000), dtype=np.float32),
+        "sample_rate": 48000,
+    }
+    target = tmp_path / "chunked.mp4"
+    kwargs = {
+        "mode": LTX25_PIXEL_SPATIAL_MODE,
+        "prompt": "A stable synthetic test.",
+        "seed": 1,
+        "fps": 24.0,
+        "input_size_policy": LTX25_INPUT_SIZE_POLICIES[2],
+        "max_av_drift_seconds": 0.05,
+        "temporal_chunking": "auto scene-aware",
+        "chunk_frame_megapixels": 0.81,
+        "keep_chunks": True,
+        "ffmpeg_path": str(ffmpeg.path),
+    }
+
+    first = upscale_video_to_file(spec, images, audio, target, **kwargs)
+    assert first.metadata["temporal_chunking"]["reused_chunks"] == 0
+    assert (
+        first.metadata["refinement_contract"] == "generative_repaint_not_identity_safe_restoration"
+    )
+    assert len(calls) == 2
+    assert first.metadata["publication_probe"] is not None
+    assert (
+        len(
+            [
+                stream
+                for stream in first.metadata["publication_probe"]["streams"]
+                if stream["codec_type"] == "audio"
+            ]
+        )
+        == 1
+    )
+
+    second = upscale_video_to_file(spec, images, audio, tmp_path / "chunked_retry.mp4", **kwargs)
+    assert second.metadata["temporal_chunking"]["reused_chunks"] == 2
+    assert len(calls) == 2
+
+
+def test_ltx25_video_upscaler_supplies_matched_silence_for_silent_movies():
+    waveform, sample_rate, supplied = _host_audio_or_silence(None, 1.25)
+
+    assert waveform.shape == (2, 60000)
+    assert sample_rate == 48000
+    assert supplied is False
+    assert np.count_nonzero(waveform) == 0
 
 
 def test_ltx25_generation_config_node_resolves_random_seed(monkeypatch):
@@ -234,8 +3160,78 @@ def test_ltx25_generation_config_node_resolves_random_seed(monkeypatch):
         "reference_fp32",
     )
     assert config.seed == 2468
-    assert json.loads(raw)["real_evaluations"] == 11
+    assert json.loads(raw)["sampler_steps"] == 11
+    assert json.loads(raw)["real_forward_passes"] == 11
     assert config.prompt_context == "official_1024"
+
+
+def test_ltx25_generation_config_repairs_legacy_widget_shift_and_streaming_backend():
+    assert (
+        WeeToddLTX25GenerationConfig.VALIDATE_INPUTS("reference_fp32", "official_1024")
+        is True
+    )
+    swapped, _raw = WeeToddLTX25GenerationConfig().configure(
+        "Custom",
+        768,
+        512,
+        5.0,
+        24.0,
+        42,
+        True,
+        False,
+        "mlx_fused_experimental",
+        "auto",
+    )
+    assert swapped.prompt_context == "auto"
+    assert swapped.feed_forward_backend == "mlx_fused_experimental"
+    config, raw = WeeToddLTX25GenerationConfig().configure(
+        "Custom",
+        768,
+        512,
+        5.0,
+        24.0,
+        42,
+        True,
+        True,
+        "reference_fp32",
+        "bf16_mpp_experimental",
+    )
+    report = json.loads(raw)
+    assert config.prompt_context == "official_1024"
+    assert config.feed_forward_backend == "reference_fp32"
+    assert len(report["configuration_adjustments"]) == 2
+
+
+def test_ltx25_runtime_resolves_paged_transformer_compatibility(tmp_path):
+    paged_transformer = tmp_path / "paged-transformer"
+    paged_transformer.mkdir()
+    spec = LTX25ComponentSpec(
+        transformer_path=str(paged_transformer),
+        text_encoder_path="text.safetensors",
+        video_vae_path="video.safetensors",
+        audio_vae_path="audio.safetensors",
+        spatial_upscaler_path="upscaler.safetensors",
+    )
+    resolved, adjustments = resolve_ltx25_runtime_config(
+        spec,
+        LTX25GenerationConfig(
+            low_ram_streaming=False,
+            feed_forward_backend="bf16_mpp_experimental",
+        ),
+    )
+    assert resolved.low_ram_streaming is True
+    assert resolved.feed_forward_backend == "reference_fp32"
+    assert len(adjustments) == 2
+
+
+def test_ltx25_chained_node_exposes_exact_timeline_controls():
+    inputs = WeeToddLTX25GenerateChained.INPUT_TYPES()["required"]
+
+    assert inputs["window_count"][1]["default"] == 3
+    assert inputs["overlap_frames"][1]["default"] == 25
+    assert inputs["overlap_frames"][1]["step"] == 8
+    assert all(f"prompt_{index}" in inputs for index in range(1, 5))
+    assert WeeToddLTX25GenerateChained.OUTPUT_NODE is True
 
 
 def test_ltx25_official_parity_preset_pins_recipe_and_preserves_extra_values():
@@ -323,6 +3319,208 @@ def test_ltx25_runtime_requires_versioned_backend_and_filters_signature(tmp_path
     assert calls[1] == ("generate", "A literal chronological test prompt.", 512, 768, 121)
     assert info["mlx_peak_bytes"] == 123
     assert not runtime.loaded
+
+
+def test_ltx25_runtime_reports_single_stage_ic_lora_scope(tmp_path, monkeypatch):
+    import mlx.core as mx
+
+    spec = _bundle(tmp_path)
+
+    class FakePipeline:
+        def __init__(self, transformer_path):
+            self.transformer_path = transformer_path
+
+        def generate_and_save(self, **kwargs):
+            return kwargs["output_path"]
+
+    monkeypatch.setattr("ltx25_mlx.runtime._pipeline_class", lambda: FakePipeline)
+    monkeypatch.setattr(mx, "reset_peak_memory", lambda: None)
+    monkeypatch.setattr(mx, "get_peak_memory", lambda: 123)
+    monkeypatch.setattr(mx, "clear_cache", lambda: None)
+    config = replace(
+        LTX25GenerationConfig(),
+        ic_lora_single_stage=True,
+        stage2_steps=0,
+    )
+
+    info = LTX25RuntimeCache().generate_to_file(
+        spec,
+        config,
+        "A literal chronological test prompt.",
+        tmp_path / "output.mp4",
+        video_references=[{"path": "reference.png"}],
+    )
+
+    assert info["conditioning"]["ic_lora_stage_scope"] == ("single_stage_full_resolution")
+
+
+def test_ltx25_runtime_forwards_publication_audio_without_audio_conditioning(
+    tmp_path, monkeypatch
+):
+    import mlx.core as mx
+
+    spec = _bundle(tmp_path)
+    source_audio = {
+        "waveform": np.zeros((1, 2, 8000), dtype=np.float32),
+        "sample_rate": 8000,
+    }
+    captured = {}
+
+    class FakePipeline:
+        last_timings = {"audio_publication": "original_source_audio"}
+
+        def __init__(self, transformer_path):
+            self.transformer_path = transformer_path
+
+        def generate_and_save(self, **kwargs):
+            captured.update(kwargs)
+            return kwargs["output_path"]
+
+    monkeypatch.setattr("ltx25_mlx.runtime._pipeline_class", lambda: FakePipeline)
+    monkeypatch.setattr(mx, "reset_peak_memory", lambda: None)
+    monkeypatch.setattr(mx, "get_peak_memory", lambda: 123)
+    monkeypatch.setattr(mx, "clear_cache", lambda: None)
+
+    info = LTX25RuntimeCache().generate_to_file(
+        spec,
+        LTX25GenerationConfig(),
+        "A literal chronological test prompt.",
+        tmp_path / "output.mp4",
+        publication_audio=source_audio,
+    )
+
+    assert captured["publication_audio"] is source_audio
+    assert captured["audio_reference"] is None
+    assert info["conditioning"]["audio_driven"] is False
+    assert info["conditioning"]["audio_output"] == "original_source_audio"
+
+
+def test_ltx25_runtime_forwards_external_extension(tmp_path, monkeypatch):
+    import mlx.core as mx
+
+    spec = _bundle(tmp_path)
+    extension = {
+        "video": np.zeros((25, 512, 768, 3), dtype=np.uint8),
+        "audio": {
+            "waveform": np.zeros((1, 2, 16667), dtype=np.float32),
+            "sample_rate": 16000,
+        },
+        "context_frames": 25,
+    }
+    captured = {}
+
+    class FakePipeline:
+        def __init__(self, transformer_path):
+            self.transformer_path = transformer_path
+
+        def generate_and_save(self, **kwargs):
+            captured.update(kwargs)
+            return kwargs["output_path"]
+
+    monkeypatch.setattr("ltx25_mlx.runtime._pipeline_class", lambda: FakePipeline)
+    monkeypatch.setattr(mx, "reset_peak_memory", lambda: None)
+    monkeypatch.setattr(mx, "get_peak_memory", lambda: 123)
+    monkeypatch.setattr(mx, "clear_cache", lambda: None)
+
+    info = LTX25RuntimeCache().generate_to_file(
+        spec,
+        LTX25GenerationConfig(),
+        "Continue the existing shot.",
+        tmp_path / "output.mp4",
+        extension_input=extension,
+    )
+
+    assert captured["extension_input"] is extension
+    assert info["conditioning"]["external_extension"] is True
+
+
+def test_ltx25_runtime_forwards_single_stage_chain_recipe(tmp_path, monkeypatch):
+    import mlx.core as mx
+
+    spec = _bundle(tmp_path)
+    captured = {}
+
+    class FakePipeline:
+        last_timings = {}
+        last_prompt_context = "official_1024"
+        sol_attention_report = {"enabled": True}
+
+        def __init__(self, transformer_path):
+            self.transformer_path = transformer_path
+
+        def generate_chained_and_save(self, **kwargs):
+            captured.update(kwargs)
+            return kwargs["output_path"]
+
+    monkeypatch.setattr("ltx25_mlx.runtime._pipeline_class", lambda: FakePipeline)
+    monkeypatch.setattr(mx, "reset_peak_memory", lambda: None)
+    monkeypatch.setattr(mx, "get_peak_memory", lambda: 789)
+    monkeypatch.setattr(mx, "clear_cache", lambda: None)
+    config = replace(
+        LTX25GenerationConfig(width=896, height=512, duration_seconds=5.0),
+        ic_lora_single_stage=True,
+        stage2_steps=0,
+        sol_attention_profile="speed",
+    )
+
+    info = LTX25RuntimeCache().generate_chain_to_file(
+        spec,
+        config,
+        ["Window one.", "Window two."],
+        tmp_path / "chain.mp4",
+        window_count=2,
+        overlap_frames=25,
+    )
+
+    assert captured["ic_lora_single_stage"] is True
+    assert captured["stage1_steps"] == 8
+    assert captured["stage2_steps"] == 0
+    assert captured["stage1_sampler"] == "euler_ancestral"
+    assert info["sol_attention"] == {"enabled": True}
+
+
+def test_ltx25_runtime_forwards_guided_recipe_without_loading_during_preflight(
+    tmp_path, monkeypatch
+):
+    import mlx.core as mx
+
+    base = _bundle(tmp_path)
+    development = tmp_path / "development.safetensors"
+    development.write_bytes((tmp_path / "transformer.safetensors").read_bytes())
+    spec = replace(
+        base,
+        transformer_path=str(development),
+        distilled_lora_path=str(_rank450_lora(tmp_path / "distilled-lora.safetensors")),
+    )
+    config = WeeToddLTX25QualityMode().apply(
+        LTX25GenerationConfig(), LTX25_QUALITY_MODES[2], "bad output"
+    )[0]
+    calls = {}
+
+    class FakePipeline:
+        def __init__(self, transformer_path, distilled_lora_path, low_memory):
+            calls["init"] = (transformer_path, distilled_lora_path, low_memory)
+
+        def generate_and_save(self, **kwargs):
+            calls["generate"] = kwargs
+            return kwargs["output_path"]
+
+    monkeypatch.setattr("ltx25_mlx.runtime._pipeline_class", lambda: FakePipeline)
+    monkeypatch.setattr(mx, "reset_peak_memory", lambda: None)
+    monkeypatch.setattr(mx, "get_peak_memory", lambda: 456)
+    monkeypatch.setattr(mx, "clear_cache", lambda: None)
+
+    info = LTX25RuntimeCache().generate_to_file(
+        spec, config, "A guided test prompt.", tmp_path / "guided.mp4"
+    )
+
+    assert calls["init"] == (str(development), spec.distilled_lora_path, True)
+    assert calls["generate"]["pipeline_mode"] == "guided_hq"
+    assert calls["generate"]["stage1_steps"] == 15
+    assert calls["generate"]["stage1_sampler"] == "res_2s_guided"
+    assert calls["generate"]["video_cfg_scale"] == 3.0
+    assert calls["generate"]["audio_cfg_scale"] == 7.0
+    assert info["mlx_peak_bytes"] == 456
 
 
 def test_ltx25_backend_capability_reports_project_native_pipeline():

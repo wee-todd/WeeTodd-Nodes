@@ -58,6 +58,8 @@ class DiTConfig:
     # Pruned inference checkpoints replace the enormous per-block timestep MLP input with a
     # low-rank curve sampled on a fixed grid. ``None`` is the original checkpoint layout.
     adaln_curve_grid: int | None = None
+    # FastH3 VSA checkpoints add one learned compression projection to every attention block.
+    vsa_gate: bool = False
 
     @property
     def inner_dim(self) -> int:

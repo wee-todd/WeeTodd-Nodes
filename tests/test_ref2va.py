@@ -11,6 +11,7 @@ from minimax_h3_mlx.ref2va import (
     build_ref2va_packed_sequence,
     encode_reference_video_rows,
     reduce_reference_video_frames,
+    resolve_reference_video_density,
     trim_reference_num_frames,
     validate_reference_set,
 )
@@ -40,6 +41,40 @@ def test_reference_video_temporal_density_keeps_aligned_endpoints(
     assert source_latents == expected_source_latents
     assert int(reduced[0, 0, 0, 0]) == 0
     assert int(reduced[-1, 0, 0, 0]) == 123
+
+
+def test_automatic_reference_density_keeps_short_and_high_motion_clips_full():
+    short = np.zeros((22, 8, 8, 3), dtype=np.uint8)
+    assert resolve_reference_video_density(short, "automatic").density == 1.0
+
+    high_motion = np.zeros((124, 8, 8, 3), dtype=np.uint8)
+    high_motion[1::2] = 255
+    decision = resolve_reference_video_density(high_motion, "automatic")
+    assert decision.density == 1.0
+    assert decision.reason == "high_motion_or_cut_kept_full"
+
+
+def test_automatic_reference_density_selects_half_or_quarter_for_redundancy():
+    moderate = np.empty((124, 8, 8, 3), dtype=np.uint8)
+    for index in range(124):
+        moderate[index] = min(255, index * 2)
+    half = resolve_reference_video_density(moderate, "automatic")
+    assert half.density == 0.5
+    assert half.sampled_pairs == 123
+
+    static = np.full((124, 8, 8, 3), 127, dtype=np.uint8)
+    quarter = resolve_reference_video_density(static, "automatic")
+    assert quarter.density == 0.25
+    assert quarter.activity_mean == 0.0
+    assert quarter.reason == "near_static_reference_selected_quarter"
+
+
+def test_explicit_reference_density_does_not_run_activity_heuristic():
+    frames = np.zeros((124, 8, 8, 3), dtype=np.uint8)
+    decision = resolve_reference_video_density(frames, "half")
+    assert decision.density == 0.5
+    assert decision.sampled_pairs == 0
+    assert decision.activity_mean is None
 
 
 def test_ref2va_image_encoding_uses_posterior_mean_not_sample():
@@ -76,6 +111,35 @@ def test_reference_set_rejects_audio_only_request():
             [PreparedReference("audio", num_audio_latents=4)],
             PATCH,
         )
+
+
+def test_timeline_guides_share_the_target_rotary_clock():
+    references = [
+        PreparedReference("image", 1, 4, 4, target_frame=12),
+        PreparedReference("audio", num_audio_latents=2, target_frame=24),
+    ]
+    validate_reference_set(references, PATCH)
+    layout = build_ref2va_packed_sequence(
+        [TAG_TEXT, TAG_TEXT],
+        references,
+        num_latent_frames=2,
+        latent_height=4,
+        latent_width=4,
+        num_audio_latents=3,
+        patch_size=PATCH,
+    )
+    positions = np.asarray(layout.position_ids)
+    video_indices = np.asarray(layout.video_indices)
+    audio_indices = np.asarray(layout.audio_indices)
+    condition_video = video_indices[: layout.num_condition_video_rows]
+    condition_audio = audio_indices[: layout.num_condition_audio_rows]
+    target_video = video_indices[layout.num_condition_video_rows :]
+    target_audio = audio_indices[layout.num_condition_audio_rows :]
+
+    assert positions[condition_video[0], 0] == pytest.approx(2.0 + 12 * 5.0 / 3.0)
+    assert positions[condition_audio[0], 0] == pytest.approx(2.0 + 24 * 5.0 / 3.0)
+    assert positions[target_video[0], 0] == pytest.approx(2.0)
+    assert positions[target_audio[0], 0] == pytest.approx(2.0)
 
 
 def test_reference_set_enforces_image_and_audio_limits():

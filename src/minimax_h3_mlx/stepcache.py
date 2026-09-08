@@ -99,7 +99,9 @@ class StepResidualCache:
         )
         return skip
 
-    def store(self, video_rows: mx.array, audio_rows: mx.array, video_pred: mx.array, audio_pred: mx.array) -> None:
+    def store(
+        self, video_rows: mx.array, audio_rows: mx.array, video_pred: mx.array, audio_pred: mx.array
+    ) -> None:
         """Record the delta a real forward produced, in the row shapes the sampler steps."""
         self._video_delta = video_pred - video_rows
         self._audio_delta = audio_pred - audio_rows

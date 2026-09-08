@@ -214,6 +214,34 @@ def test_video_vae_stream_cancellation_unloads(tmp_path):
     assert cache.loaded is False
 
 
+def test_video_vae_encodes_exact_continuation_context(tmp_path):
+    import mlx.core as mx
+
+    class TinyVideoEncoder:
+        config = type(
+            "Config",
+            (),
+            {
+                "latent_channels": 16,
+                "latents_mean": [0.0] * 16,
+                "latents_std": [1.0] * 16,
+            },
+        )()
+
+        def encode(self, pixels):
+            assert pixels.shape == (1, 3, 22, 32, 32)
+            return mx.zeros((1, 32, 7, 2, 2), dtype=mx.float32)
+
+    spec = _video_vae_spec(tmp_path)
+    cache = H3VideoVAECache(lambda _value: TinyVideoEncoder())
+    result = cache.encode_continuation(
+        spec,
+        np.zeros((22, 32, 32, 3), dtype=np.uint8),
+    )
+    assert result.shape == (1, 16, 7, 2, 2)
+    assert cache.loaded is False
+
+
 def test_audio_vae_decode_returns_stereo_timing_and_unloads(tmp_path):
     created = []
 
@@ -234,6 +262,37 @@ def test_audio_vae_decode_returns_stereo_timing_and_unloads(tmp_path):
     assert result.fps == 24
     assert cache.loaded is False
     assert created == [spec]
+
+
+def test_audio_vae_encodes_exact_continuation_context(tmp_path):
+    import mlx.core as mx
+
+    class TinyAudioEncoder:
+        config = type(
+            "Config",
+            (),
+            {
+                "sampling_rate": 32000,
+                "latent_channels": 32,
+                "latents_mean": [0.0] * 32,
+                "latents_std": [1.0] * 32,
+            },
+        )()
+
+        def encode(self, waveform):
+            assert waveform.shape == (2, 1, 29333)
+            mean = mx.zeros((2, 32, 37), dtype=mx.float32)
+            return mean, mean
+
+    spec = _audio_vae_spec(tmp_path)
+    cache = H3AudioVAECache(lambda _value: TinyAudioEncoder())
+    result = cache.encode_continuation(
+        spec,
+        np.zeros((2, 29333), dtype=np.float32),
+        num_frames=22,
+    )
+    assert result.shape == (2, 32, 37)
+    assert cache.loaded is False
 
 
 def test_audio_vae_cache_reuses_equal_spec(tmp_path):

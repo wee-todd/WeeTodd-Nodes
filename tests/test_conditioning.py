@@ -7,8 +7,9 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from minimax_h3_mlx.config import TAG_TEXT
 from minimax_h3_mlx.ref2va import PreparedReference
-from minimax_h3_mlx.text_encoder import MiniMaxH3TextEncoder
+from minimax_h3_mlx.text_encoder import MiniMaxH3TextEncoder, _NumpyQwen3VLVideoProcessor
 from wee_todd_nodes.conditioning import H3TextEncoderCache, H3TextEncoderSpec
 from wee_todd_nodes.preflight import H3ComponentSetSpec
 
@@ -93,6 +94,51 @@ def test_ref2va_request_uses_independent_labels_and_ordered_visual_units():
     ]
     assert [unit[0] for unit in units] == [200, 201]
     assert np.count_nonzero(tags == 0) == 6
+
+
+def test_audio_only_ref2va_request_has_text_labels_without_visual_units():
+    calls = []
+
+    class Tokenizer:
+        tokens = {
+            "<|vision_start|>": 100,
+            "<|vision_end|>": 101,
+            "<|image_pad|>": 200,
+            "<|video_pad|>": 201,
+        }
+
+        def convert_tokens_to_ids(self, value):
+            return self.tokens[value]
+
+        def __call__(self, value, add_special_tokens=False):
+            calls.append(value)
+            return {"input_ids": [1000 + len(calls)]}
+
+    encoder = object.__new__(MiniMaxH3TextEncoder)
+    encoder._tokenizer = Tokenizer()
+    encoder._processor = SimpleNamespace()
+    encoder.merge_size = 2
+    reference = PreparedReference("audio", waveform=np.zeros((2, 3200), dtype=np.float32))
+
+    _ids, tags, units = encoder._build_reference_request("prompt", [reference])
+
+    assert calls == ["<Audio 1>: ", "prompt"]
+    assert units == []
+    assert np.all(tags == TAG_TEXT)
+
+
+def test_numpy_qwen_video_processor_matches_released_pair_geometry():
+    processor = _NumpyQwen3VLVideoProcessor()
+    frames = np.zeros((2, 64, 96, 3), dtype=np.uint8)
+    frames[1] = 255
+
+    result = processor(videos=[frames], do_sample_frames=False, return_tensors="np")
+
+    assert result["video_grid_thw"].tolist() == [[1, 4, 6]]
+    assert result["pixel_values_videos"].shape == (24, 1536)
+    assert result["pixel_values_videos"].dtype == np.float32
+    assert float(result["pixel_values_videos"].min()) == pytest.approx(-1.0)
+    assert float(result["pixel_values_videos"].max()) == pytest.approx(1.0)
 
 
 def _spec(tmp_path: Path, name="encoder") -> H3TextEncoderSpec:
@@ -220,9 +266,7 @@ def test_conditioning_rejects_empty_prompt_before_staged_release(tmp_path: Path)
         prepared = True
 
     with pytest.raises(ValueError, match="Prompt must contain text"):
-        H3TextEncoderCache().encode(
-            _spec(tmp_path), "   ", prepare_stage=prepare_stage
-        )
+        H3TextEncoderCache().encode(_spec(tmp_path), "   ", prepare_stage=prepare_stage)
 
     assert prepared is False
 
@@ -299,7 +343,8 @@ def test_comfy_entrypoint_imports_without_mlx():
         "submodule_search_locations=[str(root)]); "
         "module=importlib.util.module_from_spec(spec); "
         "sys.modules[spec.name]=module; spec.loader.exec_module(module); "
-        "assert len(module.NODE_CLASS_MAPPINGS) == 54; "
+        "assert module.NODE_CLASS_MAPPINGS; "
+        "assert set(module.NODE_CLASS_MAPPINGS) == set(module.NODE_DISPLAY_NAME_MAPPINGS); "
         "assert 'mlx' not in sys.modules and 'mlx.core' not in sys.modules"
     )
 

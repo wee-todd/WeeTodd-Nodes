@@ -13,16 +13,20 @@ from pathlib import Path
 
 import mlx.core as mx
 import numpy as np
-import torch
+import pytest
+
+torch = pytest.importorskip("torch", reason="optional PyTorch reference parity dependency")
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from diffusers.modular_pipelines.minimax_h3 import packing as ref_packing
-from diffusers.schedulers.scheduling_minimax_h3 import MiniMaxH3Scheduler as RefScheduler
+from diffusers.modular_pipelines.minimax_h3 import packing as ref_packing  # noqa: E402
+from diffusers.schedulers.scheduling_minimax_h3 import (  # noqa: E402
+    MiniMaxH3Scheduler as RefScheduler,
+)
 
-from minimax_h3_mlx import packing as mine
-from minimax_h3_mlx.scheduler import MiniMaxH3Scheduler
+from minimax_h3_mlx import packing as mine  # noqa: E402
+from minimax_h3_mlx.scheduler import MiniMaxH3Scheduler  # noqa: E402
 
 FAILURES: list[str] = []
 
@@ -85,7 +89,10 @@ def test_packed_sequence() -> None:
             w = getattr(want, field).numpy().astype(np.int64)
             check(f"{label} {field}", np.array_equal(g, w))
 
-        check(f"{label} n_cond_video", got.num_condition_video_rows == want.num_condition_video_rows)
+        check(
+            f"{label} n_cond_video",
+            got.num_condition_video_rows == want.num_condition_video_rows,
+        )
 
         # Row timesteps over the same layout.
         g_ts, g_idx = mine.build_row_timesteps(got, 0.4, 0.6, mine.KEYFRAME_NOISE_AUG, 1.0)

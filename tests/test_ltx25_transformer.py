@@ -7,6 +7,12 @@ from mlx.utils import tree_flatten
 from ltx25_mlx.transformer import (
     LTX25Model,
     LTX25TransformerConfig,
+    _NormalizedLTX25BlockLoraSource,
+    _OfficialComfyBlockStreamer,
+    _PrefetchedBlockStreamer,
+    _streaming_window_from_environment,
+    _StreamingEvalWindow,
+    _WindowedStreamingLTXModel,
     precompute_rope_freqs_float64,
     remap_comfy_transformer_key,
 )
@@ -122,8 +128,6 @@ def test_official_streaming_key_map_matches_shared_block(tmp_path):
     import numpy as np
     from safetensors.numpy import save_file
 
-    from ltx25_mlx.transformer import _OfficialComfyBlockStreamer
-
     path = tmp_path / "transformer.safetensors"
     save_file(
         {
@@ -139,6 +143,235 @@ def test_official_streaming_key_map_matches_shared_block(tmp_path):
     streamer = _OfficialComfyBlockStreamer(path)
     assert set(streamer.block_keys(0)) == {"attn1.to_out.weight", "ff.proj_in.weight"}
     streamer.close()
+
+
+def test_normalized_streaming_lora_source_binds_down_up_with_alpha_once(tmp_path):
+    from safetensors.numpy import save_file
+
+    class TinyAttention(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.to_q = nn.Linear(4, 4, bias=False)
+
+    class TinyBlock(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.attn1 = TinyAttention()
+
+    transformer = tmp_path / "transformer.safetensors"
+    save_file(
+        {
+            "model.diffusion_model.transformer_blocks.0.attn1.to_q.weight": np.zeros(
+                (4, 4), dtype=np.float32
+            )
+        },
+        transformer,
+    )
+    adapter = tmp_path / "community.safetensors"
+    save_file(
+        {
+            "base_model.model.transformer.transformer_blocks.0.attn1.to_q."
+            "lora_down.weight": np.ones(
+                (2, 4), dtype=np.float32
+            ),
+            "base_model.model.transformer.transformer_blocks.0.attn1.to_q.lora_up.weight": np.ones(
+                (4, 2), dtype=np.float32
+            ),
+            "base_model.model.transformer.transformer_blocks.0.attn1.to_q.alpha": np.array(
+                1.0, dtype=np.float32
+            ),
+        },
+        adapter,
+        metadata={"model_version": "2.5.0"},
+    )
+
+    streamer = _OfficialComfyBlockStreamer(transformer)
+    source = _NormalizedLTX25BlockLoraSource(adapter, strength=0.25)
+    source.validate_targets(streamer, {})
+    assert source.has_block(0)
+    assert not source.has_block(1)
+    assert set(source.get_block_lora_dict(0)) == {
+        "attn1.to_q.lora_A.weight",
+        "attn1.to_q.lora_B.weight",
+    }
+
+    block = TinyBlock()
+    streamer.bind(block, 0, lora_sources=[source])
+    mx.eval(block.parameters())
+    assert mx.allclose(block.attn1.to_q.weight, mx.full((4, 4), 0.25))
+    assert set(tmp_path.glob("*.safetensors")) == {transformer, adapter}
+    source.close()
+    streamer.close()
+
+
+def test_normalized_streaming_lora_source_selects_non_block_pairs(tmp_path):
+    from safetensors.numpy import save_file
+
+    adapter = tmp_path / "mixed.safetensors"
+    save_file(
+        {
+            "diffusion_model.transformer_blocks.0.attn1.to_q.lora_A.default.weight": np.ones(
+                (2, 4), dtype=np.float32
+            ),
+            "diffusion_model.transformer_blocks.0.attn1.to_q.lora_B.default.weight": np.ones(
+                (4, 2), dtype=np.float32
+            ),
+            "diffusion_model.adaln_single.emb.timestep_embedder.linear_1."
+            "lora_A.default.weight": np.ones(
+                (2, 4), dtype=np.float32
+            ),
+            "diffusion_model.adaln_single.emb.timestep_embedder.linear_1."
+            "lora_B.default.weight": np.ones(
+                (4, 2), dtype=np.float32
+            ),
+        },
+        adapter,
+        metadata={"model_version": "2.5.0", "lora_rank": "4", "lora_alpha": "2"},
+    )
+
+    source = _NormalizedLTX25BlockLoraSource(adapter, strength=1.0)
+    block = source.get_block_lora_dict(0)
+    fixed = source.get_non_block_lora_dict()
+    assert set(block) == {
+        "attn1.to_q.lora_A.weight",
+        "attn1.to_q.lora_B.weight",
+    }
+    assert set(fixed) == {
+        "adaln_single.emb.timestep_embedder.linear1.lora_A.weight",
+        "adaln_single.emb.timestep_embedder.linear1.lora_B.weight",
+    }
+    assert mx.array_equal(
+        block["attn1.to_q.lora_B.weight"], mx.full((4, 2), 0.5)
+    )
+    assert mx.array_equal(
+        fixed["adaln_single.emb.timestep_embedder.linear1.lora_B.weight"],
+        mx.full((4, 2), 0.5),
+    )
+    source.close()
+
+
+def test_prefetched_streamer_schedules_next_page_and_wraps(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    calls = []
+
+    class FakePrefetch:
+        @staticmethod
+        def default_enabled():
+            return True
+
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def start(self, index):
+            calls.append(("start", index))
+
+        def wait(self, index):
+            calls.append(("wait", index))
+
+        def report(self):
+            return {"prefetch_hits": 2}
+
+        def close(self):
+            calls.append(("close", None))
+
+    class FakeStreamer:
+        block_count = 2
+        block_prefix = "blocks."
+
+        def block_keys(self, index):
+            return [str(index)]
+
+        def bind(self, _block, index, **_kwargs):
+            calls.append(("bind", index))
+
+        def close(self):
+            calls.append(("streamer_close", None))
+
+    monkeypatch.setattr("ltx25_mlx.page_prefetch.LTX25PagePrefetch", FakePrefetch)
+    manifest = SimpleNamespace(root=tmp_path, layers=(object(), object()), num_layers=2)
+    wrapped = _PrefetchedBlockStreamer(FakeStreamer(), manifest)
+    wrapped.bind(object(), 0)
+    wrapped.bind(object(), 1)
+    report = wrapped.report()
+    wrapped.close()
+
+    assert calls[:7] == [
+        ("start", 0),
+        ("wait", 0),
+        ("bind", 0),
+        ("start", 1),
+        ("wait", 1),
+        ("bind", 1),
+        ("start", 0),
+    ]
+    assert report["streamed_bind_calls"] == 2
+    assert report["prefetch_hits"] == 2
+    assert calls[-2:] == [("close", None), ("streamer_close", None)]
+
+
+def test_streaming_eval_window_flushes_before_slot_reuse():
+    evaluations = []
+
+    def evaluate(*arrays):
+        evaluations.append(tuple(int(value.item()) for value in arrays))
+
+    gate = _StreamingEvalWindow(2, evaluate)
+    for index in range(5):
+        gate(mx.array(index))
+
+    assert evaluations == [(1,), (3,)]
+    gate.flush()
+    assert evaluations == [(1,), (3,), (4,)]
+    assert gate.calls == 5
+    assert gate.flushes == 3
+
+
+def test_streaming_window_environment_is_bounded_and_paged(monkeypatch):
+    monkeypatch.delenv("WEETODD_LTX25_STREAMING_WINDOW", raising=False)
+    assert _streaming_window_from_environment(paged=True) == 1
+
+    monkeypatch.setenv("WEETODD_LTX25_STREAMING_WINDOW", "2")
+    assert _streaming_window_from_environment(paged=True) == 2
+    with pytest.raises(ValueError, match="paged transformer"):
+        _streaming_window_from_environment(paged=False)
+
+    monkeypatch.setenv("WEETODD_LTX25_STREAMING_WINDOW", "3")
+    with pytest.raises(ValueError, match="integer 1 or 2"):
+        _streaming_window_from_environment(paged=True)
+
+
+def test_windowed_streaming_restores_global_eval_after_failure():
+    from ltx_core_mlx.model.transformer import model as model_module
+
+    class IdentityBlock(nn.Module):
+        def __call__(self, value):
+            return value
+
+    class FailingModel(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.transformer_blocks = [IdentityBlock(), IdentityBlock()]
+
+        def __call__(self, *_args, **_kwargs):
+            model_module._mx_eval(mx.array(1))
+            raise RuntimeError("probe failure")
+
+    original_eval = model_module._mx_eval
+    wrapped = _WindowedStreamingLTXModel(
+        FailingModel(),
+        object(),
+        window=2,
+    )
+    with pytest.raises(RuntimeError, match="probe failure"):
+        wrapped(mx.array(0))
+
+    assert model_module._mx_eval is original_eval
+    assert wrapped.streaming_window_report() == {
+        "streaming_window": 2,
+        "streaming_eval_calls": 1,
+        "streaming_eval_flushes": 1,
+    }
 
 
 def test_ltx25_rope_uses_numpy_float64_grid_before_mlx():

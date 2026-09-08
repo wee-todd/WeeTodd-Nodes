@@ -22,6 +22,8 @@ def test_low_memory_mode_selects_query_chunks_without_quantization():
     config = H3GenerationConfig(memory_mode="low_memory_bf16")
     config.validate()
     assert config.attention_query_chunk_size == 512
+    assert config.attention_head_group_size == 4
+    assert config.ffn_row_group_size == 256
 
 
 @pytest.mark.parametrize("chunk", ["512", "1024", "2048"])
@@ -35,6 +37,19 @@ def test_normal_mode_ignores_attention_chunk_selection():
     config = H3GenerationConfig(memory_mode="normal", attention_chunk_size="2048")
     config.validate()
     assert config.attention_query_chunk_size is None
+    assert config.attention_head_group_size is None
+    assert config.ffn_row_group_size is None
+
+
+def test_low_memory_chunk_controls_can_be_disabled_independently():
+    config = H3GenerationConfig(
+        memory_mode="low_memory_bf16",
+        attention_head_chunk_size="disabled",
+        ffn_row_chunk_size="disabled",
+    )
+    config.validate()
+    assert config.attention_head_group_size is None
+    assert config.ffn_row_group_size is None
 
 
 def test_config_rejects_unknown_memory_mode():
@@ -44,6 +59,12 @@ def test_config_rejects_unknown_memory_mode():
 
 def test_config_accepts_experimental_mpp_projection_backend():
     H3GenerationConfig(projection_backend="mpp_experimental").validate()
+
+
+def test_config_defaults_to_automatic_projection_backend():
+    config = H3GenerationConfig()
+    config.validate()
+    assert config.projection_backend == "auto"
 
 
 def test_config_rejects_unknown_projection_backend():

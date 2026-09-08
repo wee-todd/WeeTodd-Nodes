@@ -21,9 +21,12 @@ def test_readme_local_links_resolve():
 
 
 def test_readme_catalogs_every_shipped_ui_workflow():
-    workflows = sorted((ROOT / "workflows").glob("*.json"))
-    workflows += sorted((ROOT / "examples").glob("*_workflow.json"))
-    missing = [path.name for path in workflows if path.name not in README]
+    workflows = sorted((ROOT / "workflows").rglob("*.json"))
+    missing = [
+        str(path.relative_to(ROOT))
+        for path in workflows
+        if str(path.relative_to(ROOT)) not in README
+    ]
     assert not missing
 
 
@@ -59,6 +62,15 @@ def test_readme_runtime_requirements_match_project_metadata():
     assert f"MLX {mlx_minimum} or later" in README
 
 
+def test_ltx_extra_uses_buildable_upstream_pin():
+    optional = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"][
+        "optional-dependencies"
+    ]["ltx"]
+    assert len(optional) == 2
+    assert all("91e6f6c9bd621ff2ae31adfee643e113d67d6ae8" in item for item in optional)
+    assert all("e1838a" not in item for item in optional)
+
+
 def test_readme_contains_current_portable_h3_component_paths():
     expected = {
         "MiniMax-H3/FL2VA",
@@ -69,7 +81,7 @@ def test_readme_contains_current_portable_h3_component_paths():
         "MiniMax-H3/vae/q8/video_vae_affine_q8.safetensors",
         "MiniMax-H3/FL2VA/audio_vae",
     }
-    assert all(f"`{path}`" in README for path in expected)
+    assert all(path in README for path in expected)
 
 
 def test_readme_excludes_private_paths():

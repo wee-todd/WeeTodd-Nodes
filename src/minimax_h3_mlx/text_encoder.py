@@ -30,6 +30,8 @@ import mlx.nn as nn
 import numpy as np
 from safetensors import safe_open
 
+from wee_todd_mlx.numpy_import import adopt_numpy_array
+
 from .config import TAG_TEXT, TAG_VIDEO
 from .packing import TEXT_ENCODER_LAYER
 
@@ -305,7 +307,18 @@ class MiniMaxH3TextEncoder:
 
             directory = self._processor_dir or self._model_dir.parent / "processor"
             if directory.exists():
-                self._processor = AutoProcessor.from_pretrained(str(directory))
+                # Transformers' Qwen3-VL video processor imports torch/torchvision even when the
+                # caller requests NumPy output. Keep the headless MLX path genuinely torch-free by
+                # using the same released preprocessing geometry in a small NumPy/Pillow adapter.
+                if (directory / "video_preprocessor_config.json").is_file():
+                    from transformers import Qwen2VLImageProcessor
+
+                    self._processor = _FallbackProcessor(
+                        Qwen2VLImageProcessor.from_pretrained(str(directory)),
+                        _NumpyQwen3VLVideoProcessor.from_pretrained(directory),
+                    )
+                else:
+                    self._processor = AutoProcessor.from_pretrained(str(directory))
             else:
                 self._processor = _FallbackProcessor(self._build_image_processor())
         return self._processor
@@ -541,6 +554,8 @@ class MiniMaxH3TextEncoder:
         """Encode a request into ``((1, num_text_tokens, 5120), (num_text_tokens,))``."""
         from mlx_vlm.models.qwen3_vl.language import LanguageModel
 
+        from .vision_forward import encode_vision
+
         input_ids, token_tags, vision_inputs = self.build_request(prompt, images, references)
 
         inputs_embeds = None
@@ -549,19 +564,22 @@ class MiniMaxH3TextEncoder:
         image_grid_thw = None
         video_grid_thw = None
 
-        if references:
+        if references and vision_inputs:
             if self.vision is None:
                 raise ValueError(
-                    "This encoder was built with `load_vision=False`; it cannot take references."
+                    "This encoder was built with `load_vision=False`; it cannot take visual "
+                    "references."
                 )
             features = []
             deepstack_groups = []
             image_grids = []
             video_grids = []
             for pad_id, pixels, grid_np in vision_inputs:
-                grid = mx.array(grid_np.astype(np.int32))
-                hidden, deep = self.vision(
-                    mx.array(pixels).astype(self.dtype), grid, output_hidden_states=True
+                grid = adopt_numpy_array(grid_np, dtype=np.int32)
+                hidden, deep = encode_vision(
+                    self.vision,
+                    adopt_numpy_array(np.asarray(pixels)).astype(self.dtype),
+                    grid,
                 )
                 features.append(hidden.astype(self.dtype))
                 deepstack_groups.append(deep)
@@ -587,20 +605,24 @@ class MiniMaxH3TextEncoder:
                     for layer in range(len(deepstack_groups[0]))
                 ]
             if image_grids:
-                image_grid_thw = mx.array(np.concatenate(image_grids).astype(np.int32))
+                image_grid_thw = adopt_numpy_array(
+                    np.concatenate(image_grids), dtype=np.int32
+                )
             if video_grids:
-                video_grid_thw = mx.array(np.concatenate(video_grids).astype(np.int32))
-        elif vision_inputs is not None:
+                video_grid_thw = adopt_numpy_array(
+                    np.concatenate(video_grids), dtype=np.int32
+                )
+        elif vision_inputs:
             if self.vision is None:
                 raise ValueError(
                     "This encoder was built with `load_vision=False`; it cannot take images."
                 )
             pixel_values, grid_np = vision_inputs
-            image_grid_thw = mx.array(grid_np.astype(np.int32))
-            hidden, deepstack_embeds = self.vision(
-                mx.array(pixel_values).astype(self.dtype),
+            image_grid_thw = adopt_numpy_array(grid_np, dtype=np.int32)
+            hidden, deepstack_embeds = encode_vision(
+                self.vision,
+                adopt_numpy_array(np.asarray(pixel_values)).astype(self.dtype),
                 image_grid_thw,
-                output_hidden_states=True,
             )
             inputs_embeds = self.language.embed_tokens(input_ids)
             image_mask = input_ids == self.image_token_id
@@ -645,10 +667,138 @@ class MiniMaxH3TextEncoder:
 
 
 class _FallbackProcessor:
-    """The single attribute :meth:`build_request` needs, when no upstream processor dir exists."""
+    """The processor attributes used by H3 without importing a torch tensor runtime."""
 
-    def __init__(self, image_processor):
+    def __init__(self, image_processor, video_processor=None):
         self.image_processor = image_processor
+        self.video_processor = video_processor
+
+
+class _NumpyQwen3VLVideoProcessor:
+    """Torch-free equivalent of Qwen3VLVideoProcessor for already-decoded RGB frames."""
+
+    def __init__(
+        self,
+        *,
+        patch_size=16,
+        temporal_patch_size=2,
+        merge_size=2,
+        shortest_edge=4096,
+        longest_edge=25165824,
+        image_mean=(0.5, 0.5, 0.5),
+        image_std=(0.5, 0.5, 0.5),
+    ):
+        self.patch_size = int(patch_size)
+        self.temporal_patch_size = int(temporal_patch_size)
+        self.merge_size = int(merge_size)
+        self.shortest_edge = int(shortest_edge)
+        self.longest_edge = int(longest_edge)
+        self.image_mean = np.asarray(image_mean, dtype=np.float32)
+        self.image_std = np.asarray(image_std, dtype=np.float32)
+
+    @classmethod
+    def from_pretrained(cls, directory):
+        path = Path(directory) / "video_preprocessor_config.json"
+        with path.open() as handle:
+            values = json.load(handle)
+        size = values.get("size", {})
+        return cls(
+            patch_size=values.get("patch_size", 16),
+            temporal_patch_size=values.get("temporal_patch_size", 2),
+            merge_size=values.get("merge_size", 2),
+            shortest_edge=size.get("shortest_edge", 4096),
+            longest_edge=size.get("longest_edge", 25165824),
+            image_mean=values.get("image_mean", (0.5, 0.5, 0.5)),
+            image_std=values.get("image_std", (0.5, 0.5, 0.5)),
+        )
+
+    def _smart_resize(self, frames, height, width):
+        import math
+
+        factor = self.patch_size * self.merge_size
+        if height < factor or width < factor:
+            raise ValueError(
+                f"Qwen3-VL video dimensions must be at least {factor}, got {width}x{height}."
+            )
+        resized_height = round(height / factor) * factor
+        resized_width = round(width / factor) * factor
+        padded_frames = math.ceil(frames / self.temporal_patch_size) * self.temporal_patch_size
+        pixels = padded_frames * resized_height * resized_width
+        if pixels > self.longest_edge:
+            scale = math.sqrt((frames * height * width) / self.longest_edge)
+            resized_height = max(factor, math.floor(height / scale / factor) * factor)
+            resized_width = max(factor, math.floor(width / scale / factor) * factor)
+        elif pixels < self.shortest_edge:
+            scale = math.sqrt(self.shortest_edge / (frames * height * width))
+            resized_height = math.ceil(height * scale / factor) * factor
+            resized_width = math.ceil(width * scale / factor) * factor
+        return resized_height, resized_width
+
+    def __call__(self, *, videos, do_sample_frames=False, return_tensors="np", **_kwargs):
+        if do_sample_frames:
+            raise ValueError("H3 supplies explicit Qwen video-frame pairs; sampling is disabled.")
+        if return_tensors not in {"np", "numpy"}:
+            raise ValueError("The MLX Qwen video processor only returns NumPy tensors.")
+        from PIL import Image
+
+        outputs = []
+        grids = []
+        for value in videos:
+            frames = np.asarray(value)
+            if frames.ndim != 4 or frames.shape[-1] != 3 or frames.shape[0] < 1:
+                raise ValueError("Qwen3-VL video input must have shape (frames, H, W, 3).")
+            height, width = frames.shape[1:3]
+            resized_height, resized_width = self._smart_resize(
+                frames.shape[0], height, width
+            )
+            if (height, width) != (resized_height, resized_width):
+                frames = np.stack(
+                    [
+                        np.asarray(
+                            Image.fromarray(frame.astype(np.uint8), mode="RGB").resize(
+                                (resized_width, resized_height), Image.Resampling.BICUBIC
+                            )
+                        )
+                        for frame in frames
+                    ]
+                )
+            patches = frames.astype(np.float32) / 255.0
+            patches = (patches - self.image_mean) / self.image_std
+            patches = patches.transpose(0, 3, 1, 2)
+            if pad := -patches.shape[0] % self.temporal_patch_size:
+                patches = np.concatenate(
+                    [patches, np.repeat(patches[-1:], pad, axis=0)], axis=0
+                )
+            temporal, channels = patches.shape[:2]
+            grid_t = temporal // self.temporal_patch_size
+            grid_h = resized_height // self.patch_size
+            grid_w = resized_width // self.patch_size
+            patches = patches.reshape(
+                grid_t,
+                self.temporal_patch_size,
+                channels,
+                grid_h // self.merge_size,
+                self.merge_size,
+                self.patch_size,
+                grid_w // self.merge_size,
+                self.merge_size,
+                self.patch_size,
+            )
+            patches = patches.transpose(0, 3, 6, 4, 7, 2, 1, 5, 8)
+            outputs.append(
+                patches.reshape(
+                    grid_t * grid_h * grid_w,
+                    channels
+                    * self.temporal_patch_size
+                    * self.patch_size
+                    * self.patch_size,
+                )
+            )
+            grids.append([grid_t, grid_h, grid_w])
+        return {
+            "pixel_values_videos": np.concatenate(outputs, axis=0),
+            "video_grid_thw": np.asarray(grids, dtype=np.int64),
+        }
 
 
 def _masked_scatter(target: mx.array, mask: mx.array, values: mx.array) -> mx.array:

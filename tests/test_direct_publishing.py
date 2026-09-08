@@ -4,9 +4,11 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from minimax_h3_mlx.media import FFmpegExecutable
 from wee_todd_nodes.decoding import H3AudioWaveform, H3VideoStream
 from wee_todd_nodes.direct_publishing import (
     _motion_matched_overlap,
+    _mux_audio,
     _splice_audio_windows,
     publish_latent_chain_direct,
     publish_latents_direct,
@@ -108,6 +110,25 @@ def test_direct_publication_is_atomic_and_records_stream_metadata(tmp_path):
     assert video_cache.unloaded is True
     assert audio_cache.unloaded is True
     assert not list(tmp_path.glob(".*partial*"))
+
+
+def test_direct_mux_preserves_the_validated_video_frame_count(monkeypatch, tmp_path):
+    captured = {}
+
+    def run(command, capture_output):
+        captured["command"] = command
+        return SimpleNamespace(returncode=0, stderr=b"")
+
+    monkeypatch.setattr("wee_todd_nodes.direct_publishing.subprocess.run", run)
+    _mux_audio(
+        tmp_path / "video.mp4",
+        tmp_path / "audio.wav",
+        tmp_path / "output.mp4",
+        FFmpegExecutable(tmp_path / "ffmpeg", "test"),
+    )
+
+    assert "-shortest" not in captured["command"]
+    assert captured["command"][-1] == str(tmp_path / "output.mp4")
 
 
 def test_direct_publication_failure_cleans_all_partial_files(tmp_path):

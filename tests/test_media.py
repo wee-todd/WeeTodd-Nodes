@@ -57,3 +57,16 @@ def test_resolved_executable_is_marked_executable(tmp_path):
     resolved = resolve_ffmpeg(executable)
 
     assert os.access(resolved.path, os.X_OK)
+
+
+def test_resolve_ffmpeg_searches_gui_safe_platform_locations(tmp_path, monkeypatch):
+    executable = _make_executable(tmp_path / "ffmpeg")
+    monkeypatch.setattr(
+        "minimax_h3_mlx.media._platform_ffmpeg_candidates",
+        lambda: (("Homebrew (Apple Silicon)", executable),),
+    )
+
+    resolved = resolve_ffmpeg(environ={"PATH": ""})
+
+    assert resolved.path == executable.resolve()
+    assert resolved.source == "Homebrew (Apple Silicon)"

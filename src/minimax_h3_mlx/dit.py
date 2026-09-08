@@ -31,6 +31,8 @@ from typing import TYPE_CHECKING
 import mlx.core as mx
 import mlx.nn as nn
 
+from wee_todd_mlx.execution_evidence import ExecutionEvidence
+
 if TYPE_CHECKING:
     from .adaln import ModulationCache
 
@@ -166,7 +168,7 @@ def apply_rotary(x: mx.array, cos: mx.array, sin: mx.array) -> mx.array:
 class Attention(nn.Module):
     """Full self-attention over the packed sequence, with per-head q/k RMSNorm."""
 
-    def __init__(self, config: DiTConfig):
+    def __init__(self, config: DiTConfig, *, vsa_gate: bool = False):
         super().__init__()
         self.heads = config.num_attention_heads
         self.head_dim = config.attention_head_dim
@@ -176,26 +178,155 @@ class Attention(nn.Module):
         self.q_norm = nn.RMSNorm(config.attention_head_dim, eps=config.qk_norm_eps)
         self.k_norm = nn.RMSNorm(config.attention_head_dim, eps=config.qk_norm_eps)
         self.out_proj = nn.Linear(config.inner_dim, config.hidden_size, bias=False)
-        self.query_chunk_size: int | None = None
-
-    def _normal(self, x, rotary, mask):
-        """Original inference path, kept free of diagnostic callables and synchronization."""
-        batch, sequence, _ = x.shape
-        qkv = self.qkv_proj(x).reshape(
-            batch, sequence, self.heads, 3, self.head_dim
+        self.gate_compress = (
+            nn.Linear(config.hidden_size, config.inner_dim, bias=False)
+            if vsa_gate
+            else None
         )
-        q, k, v = qkv[:, :, :, 0], qkv[:, :, :, 1], qkv[:, :, :, 2]
-        q = self.q_norm(q).transpose(0, 2, 1, 3)
-        k = self.k_norm(k).transpose(0, 2, 1, 3)
-        v = v.transpose(0, 2, 1, 3)
-        if rotary is not None:
-            q = apply_rotary(q, *rotary)
-            k = apply_rotary(k, *rotary)
+        self.query_chunk_size: int | None = None
+        self.head_chunk_size: int | None = None
+        self.sol_config = None
+        self.sol_evidence: ExecutionEvidence | None = None
+        self.sol_route_records: list[tuple[int, int, mx.array]] | None = None
+        self.sol_step_index = 0
+        self.sol_total_steps = 1
+        self.vsa_h3_config = None
+        self.vdn_runtime = None
+
+    def _attend(self, q, k, v, mask, block_index):
+        """Run SDPA with optional independent head groups.
+
+        Attention heads do not interact until the output projection.  Splitting that axis bounds
+        the SDPA workspace without changing the mathematical operation or the packed sequence.
+        """
+        config = self.sol_config
+        evidence = self.sol_evidence
+        if config is not None:
+            if evidence is not None:
+                evidence.record_call()
+            if config.active(
+                step_index=self.sol_step_index,
+                total_steps=self.sol_total_steps,
+                block_index=int(block_index or 0),
+            ):
+                from .sol_attention import sol_attention, supports_sol_attention
+
+                if evidence is not None:
+                    evidence.record_observed(dtype=q.dtype, shape=q.shape)
+                if q.shape != k.shape or q.shape != v.shape:
+                    if evidence is not None:
+                        evidence.record_fallback("non_self_attention_shape")
+                elif not supports_sol_attention(q, mask, config):
+                    if evidence is not None:
+                        reason = (
+                            "attention_mask"
+                            if mask is not None
+                            else "unsupported_dtype"
+                            if q.dtype != mx.bfloat16
+                            else "unsupported_shape"
+                        )
+                        evidence.record_fallback(reason)
+                else:
+                    if evidence is not None:
+                        evidence.record_eligible()
+                        evidence.record_executed(work_units=0)
+                    output, route_counts = sol_attention(
+                        q,
+                        k,
+                        v,
+                        scale=self.scale,
+                        config=config,
+                        return_route_counts=True,
+                    )
+                    if self.sol_route_records is not None:
+                        self.sol_route_records.append(
+                            (self.sol_step_index, int(block_index or 0), route_counts)
+                        )
+                    return output
+            elif evidence is not None:
+                evidence.record_dense_policy()
+
+        chunk = self.head_chunk_size
+        if chunk is None or q.shape[1] <= chunk:
+            return mx.fast.scaled_dot_product_attention(q, k, v, scale=self.scale, mask=mask)
+        pieces = []
+        for start in range(0, q.shape[1], chunk):
+            stop = min(start + chunk, q.shape[1])
+            piece = mx.fast.scaled_dot_product_attention(
+                q[:, start:stop],
+                k[:, start:stop],
+                v[:, start:stop],
+                scale=self.scale,
+                mask=mask,
+            )
+            mx.eval(piece)
+            pieces.append(piece)
+        return mx.concatenate(pieces, axis=1)
+
+    def _normal(self, x, rotary, mask, block_index):
+        """Original inference path, kept free of diagnostic callables and synchronization."""
+        if self.vdn_runtime is not None:
+            from .vdn import vdn_attention
+
+            return vdn_attention(self, x, rotary, mask, int(block_index or 0))
+        batch, sequence, _ = x.shape
+        qkv = self.qkv_proj(x).reshape(batch, sequence, self.heads, 3, self.head_dim)
+        vsa_config = self.vsa_h3_config
+        if vsa_config is not None and vsa_config.qkv_prep_backend == "metal_fused":
+            if rotary is None:
+                raise ValueError("FastH3 fused Metal QKV preparation requires rotary tables.")
+            from .qkv_prep import fused_qkv_prep
+
+            q, k, v = fused_qkv_prep(
+                qkv,
+                self.q_norm.weight,
+                self.k_norm.weight,
+                *rotary,
+                epsilon=self.q_norm.eps,
+            )
+        else:
+            q, k, v = qkv[:, :, :, 0], qkv[:, :, :, 1], qkv[:, :, :, 2]
+            q = self.q_norm(q).transpose(0, 2, 1, 3)
+            k = self.k_norm(k).transpose(0, 2, 1, 3)
+            v = v.transpose(0, 2, 1, 3)
+            if rotary is not None:
+                q = apply_rotary(q, *rotary)
+                k = apply_rotary(k, *rotary)
+        if self.gate_compress is not None:
+            config = self.vsa_h3_config
+            if config is None:
+                raise RuntimeError(
+                    "This FastH3 checkpoint contains trained VSA-H3 gates. Connect the "
+                    "FastH3 VSA 90% attention policy; silently ignoring the learned branch "
+                    "would execute a different model."
+                )
+            if mask is not None:
+                raise ValueError("FastH3 VSA currently supports unmasked T2VA attention only.")
+            from .vsa_h3 import vsa_h3_attention
+
+            gate = self.gate_compress(x).reshape(
+                batch, sequence, self.heads, self.head_dim
+            ).transpose(0, 2, 1, 3)
+            evidence = self.sol_evidence
+            if evidence is not None:
+                evidence.record_call()
+                evidence.record_observed(dtype=q.dtype, shape=q.shape)
+                evidence.record_eligible()
+                evidence.record_executed(work_units=0)
+            out, route_counts = vsa_h3_attention(
+                q, k, v, gate, scale=self.scale, config=config
+            )
+            if self.sol_route_records is not None:
+                self.sol_route_records.append(
+                    (self.sol_step_index, int(block_index or 0), route_counts)
+                )
+            out = out.transpose(0, 2, 1, 3).reshape(
+                batch, sequence, self.heads * self.head_dim
+            )
+            return self.out_proj(out.astype(x.dtype))
         chunk = self.query_chunk_size
         if chunk is None or q.shape[-2] <= chunk:
-            out = mx.fast.scaled_dot_product_attention(
-                q, k, v, scale=self.scale, mask=mask
-            )
+            out = self._attend(q, k, v, mask, block_index)
         else:
             pieces = []
             for start in range(0, q.shape[-2], chunk):
@@ -203,23 +334,19 @@ class Attention(nn.Module):
                 chunk_mask = mask
                 if mask is not None and mask.shape[-2] == q.shape[-2]:
                     chunk_mask = mask[..., start:stop, :]
-                piece = mx.fast.scaled_dot_product_attention(
-                    q[..., start:stop, :], k, v, scale=self.scale, mask=chunk_mask
+                piece = self._attend(
+                    q[..., start:stop, :], k, v, chunk_mask, block_index
                 )
                 mx.eval(piece)
                 pieces.append(piece)
             out = mx.concatenate(pieces, axis=-2)
-        out = out.transpose(0, 2, 1, 3).reshape(
-            batch, sequence, self.heads * self.head_dim
-        )
+        out = out.transpose(0, 2, 1, 3).reshape(batch, sequence, self.heads * self.head_dim)
         return self.out_proj(out.astype(x.dtype))
 
     def selected_queries(self, x, query_indices, rotary, mask):
         """Attend selected queries to full-sequence K/V for terminal-block research."""
         batch, sequence, _ = x.shape
-        qkv = self.qkv_proj(x).reshape(
-            batch, sequence, self.heads, 3, self.head_dim
-        )
+        qkv = self.qkv_proj(x).reshape(batch, sequence, self.heads, 3, self.head_dim)
         q = mx.take(qkv[:, :, :, 0], query_indices, axis=1)
         k = qkv[:, :, :, 1]
         v = qkv[:, :, :, 2]
@@ -258,8 +385,15 @@ class Attention(nn.Module):
         block_index: int | None = None,
         module_prefix: str = "blocks",
     ) -> mx.array:
+        if self.vdn_runtime is not None and diagnostics is not None:
+            raise ValueError("VDN-H3 does not support dense-attention diagnostic capture.")
+        if self.gate_compress is not None and diagnostics is not None:
+            raise ValueError(
+                "FastH3 VSA does not support dense-attention diagnostics. "
+                "Use the normal-path FastH3 profiler to preserve trained VSA execution."
+            )
         if diagnostics is None:
-            return self._normal(x, rotary, mask)
+            return self._normal(x, rotary, mask, block_index)
         B, S, _ = x.shape
         prefix = f"{module_prefix}.{block_index}.attn"
         # Raw-checkpoint QKV rows are per-head interleaved: (..., heads, 3, head_dim).
@@ -312,9 +446,7 @@ class Attention(nn.Module):
             out = _diagnostic_run(
                 diagnostics,
                 f"{prefix}.sdpa",
-                lambda: mx.fast.scaled_dot_product_attention(
-                    q, k, v, scale=self.scale, mask=mask
-                ),
+                lambda: mx.fast.scaled_dot_product_attention(q, k, v, scale=self.scale, mask=mask),
                 block=block_index,
                 metadata={"query_rows": int(q.shape[-2]), "key_rows": int(k.shape[-2])},
             )
@@ -350,6 +482,7 @@ class FeedForward(nn.Module):
         self.fc1 = nn.Linear(config.hidden_size, 2 * config.ffn_hidden_size, bias=False)
         self.fc2 = nn.Linear(config.ffn_hidden_size, config.hidden_size, bias=False)
         self._ffn = config.ffn_hidden_size
+        self.row_chunk_size: int | None = None
 
     def __call__(
         self,
@@ -359,9 +492,20 @@ class FeedForward(nn.Module):
         module_prefix: str = "blocks",
     ) -> mx.array:
         if diagnostics is None:
-            fused = self.fc1(x)
-            gate, value = fused[..., : self._ffn], fused[..., self._ffn :]
-            return self.fc2(nn.silu(gate) * value)
+            chunk = self.row_chunk_size
+            if chunk is None or x.shape[-2] <= chunk:
+                fused = self.fc1(x)
+                gate, value = fused[..., : self._ffn], fused[..., self._ffn :]
+                return self.fc2(nn.silu(gate) * value)
+            pieces = []
+            for start in range(0, x.shape[-2], chunk):
+                stop = min(start + chunk, x.shape[-2])
+                fused = self.fc1(x[..., start:stop, :])
+                gate, value = fused[..., : self._ffn], fused[..., self._ffn :]
+                piece = self.fc2(nn.silu(gate) * value)
+                mx.eval(piece)
+                pieces.append(piece)
+            return mx.concatenate(pieces, axis=-2)
         prefix = f"{module_prefix}.{block_index}.mlp"
         fused = _diagnostic_run(
             diagnostics,
@@ -501,10 +645,18 @@ class TransformerBlock(nn.Module):
     def __init__(self, config: DiTConfig):
         super().__init__()
         self.norm1 = nn.RMSNorm(config.hidden_size, eps=config.norm_eps)
-        self.attn = Attention(config)
+        self.attn = Attention(config, vsa_gate=config.vsa_gate)
         self.norm2 = nn.RMSNorm(config.hidden_size, eps=config.norm_eps)
         self.mlp = FeedForward(config)
         self.adaln_proj = AdaLayerNormModulation(config)
+        self.compiled_adaln = False
+
+    def _scale_add(self, value, scale, shift):
+        if self.compiled_adaln:
+            from .inference_optimizations import compiled_scale_add
+
+            return compiled_scale_add(value, scale, shift)
+        return value * scale + shift
 
     def __call__(
         self,
@@ -520,10 +672,12 @@ class TransformerBlock(nn.Module):
 
         if diagnostics is None:
             h = self.norm1(x)
-            h = h * (1.0 + scale_msa[adaln_indices]) + shift_msa[adaln_indices]
-            x = x + gate_msa[adaln_indices] * self.attn(h, rotary, mask)
+            h = self._scale_add(h, 1.0 + scale_msa[adaln_indices], shift_msa[adaln_indices])
+            x = x + gate_msa[adaln_indices] * self.attn(
+                h, rotary, mask, block_index=block_index
+            )
             h = self.norm2(x)
-            h = h * (1.0 + scale_mlp[adaln_indices]) + shift_mlp[adaln_indices]
+            h = self._scale_add(h, 1.0 + scale_mlp[adaln_indices], shift_mlp[adaln_indices])
             return x + gate_mlp[adaln_indices] * self.mlp(h)
 
         block_input = x
@@ -545,8 +699,9 @@ class TransformerBlock(nn.Module):
         h = _diagnostic_run(
             diagnostics,
             f"blocks.{block_index}.norm1_adaln",
-            lambda: self.norm1(x) * (1.0 + scale_msa[adaln_indices])
-            + shift_msa[adaln_indices],
+            lambda: self._scale_add(
+                self.norm1(x), 1.0 + scale_msa[adaln_indices], shift_msa[adaln_indices]
+            ),
             block=block_index,
             capture_as="normalized_block_input",
         )
@@ -567,8 +722,9 @@ class TransformerBlock(nn.Module):
         h = _diagnostic_run(
             diagnostics,
             f"blocks.{block_index}.norm2_adaln",
-            lambda: self.norm2(x) * (1.0 + scale_mlp[adaln_indices])
-            + shift_mlp[adaln_indices],
+            lambda: self._scale_add(
+                self.norm2(x), 1.0 + scale_mlp[adaln_indices], shift_mlp[adaln_indices]
+            ),
             block=block_index,
             capture_as="mlp_input",
         )
@@ -595,7 +751,7 @@ class TransformerBlock(nn.Module):
         """Return terminal-block target rows while retaining full-sequence K/V."""
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = modulation
         h = self.norm1(x)
-        h = h * (1.0 + scale_msa[adaln_indices]) + shift_msa[adaln_indices]
+        h = self._scale_add(h, 1.0 + scale_msa[adaln_indices], shift_msa[adaln_indices])
         target_adaln = adaln_indices[query_indices]
         target = mx.take(x, query_indices, axis=1)
         target = target + gate_msa[target_adaln] * self.attn.selected_queries(
@@ -605,7 +761,7 @@ class TransformerBlock(nn.Module):
             mask,
         )
         h = self.norm2(target)
-        h = h * (1.0 + scale_mlp[target_adaln]) + shift_mlp[target_adaln]
+        h = self._scale_add(h, 1.0 + scale_mlp[target_adaln], shift_mlp[target_adaln])
         return target + gate_mlp[target_adaln] * self.mlp(h)
 
 
@@ -646,6 +802,17 @@ class MiniMaxH3DiT(nn.Module):
 
         # Rotary is a computed buffer, not a parameter (`rope.inv_freq` is recomputed bit-exactly).
         self.rope = RotaryPosEmbed3D(config)
+        self.sol_attention_config = None
+        self.last_sol_attention_config = None
+        self.sol_attention_evidence: ExecutionEvidence | None = None
+        self.sol_route_records: list[tuple[int, int, mx.array]] = []
+        self.sol_route_report: dict[str, object] | None = None
+        self.fast_h3_vsa_config = None
+        self.fast_h3_approximation_config = None
+        self.fast_h3_approximation_report: dict[str, object] | None = None
+        self.vdn_runtime = None
+        self._fast_h3_layer_selection_key = None
+        self._fast_h3_active_layers: tuple[int, ...] | None = None
 
     def set_attention_query_chunk_size(self, chunk_size: int | None) -> None:
         """Select dense attention or memory-bounded query chunks for every attention layer."""
@@ -658,6 +825,124 @@ class MiniMaxH3DiT(nn.Module):
         paged = getattr(self, "paged_blocks", None)
         if paged is not None:
             paged.query_chunk_size = chunk_size
+
+    def set_attention_head_chunk_size(self, chunk_size: int | None) -> None:
+        """Bound SDPA workspace by processing independent attention-head groups."""
+        if chunk_size is not None and chunk_size < 1:
+            raise ValueError("attention head chunk size must be positive")
+        for block in self.token_refiner.blocks:
+            block.attn.head_chunk_size = chunk_size
+        for block in self.blocks:
+            block.attn.head_chunk_size = chunk_size
+
+    def set_ffn_row_chunk_size(self, chunk_size: int | None) -> None:
+        """Bound the SwiGLU intermediate by processing independent packed rows."""
+        if chunk_size is not None and chunk_size < 1:
+            raise ValueError("FFN row chunk size must be positive")
+        for block in self.token_refiner.blocks:
+            block.mlp.row_chunk_size = chunk_size
+        for block in self.blocks:
+            block.mlp.row_chunk_size = chunk_size
+
+    def set_sol_attention_config(self, config) -> None:
+        """Install either the Sol experiment or the trained FastH3 VSA-H3 policy."""
+        if config is not None:
+            config.validate()
+        from .vsa_h3 import FastH3VSAConfig
+
+        is_vsa = isinstance(config, FastH3VSAConfig)
+        self.fast_h3_vsa_config = config if is_vsa else None
+        self.sol_attention_config = None if is_vsa else config
+        self.last_sol_attention_config = config
+        self.sol_attention_evidence = (
+            ExecutionEvidence(
+                requested_backend="fast_h3_vsa" if is_vsa else "sol_attention",
+                resolved_backend=(
+                    f"{config.consumer_backend}_vsa_h3"
+                    if is_vsa
+                    else "mlx_fused_sol_bf16"
+                ),
+                scope="H3 packed transformer self-attention",
+            )
+            if config is not None
+            else None
+        )
+        self.sol_route_records = []
+        self.sol_route_report = None
+        for block in self.blocks:
+            block.attn.sol_config = None if is_vsa else config
+            block.attn.vsa_h3_config = config if is_vsa else None
+            block.attn.sol_evidence = self.sol_attention_evidence
+            block.attn.sol_route_records = self.sol_route_records
+        paged = getattr(self, "paged_blocks", None)
+        if paged is not None:
+            paged.sol_config = None if is_vsa else config
+            paged.vsa_h3_config = config if is_vsa else None
+            paged.sol_evidence = self.sol_attention_evidence
+            paged.sol_route_records = self.sol_route_records
+
+    def set_fast_h3_approximation_config(self, config) -> None:
+        """Install explicit FastH3 generative approximations or clear them with ``None``."""
+        if config is not None:
+            config.validate(self.config.num_layers)
+        self.fast_h3_approximation_config = config
+        self.fast_h3_approximation_report = None
+        self._fast_h3_layer_selection_key = None
+        self._fast_h3_active_layers = None
+
+    def set_vdn_runtime(self, runtime) -> None:
+        """Install or clear OpenVDN attention on resident and lazily materialized blocks."""
+        if runtime is not None and self.config.vsa_gate:
+            raise ValueError("VDN-H3 requires the H3 base, not a trained FastH3 VSA checkpoint.")
+        self.vdn_runtime = runtime
+        if getattr(self, "paged_blocks", None) is not None:
+            self.paged_blocks.vdn_runtime = runtime
+        for block in self.blocks:
+            block.attn.vdn_runtime = runtime
+
+    def vdn_report(self) -> dict[str, object] | None:
+        return None if self.vdn_runtime is None else self.vdn_runtime.report()
+
+    def sol_attention_report(self) -> dict[str, object] | None:
+        """Return the resolved H3 Sol policy and actual generation dispatch evidence."""
+
+        config = self.last_sol_attention_config
+        evidence = self.sol_attention_evidence
+        if config is None or evidence is None:
+            return None
+        if self.sol_route_report is None and self.sol_route_records:
+            if self.fast_h3_vsa_config is not None:
+                from .vsa_h3 import vsa_h3_route_report
+
+                self.sol_route_report = vsa_h3_route_report(self.sol_route_records)
+            else:
+                from .sol_attention import route_telemetry_report
+
+                self.sol_route_report = route_telemetry_report(self.sol_route_records)
+            evidence.work_units_processed += int(
+                self.sol_route_report["processed_key_row_units"]
+            )
+            evidence.work_units_avoided += int(
+                self.sol_route_report["avoided_key_row_units"]
+            )
+        snapshot = evidence.snapshot()
+        return {
+            **config.__dict__,
+            **snapshot,
+            "storage_layout": (
+                "compact_preordered"
+                if getattr(config, "consumer_backend", None) == "metal_indexed"
+                else (
+                    "padded_tiles"
+                    if self.fast_h3_vsa_config is not None
+                    else "native_sequence"
+                )
+            ),
+            "attention_calls": snapshot["total_calls"],
+            "sparse_kernel_calls": snapshot["executed_calls"],
+            "fallback_calls": snapshot["fallback_calls"],
+            **(self.sol_route_report or {}),
+        }
 
     def embed_timesteps(self, timesteps: mx.array) -> mx.array:
         """Return original MLP embeddings or linearly interpolated pruned AdaLN coordinates."""
@@ -714,30 +999,25 @@ class MiniMaxH3DiT(nn.Module):
         video_embeds = _diagnostic_run(
             diagnostics,
             "input.video_projection",
-            lambda: self.video_patch_proj(
-                video_latents.astype(param_dtype(self.video_patch_proj))
-            ),
+            lambda: self.video_patch_proj(video_latents.astype(param_dtype(self.video_patch_proj))),
             metadata={"rows": int(video_latents.shape[1])},
         )
         audio_embeds = _diagnostic_run(
             diagnostics,
             "input.audio_projection",
-            lambda: self.audio_patch_proj(
-                audio_latents.astype(param_dtype(self.audio_patch_proj))
-            ),
+            lambda: self.audio_patch_proj(audio_latents.astype(param_dtype(self.audio_patch_proj))),
             metadata={"rows": int(audio_latents.shape[1])},
         )
         text = _diagnostic_run(
             diagnostics,
             "input.text_projection",
-            lambda: self.condition_proj(
-                text_embeds.astype(param_dtype(self.condition_proj))
-            ),
+            lambda: self.condition_proj(text_embeds.astype(param_dtype(self.condition_proj))),
             metadata={"rows": int(text_embeds.shape[1])},
         )
         text = self.token_refiner(text, diagnostics=diagnostics)
 
         B = text.shape[0]
+
         def scatter_inputs():
             packed = mx.zeros((B, seq_len, text.shape[-1]), dtype=text.dtype)
             packed[:, text_indices] = text
@@ -803,6 +1083,7 @@ class MiniMaxH3DiT(nn.Module):
         step_index: int = 0,
         total_steps: int = 1,
         diagnostics=None,
+        fun_control=None,
     ) -> tuple[mx.array, mx.array]:
         """Predict the video and audio velocity for one packed sequence.
 
@@ -888,6 +1169,38 @@ class MiniMaxH3DiT(nn.Module):
                 audio_indices=audio_indices,
                 text_indices=text_indices,
             )
+        control_model = None
+        control_state = None
+        control_strength = 0.0
+        control_next = 0
+        if fun_control is not None:
+            if any(
+                value is not None
+                for value in (blockcache, easycache_core, trajectory_forecast)
+            ) or terminal_target_only:
+                raise ValueError(
+                    "H3 Fun ControlNet currently requires dense, non-cached sampling"
+                )
+            if self.sol_attention_config is not None or self.fast_h3_vsa_config is not None:
+                raise ValueError("H3 Fun ControlNet is not qualified with sparse attention")
+            if (
+                self.fast_h3_approximation_config is not None
+                and self.fast_h3_approximation_config.enabled
+            ):
+                raise ValueError("H3 Fun ControlNet is not qualified with FastH3 approximations")
+            control_model = fun_control.model
+            control_model.validate_base(self)
+            control_strength = float(fun_control.strength)
+            if not 0.0 <= control_strength <= 1.0:
+                raise ValueError("H3 Fun ControlNet strength must be between 0 and 1")
+            control_state = control_model.init_stream(
+                x,
+                fun_control.latent,
+                video_indices,
+                terminal_video_row_start,
+            )
+        if self.vdn_runtime is not None:
+            self.vdn_runtime.set_layout(video_indices, text_indices, position_ids)
         core_input = x
         if easycache_core is not None and easycache_core.last_was_core_reuse:
             x = easycache_core.reuse_core(x)
@@ -913,9 +1226,134 @@ class MiniMaxH3DiT(nn.Module):
         if terminal_target_only:
             target_video_indices = video_indices[terminal_video_row_start:]
             target_audio_indices = audio_indices[terminal_audio_row_start:]
-            terminal_query_indices = mx.concatenate(
-                (target_video_indices, target_audio_indices)
+            terminal_query_indices = mx.concatenate((target_video_indices, target_audio_indices))
+        sol_config = self.sol_attention_config
+        if sol_config is not None:
+            # H3 packs target video last. Everything before its first row is the multimodal
+            # prefix and must remain an exact K/V sink with exact query rows.
+            prefix_rows = int(video_indices[terminal_video_row_start].item())
+            active_config = sol_config.with_prefix(prefix_rows)
+            self.last_sol_attention_config = active_config
+            for block in self.blocks:
+                block.attn.sol_config = active_config
+                block.attn.sol_step_index = step_index
+                block.attn.sol_total_steps = total_steps
+            paged_context = getattr(self, "paged_blocks", None)
+            if paged_context is not None:
+                paged_context.sol_config = active_config
+                paged_context.sol_step_index = step_index
+                paged_context.sol_total_steps = total_steps
+        vsa_config = self.fast_h3_vsa_config
+        active_vsa = None
+        vsa_geometry = None
+        if vsa_config is not None:
+            prefix_segments = (
+                int(text_indices.shape[0]),
+                int(terminal_video_row_start),
+                int(audio_indices.shape[0]),
             )
+            target_video_indices = video_indices[terminal_video_row_start:]
+            target_positions = position_ids[target_video_indices].tolist()
+            video_grid = tuple(
+                len({float(row[axis]) for row in target_positions}) for axis in range(3)
+            )
+            active_vsa = vsa_config.with_layout(
+                prefix_segments=prefix_segments,
+                video_grid=video_grid,
+            )
+            self.last_sol_attention_config = active_vsa
+            for block in self.blocks:
+                block.attn.vsa_h3_config = active_vsa
+                block.attn.sol_step_index = step_index
+                block.attn.sol_total_steps = total_steps
+            if paged is not None:
+                paged.vsa_h3_config = active_vsa
+                paged.sol_step_index = step_index
+                paged.sol_total_steps = total_steps
+            if active_vsa.block_stack_preorder:
+                if any(
+                    value is not None
+                    for value in (blockcache, easycache_core, trajectory_forecast)
+                ) or terminal_target_only:
+                    raise ValueError(
+                        "FastH3 VSA block-stack ordering cannot be combined with cache, "
+                        "forecast, or terminal-target experiments. Disconnect the other "
+                        "accelerator or disable VSA block-stack ordering."
+                    )
+                if mask is not None:
+                    raise ValueError(
+                        "FastH3 VSA block-stack ordering currently requires unmasked T2VA."
+                    )
+                from .vsa_h3 import build_vsa_h3_geometry, vsa_h3_stack_order
+
+                vsa_geometry = build_vsa_h3_geometry(
+                    active_vsa.prefix_segments, active_vsa.video_grid
+                )
+                x = vsa_h3_stack_order(x, vsa_geometry, axis=1)
+                adaln_indices = vsa_h3_stack_order(
+                    adaln_indices, vsa_geometry, axis=0
+                )
+                rotary = tuple(
+                    vsa_h3_stack_order(table, vsa_geometry, axis=0)
+                    for table in rotary
+                )
+        approximation_config = self.fast_h3_approximation_config
+        active_layers = tuple(range(self.config.num_layers))
+        pairing_geometry = None
+        if approximation_config is not None and approximation_config.enabled:
+            if any(
+                value is not None
+                for value in (blockcache, easycache_core, trajectory_forecast)
+            ) or terminal_target_only:
+                raise ValueError(
+                    "FastH3 layer/token approximations require an isolated baseline run. "
+                    "Disconnect cache, forecast, and terminal-target experiments."
+                )
+            if approximation_config.pair_target_video and active_vsa is not None:
+                raise ValueError(
+                    "FastH3 target-video pairing is not yet calibrated with trained VSA-H3. "
+                    "Use the dense FastH3 student or disable token pairing."
+                )
+            if approximation_config.pair_target_video and mask is not None:
+                raise ValueError("FastH3 target-video pairing currently requires unmasked T2VA.")
+            from .fasth3_approx import (
+                approximation_report,
+                build_target_video_pairing,
+                select_active_layers,
+            )
+
+            selection_key = (
+                id(modulation_cache),
+                approximation_config,
+                self.config.num_layers,
+            )
+            if self._fast_h3_layer_selection_key != selection_key:
+                self._fast_h3_active_layers = select_active_layers(
+                    approximation_config,
+                    self.config.num_layers,
+                    modulation_cache,
+                )
+                self._fast_h3_layer_selection_key = selection_key
+            active_layers = self._fast_h3_active_layers
+            if approximation_config.pair_target_video:
+                target_video = video_indices[terminal_video_row_start:]
+                if int(target_video.shape[0]) < 1:
+                    raise ValueError("FastH3 target-video pairing found no target video rows.")
+                target_positions = position_ids[target_video].tolist()
+                video_grid = tuple(
+                    len({float(row[axis]) for row in target_positions}) for axis in range(3)
+                )
+                pairing_geometry = build_target_video_pairing(
+                    int(target_video[0].item()), video_grid
+                )
+            self.fast_h3_approximation_report = approximation_report(
+                approximation_config,
+                active_layers,
+                self.config.num_layers,
+                pairing_geometry,
+            )
+        else:
+            self.fast_h3_approximation_report = None
         if paged is not None:
             if blockcache is not None and hasattr(blockcache, "segment_start"):
                 raise ValueError(
@@ -935,6 +1373,12 @@ class MiniMaxH3DiT(nn.Module):
                 step_index,
                 total_steps,
                 diagnostics,
+                active_layers,
+                approximation_config,
+                pairing_geometry,
+                control_model,
+                control_state,
+                control_strength,
             )
         elif blockcache is not None and hasattr(blockcache, "segment_start"):
             blockcache.begin_step()
@@ -979,10 +1423,7 @@ class MiniMaxH3DiT(nn.Module):
                         x = reused
                         i = blockcache.segment_end(segment_index) + 1
                         continue
-                if (
-                    current_segment is not None
-                    and i == blockcache.segment_end(current_segment)
-                ):
+                if current_segment is not None and i == blockcache.segment_end(current_segment):
                     blockcache.update_segment(
                         current_segment,
                         before_anchor,
@@ -997,7 +1438,35 @@ class MiniMaxH3DiT(nn.Module):
                 i += 1
         else:
             before_block_zero = x
+            active_layer_set = set(active_layers)
+            pairing_state = None
+            full_adaln_indices = adaln_indices
+            full_rotary = rotary
             for i, block in enumerate(self.blocks):
+                if (
+                    pairing_geometry is not None
+                    and pairing_state is not None
+                    and i >= approximation_config.pair_end_layer
+                ):
+                    from .fasth3_approx import restore_target_video_rows
+
+                    x = restore_target_video_rows(x, pairing_state)
+                    adaln_indices = full_adaln_indices
+                    rotary = full_rotary
+                    pairing_state = None
+                if i not in active_layer_set:
+                    continue
+                if (
+                    pairing_geometry is not None
+                    and pairing_state is None
+                    and approximation_config.pair_start_layer <= i
+                    < approximation_config.pair_end_layer
+                ):
+                    from .fasth3_approx import pair_target_video_rows
+
+                    x, adaln_indices, rotary, pairing_state = pair_target_video_rows(
+                        x, adaln_indices, rotary, pairing_geometry
+                    )
                 if diagnostics is not None:
                     diagnostics.prepare_block(x, i)
                 modulation = (
@@ -1024,6 +1493,21 @@ class MiniMaxH3DiT(nn.Module):
                         diagnostics=diagnostics,
                         block_index=i,
                     )
+                if (
+                    control_model is not None
+                    and control_next < len(control_model.injection_layers)
+                    and control_model.injection_layers[control_next] == i
+                ):
+                    control_state, control_skip = control_model.step(
+                        control_next,
+                        control_state,
+                        adaln_indices,
+                        rotary,
+                        audio_indices,
+                        mask,
+                    )
+                    x = x + control_strength * control_skip
+                    control_next += 1
                 if i == 0 and blockcache is not None:
                     after_block_zero = x
                     reused = blockcache.try_reuse(
@@ -1037,6 +1521,15 @@ class MiniMaxH3DiT(nn.Module):
                     if reused is not None:
                         x = reused
                         break
+            if pairing_state is not None:
+                from .fasth3_approx import restore_target_video_rows
+
+                x = restore_target_video_rows(x, pairing_state)
+
+        if vsa_geometry is not None:
+            from .vsa_h3 import vsa_h3_stack_order
+
+            x = vsa_h3_stack_order(x, vsa_geometry, inverse=True, axis=1)
 
         if (
             blockcache is not None
@@ -1160,17 +1653,13 @@ class MiniMaxH3DiT(nn.Module):
         video_out = _diagnostic_run(
             diagnostics,
             "output.video_projection",
-            lambda: self.final_layer.video_out(
-                x.astype(param_dtype(self.final_layer.video_out))
-            ),
+            lambda: self.final_layer.video_out(x.astype(param_dtype(self.final_layer.video_out))),
             metadata={"sequence_rows": int(x.shape[1])},
         )
         audio_out = _diagnostic_run(
             diagnostics,
             "output.audio_projection",
-            lambda: self.final_layer.audio_out(
-                x.astype(param_dtype(self.final_layer.audio_out))
-            ),
+            lambda: self.final_layer.audio_out(x.astype(param_dtype(self.final_layer.audio_out))),
             metadata={"sequence_rows": int(x.shape[1])},
         )
         video_result = video_out[:, video_indices]
@@ -1194,16 +1683,57 @@ class MiniMaxH3DiT(nn.Module):
         step_index,
         total_steps,
         diagnostics,
+        active_layers,
+        approximation_config,
+        pairing_geometry,
+        control_model=None,
+        control_state=None,
+        control_strength=0.0,
     ):
         """Run bounded weight windows and complete activations before retiring each window."""
         paged = self.paged_blocks
         before_block_zero = x
         after_block_zero = None
         cache_hit = False
-        for start in range(0, paged.num_blocks, paged.window_size):
-            with paged.window(start) as blocks:
-                for offset, block in enumerate(blocks):
-                    index = start + offset
+        selected = tuple(int(index) for index in active_layers)
+        selected_execution = len(selected) != paged.num_blocks
+        if selected_execution:
+            paged.pages_avoided += paged.num_blocks - len(selected)
+        pairing_state = None
+        full_adaln_indices = adaln_indices
+        full_rotary = rotary
+        control_next = 0
+        for chunk_start in range(0, len(selected), paged.window_size):
+            indices = selected[chunk_start : chunk_start + paged.window_size]
+            window = (
+                paged.selected_window(indices)
+                if selected_execution
+                else paged.window(indices[0])
+            )
+            with window as blocks:
+                for index, block in zip(indices, blocks, strict=True):
+                    if (
+                        pairing_geometry is not None
+                        and pairing_state is not None
+                        and index >= approximation_config.pair_end_layer
+                    ):
+                        from .fasth3_approx import restore_target_video_rows
+
+                        x = restore_target_video_rows(x, pairing_state)
+                        adaln_indices = full_adaln_indices
+                        rotary = full_rotary
+                        pairing_state = None
+                    if (
+                        pairing_geometry is not None
+                        and pairing_state is None
+                        and approximation_config.pair_start_layer <= index
+                        < approximation_config.pair_end_layer
+                    ):
+                        from .fasth3_approx import pair_target_video_rows
+
+                        x, adaln_indices, rotary, pairing_state = pair_target_video_rows(
+                            x, adaln_indices, rotary, pairing_geometry
+                        )
                     if diagnostics is not None:
                         diagnostics.prepare_block(x, index)
                     modulation = (
@@ -1220,6 +1750,21 @@ class MiniMaxH3DiT(nn.Module):
                         diagnostics=diagnostics,
                         block_index=index,
                     )
+                    if (
+                        control_model is not None
+                        and control_next < len(control_model.injection_layers)
+                        and control_model.injection_layers[control_next] == index
+                    ):
+                        control_state, control_skip = control_model.step(
+                            control_next,
+                            control_state,
+                            adaln_indices,
+                            rotary,
+                            audio_indices,
+                            mask,
+                        )
+                        x = x + control_strength * control_skip
+                        control_next += 1
                     if index == 0:
                         after_block_zero = x
                         if blockcache is not None:
@@ -1240,6 +1785,10 @@ class MiniMaxH3DiT(nn.Module):
                 mx.eval(x)
             if cache_hit:
                 break
+        if pairing_state is not None:
+            from .fasth3_approx import restore_target_video_rows
+
+            x = restore_target_video_rows(x, pairing_state)
         if after_block_zero is None:
             raise RuntimeError("Paged H3 execution did not evaluate transformer block zero.")
         return x, before_block_zero, after_block_zero
@@ -1255,10 +1804,6 @@ class MiniMaxH3DiT(nn.Module):
         """Run current exact output modulation and heads over compact target features."""
         video = self.final_layer.norm_out(video_hidden, temb, video_timestep_indices)
         audio = self.final_layer.norm_out(audio_hidden, temb, audio_timestep_indices)
-        video = self.final_layer.video_out(
-            video.astype(param_dtype(self.final_layer.video_out))
-        )
-        audio = self.final_layer.audio_out(
-            audio.astype(param_dtype(self.final_layer.audio_out))
-        )
+        video = self.final_layer.video_out(video.astype(param_dtype(self.final_layer.video_out)))
+        audio = self.final_layer.audio_out(audio.astype(param_dtype(self.final_layer.audio_out)))
         return video, audio

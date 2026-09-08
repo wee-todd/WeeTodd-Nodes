@@ -28,6 +28,8 @@ from dataclasses import dataclass
 import mlx.core as mx
 import numpy as np
 
+from wee_todd_mlx.numpy_import import adopt_numpy_array
+
 from .config import TAG_AUDIO, TAG_VIDEO
 
 # MiniMax-H3 generates at a fixed 24 fps and was released for a 768-pixel short edge only, with a
@@ -393,11 +395,11 @@ def build_packed_sequence(
 
     return PackedSequence(
         sequence_length=seq_len,
-        position_ids=mx.array(position_ids.astype(np.float32)),
-        token_tags=mx.array(tags.astype(np.int32)),
-        video_indices=mx.array(video_idx.astype(np.int32)),
-        audio_indices=mx.array(audio_idx.astype(np.int32)),
-        text_indices=mx.array(text_idx.astype(np.int32)),
+        position_ids=adopt_numpy_array(position_ids, dtype=np.float32),
+        token_tags=adopt_numpy_array(tags, dtype=np.int32),
+        video_indices=adopt_numpy_array(video_idx, dtype=np.int32),
+        audio_indices=adopt_numpy_array(audio_idx, dtype=np.int32),
+        text_indices=adopt_numpy_array(text_idx, dtype=np.int32),
         num_condition_video_rows=num_condition_rows,
         num_condition_audio_rows=num_condition_audio_rows,
         num_continuation_video_rows=num_continuation_rows,
@@ -440,4 +442,7 @@ def build_row_timesteps(
     rows[audio_idx[:n_cont_a]] = float(continuation_audio_timestep)
 
     distinct, inverse = np.unique(rows, return_inverse=True)
-    return mx.array(distinct.astype(np.float32)), mx.array(inverse.astype(np.int32))
+    return (
+        adopt_numpy_array(distinct, dtype=np.float32),
+        adopt_numpy_array(inverse, dtype=np.int32),
+    )

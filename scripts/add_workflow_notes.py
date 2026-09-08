@@ -9,7 +9,6 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-WORKFLOW_GLOBS = ("workflows/*.json", "examples/*_workflow.json")
 NOTE_TITLE = "Setup and model downloads"
 
 H3_OFFICIAL = "https://huggingface.co/MiniMaxAI/MiniMax-H3"
@@ -23,10 +22,12 @@ DRBAPH_V4 = (
 LARRY_TURBO = "https://huggingface.co/larryvrh/MiniMax-H3-Turbo-Lora"
 LTX23 = "https://huggingface.co/Lightricks/LTX-2.3"
 GEMMA3_MLX = "https://huggingface.co/mlx-community/gemma-3-12b-it-4bit"
+LTX25 = "https://huggingface.co/Lightricks/LTX-2.5"
+LTX25_UPSCALER = "https://huggingface.co/Lightricks/LTX-2.5-22b-IC-LoRA-Pixel-Spatial-Upscaler"
 
 
 def _workflow_paths(project: Path) -> list[Path]:
-    return sorted({path for pattern in WORKFLOW_GLOBS for path in project.glob(pattern)})
+    return sorted((project / "workflows").rglob("*.json"))
 
 
 def _first_string_widget(node: dict) -> str | None:
@@ -64,6 +65,94 @@ def _model_note(path: Path, workflow: dict) -> str:
         )
         return "\n".join(lines)
 
+    if any(str(node_type).startswith("WeeToddLTX25") for node_type in types):
+        upscale = "WeeToddLTX25VideoUpscale" in types
+        lines.extend(
+            [
+                "2. Accept the LTX 2.5 license and download the split model components.",
+                "3. Use `ComfyUI/models/` or shared roots from `extra_model_paths.yaml`.",
+                (
+                    "4. Select a source movie. Queue the workflow."
+                    if upscale
+                    else "4. Queue the workflow after **LTX 2.5 Preflight** succeeds."
+                ),
+                "",
+                "### Downloads",
+                "",
+                f"- [LTX 2.5 model components]({LTX25})",
+            ]
+        )
+        if upscale:
+            lines.append(f"- [Pixel-spatial upscaler IC-LoRA]({LTX25_UPSCALER})")
+        return "\n".join(lines)
+
+    if "WeeToddH3FastH3ProductionProfile" in types:
+        profile = next(
+            node for node in nodes if node.get("type") == "WeeToddH3FastH3ProductionProfile"
+        )
+        is_speed = any("40 layers" in str(value) for value in profile.get("widgets_values", []))
+        lines.extend([
+            "2. Download H3 components and convert the pinned native FastH3 VSA student.",
+            "3. Keep the relative Component Loader paths unchanged.",
+            "4. Queue after H3 Preflight succeeds; review the profile and hardware advisories.",
+            "", "### H3 downloads", "",
+            f"- [Original H3 partition, processor, tokenizer, and audio VAE]({H3_OFFICIAL})",
+            "- [FastH3 VSA student](https://huggingface.co/FastVideo/FastVideo-FastH3-4-step-Preview-v1-VSA-DataFree)",
+            "  Use scripts/convert_fastvideo_fasth3.py; the native output folder is",
+            "  ComfyUI/models/MiniMax-H3/transformers/weetodd-fasth3-vsa-datafree-q8-paged.",
+            f"- [Q8 paged text encoder]({H3_Q8_QWEN})",
+            f"- [MLX Q8 video VAE]({H3_Q8_VAE})",
+            "", "### Execution contract", "",
+            "The ~35.05B FastH3 VSA student supports T2VA only and uses four real evaluations.",
+            "A 4.0-second request produces 107 frames at 24 fps. All weighted stages unload.",
+            "Connect config, sol_attention, and profile_info from the profile to H3 Sample.",
+            "Do not add LoRA, cache, forecast, VDN, or continuation to this profile.",
+            "The resolution timing labels are the 50-layer Balanced M3 Ultra reference matrix.",
+            "Memory budgets are advisories, not validation on lower-memory hardware.",
+        ])
+        if is_speed:
+            lines.extend([
+                "", "### 40-layer candidate", "",
+                "Also connect fastvideo from profile output 4 to H3 Sample.",
+                "Ten joint video/audio layers are skipped per evaluation, changing the output.",
+                "Publication requires 40-layer/160-call compact-Metal evidence with no fallback.",
+                "Sound-effect fidelity and event sync still require listening acceptance.",
+                "Balanced remains recommended; the timing labels are not 40-layer measurements.",
+            ])
+        else:
+            lines.append(
+                "Balanced uses compact indexed Metal; Conservative is the grouped fallback."
+            )
+            lines.append("Fused QKV and the 40-layer Speed candidate remain explicit opt-ins.")
+        return "\n".join(lines)
+
+    if "WeeToddH3VDNCheckpoint" in types:
+        lines.extend([
+            "2. Install the MLX H3 base components using the README model layout.",
+            "   Resident and paged Q8 bases are supported; trained FastH3 VSA students are not.",
+            "3. Download the selected OpenVDN stage into ComfyUI/models/OpenVDN/vdn-minimax-h3.",
+            "   Keep model_spec.json, linear_branch/, and adapters/ together.",
+            "4. For an AdaLN-pruned base, provide its original h3_silu_temb_grid.safetensors",
+            "   through VDN Checkpoint's adaln_input_grid field (normal ComfyUI LoRA paths).",
+            "5. Queue the workflow after component and VDN validation succeeds.",
+            "", "### Downloads", "",
+            "- [VDN-H3 stages](https://huggingface.co/OpenVDN/vdn-minimax-h3)",
+            f"- [Original MiniMax H3 components]({H3_OFFICIAL})",
+            f"- [Q8 paged transformer]({H3_Q8_TRANSFORMER})",
+            f"- [Q8 paged text encoder]({H3_Q8_QWEN})",
+            f"- [MLX Q8 video VAE]({H3_Q8_VAE})",
+            "- Reuse h3_silu_temb_grid.safetensors in ComfyUI/models/loras for the pruned Q8 base.",
+            "", "### Experimental status", "",
+            "This is a 384p wiring graph, not a quality or speed benchmark. The 8-step stage",
+            "uses nine schedule points and both the default and named Turbo adapters.",
+            "The FP32 Metal solve is checked against CPU and falls back on failure.",
+            "Small-array numerical tests pass; full-checkpoint render parity is not established.",
+            "Keep config, vdn, and loras connected from VDN Checkpoint to H3 Sample.",
+            "Do not add cache, forecast, sparse-attention, FastVideo, or Hi Res Fix modifiers.",
+            "Review the model's Community License and territory restrictions before use.",
+        ])
+        return "\n".join(lines)
+
     component_nodes = [node for node in nodes if node.get("type") == "WeeToddH3ComponentLoader"]
     component_values = component_nodes[0].get("widgets_values", []) if component_nodes else []
     component_text = " ".join(str(value) for value in component_values)
@@ -75,8 +164,10 @@ def _model_note(path: Path, workflow: dict) -> str:
     )
 
     media = []
+    media_types = []
     for node in nodes:
         if node.get("type") in {"LoadImage", "LoadVideo"}:
+            media_types.append(node.get("type"))
             value = _first_string_widget(node)
             if value and value not in media:
                 media.append(value)
@@ -87,10 +178,13 @@ def _model_note(path: Path, workflow: dict) -> str:
             "3. Keep the relative Component Loader paths unchanged.",
         ]
     )
-    if media:
-        lines.append(
-            "4. Replace these input placeholders: " + ", ".join(f"`{item}`" for item in media) + "."
-        )
+    if media_types:
+        inputs = []
+        if "LoadImage" in media_types:
+            inputs.append("required images")
+        if "LoadVideo" in media_types:
+            inputs.append("required video or audio source")
+        lines.append("4. Select the " + " and ".join(inputs) + " in ComfyUI.")
         queue_step = 5
     else:
         queue_step = 4

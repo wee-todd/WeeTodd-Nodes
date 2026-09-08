@@ -61,7 +61,7 @@
   "5": {
     "class_type": "LoadImage",
     "inputs": {
-      "image": "tall_white_reference_sheet.png"
+      "image": ""
     }
   },
   "6": {
@@ -77,7 +77,7 @@
   "7": {
     "class_type": "LoadImage",
     "inputs": {
-      "image": "grey_alien_reference_sheet.png"
+      "image": ""
     }
   },
   "8": {

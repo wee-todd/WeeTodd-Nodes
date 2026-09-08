@@ -14,6 +14,7 @@ from typing import Any
 import numpy as np
 
 from minimax_h3_mlx.media import FFmpegExecutable, resolve_ffmpeg, save_wav
+from wee_todd_mlx.media_serialization import write_all_contiguous
 
 from .decoding import (
     AUDIO_VAE_RUNTIME,
@@ -93,7 +94,8 @@ class RawVideoEncoder:
             )
         if self._process.stdin is None:
             raise RuntimeError("Direct video encoder has no input stream.")
-        self._process.stdin.write(np.ascontiguousarray(chunk).tobytes())
+        contiguous = np.ascontiguousarray(chunk)
+        write_all_contiguous(contiguous, self._process.stdin)
         self.frames += int(chunk.shape[0])
 
     def close(self) -> None:
@@ -340,7 +342,6 @@ def _mux_audio(
         "aac",
         "-b:a",
         "192k",
-        "-shortest",
         str(output),
     ]
     completed = subprocess.run(command, capture_output=True)
@@ -414,10 +415,13 @@ def publish_latents_direct(
     encoder_factory=RawVideoEncoder,
     muxer=_mux_audio,
     ffmpeg_path: str | Path | None = None,
+    video_tile_mode: str = "fixed",
 ) -> H3DirectPublicationResult:
     """Decode, stream, mux, and atomically publish one synchronized latent result."""
     if not 0 <= crf <= 51:
         raise ValueError("CRF must be between 0 and 51.")
+    if video_tile_mode not in {"fixed", "geometry_experimental"}:
+        raise ValueError("Unknown H3 video VAE tile mode.")
     if max_av_drift_seconds < 0:
         raise ValueError("Maximum audio-video drift must be zero or positive.")
     if float(latents.fps) != 24.0 or int(latents.sample_rate) != 32000:
@@ -458,7 +462,7 @@ def publish_latents_direct(
                 crf,
             )
         video = video_cache.decode_stream(
-            H3VideoVAESpec.from_components(components),
+            H3VideoVAESpec.from_components(components, tile_mode=video_tile_mode),
             latents,
             encoder.write,
             unload_after=True,
@@ -499,6 +503,7 @@ def publish_latents_direct(
 
         metadata = {
             **supplied,
+            "phase_memory": getattr(latents, "phase_memory", None),
             "format": "mp4",
             "video_codec": "h264",
             "audio_codec": "aac",
@@ -509,7 +514,9 @@ def publish_latents_direct(
             "peak_rgb8_chunk_bytes": video.peak_rgb8_chunk_bytes,
             "video_vae_quantization": video.quantization,
             "tile_decode_batch": video.decode_batch,
+            "tile_plan": getattr(video, "tile_plan", None),
             "mlx_process_peak_bytes": _mlx_process_peak_bytes(),
+            "mlx_process_peak_scope": "since the last phase reset; use phase_memory.run_peak_bytes",
             "publish_seconds": time.perf_counter() - started,
             "output_file": target.name,
             "ffmpeg": ffmpeg.to_dict() if ffmpeg is not None else {"source": "injected"},
@@ -697,6 +704,7 @@ def publish_latent_chain_direct(
             "video_codec": "h264",
             "audio_codec": "aac",
             "publication_mode": "direct_mlx_chained_stream",
+            "window_phase_memory": [getattr(window, "phase_memory", None) for window in windows],
             "crf": crf,
             "timeline": timeline.metadata(),
             "video_windows": video_reports,
@@ -705,6 +713,7 @@ def publish_latent_chain_direct(
             "audio_joins": audio_join_reports,
             "join_policy": "motion_matched_video_and_50ms_cosine_audio",
             "mlx_process_peak_bytes": _mlx_process_peak_bytes(),
+            "mlx_process_peak_scope": "since the last phase reset; not a lifetime or chain peak",
             "audio_adjustment": audio_adjustment,
             "publish_seconds": time.perf_counter() - started,
             "output_file": target.name,

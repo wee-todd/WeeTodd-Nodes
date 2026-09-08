@@ -35,7 +35,7 @@
   "3": {
     "class_type": "LoadImage",
     "inputs": {
-      "image": "first_frame.png"
+      "image": ""
     }
   },
   "4": {

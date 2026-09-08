@@ -9,6 +9,8 @@ from typing import Any, Literal
 import mlx.core as mx
 import numpy as np
 
+from wee_todd_mlx.numpy_import import adopt_numpy_array
+
 from .config import TAG_AUDIO, TAG_VIDEO
 from .packing import (
     _ROPE_FRAME_RESCALE,
@@ -26,6 +28,17 @@ MAX_REFERENCE_AUDIOS = 3
 MAX_REFERENCES = 12
 
 
+@dataclass(frozen=True)
+class ReferenceDensityDecision:
+    """Resolved persistent-video density and the activity evidence behind it."""
+
+    density: float
+    sampled_pairs: int = 0
+    activity_mean: float | None = None
+    activity_p95: float | None = None
+    reason: str = "explicit"
+
+
 @dataclass
 class PreparedReference:
     """Latent geometry of one prepared Ref2VA reference block."""
@@ -41,6 +54,12 @@ class PreparedReference:
     block_timestamps: list[float] = field(default_factory=list)
     qwen_frames: np.ndarray | None = None
     source_num_latent_frames: int = 0
+    target_frame: int | None = None
+    temporal_density_requested: str = "full"
+    temporal_density_resolved: float = 1.0
+    temporal_activity_mean: float | None = None
+    temporal_activity_p95: float | None = None
+    temporal_density_reason: str | None = None
 
     @property
     def has_audio(self) -> bool:
@@ -52,6 +71,8 @@ class PreparedReference:
             raise ValueError("Ref2VA reference kind must be 'image', 'video', or 'audio'.")
         if self.num_audio_latents < 0:
             raise ValueError("Ref2VA audio latent count must not be negative.")
+        if self.target_frame is not None and self.target_frame < 0:
+            raise ValueError("A prepared timeline guide must use a resolved non-negative frame.")
         if self.kind == "audio":
             if self.num_audio_latents < 1:
                 raise ValueError("A Ref2VA audio reference must contain audio latents.")
@@ -113,8 +134,14 @@ def validate_reference_set(
         raise ValueError(f"Ref2VA supports at most {MAX_REFERENCE_VIDEOS} video references.")
     if audios > MAX_REFERENCE_AUDIOS:
         raise ValueError(f"Ref2VA supports at most {MAX_REFERENCE_AUDIOS} audio references.")
-    if not images and not videos:
-        raise ValueError("Ref2VA audio references require at least one image or video reference.")
+    if (
+        not images
+        and not videos
+        and not all(reference.target_frame is not None for reference in references)
+    ):
+        raise ValueError(
+            "Untimed Ref2VA audio references require at least one image or video reference."
+        )
 
 
 def resample_reference_frames(frames: np.ndarray, fps: float) -> np.ndarray:
@@ -138,9 +165,54 @@ def trim_reference_num_frames(num_frames: int) -> int:
     return (num_frames - 5) // 17 * 17 + 5
 
 
-def reduce_reference_video_frames(
-    frames: np.ndarray, density: float
-) -> tuple[np.ndarray, int]:
+def resolve_reference_video_density(
+    frames: np.ndarray,
+    policy: Literal["full", "half", "quarter", "automatic"],
+) -> ReferenceDensityDecision:
+    """Resolve a conservative density from adjacent-frame activity on the H3 24 fps grid.
+
+    The scan uses a bounded spatial thumbnail of every aligned frame. It never changes the
+    full-resolution Qwen presentation frames; it controls only the persistent video-VAE rows
+    carried through each transformer evaluation.
+    """
+    if frames.ndim != 4 or frames.shape[-1] != 3:
+        raise ValueError("Prepared Ref2VA video frames have invalid geometry.")
+    explicit = {"full": 1.0, "half": 0.5, "quarter": 0.25}
+    if policy in explicit:
+        return ReferenceDensityDecision(explicit[policy], reason=f"explicit_{policy}")
+    if policy != "automatic":
+        raise ValueError(f"Unknown Ref2VA temporal-density policy: {policy!r}.")
+
+    count = trim_reference_num_frames(int(frames.shape[0]))
+    if count <= 22:
+        return ReferenceDensityDecision(1.0, reason="short_reference_kept_full")
+
+    height, width = frames.shape[1:3]
+    row_stride = max(1, math.ceil(height / 64))
+    column_stride = max(1, math.ceil(width / 64))
+    thumbnail = frames[:count, ::row_stride, ::column_stride, :3].astype(np.float32)
+    deltas = np.mean(np.abs(np.diff(thumbnail, axis=0)), axis=(1, 2, 3)) / 255.0
+    mean = float(np.mean(deltas))
+    p95 = float(np.quantile(deltas, 0.95))
+    evidence = {
+        "sampled_pairs": int(deltas.shape[0]),
+        "activity_mean": mean,
+        "activity_p95": p95,
+    }
+    if mean >= 0.02 or p95 >= 0.06:
+        return ReferenceDensityDecision(
+            1.0, reason="high_motion_or_cut_kept_full", **evidence
+        )
+    if mean >= 0.004 or p95 >= 0.015:
+        return ReferenceDensityDecision(
+            0.5, reason="moderate_redundancy_selected_half", **evidence
+        )
+    return ReferenceDensityDecision(
+        0.25, reason="near_static_reference_selected_quarter", **evidence
+    )
+
+
+def reduce_reference_video_frames(frames: np.ndarray, density: float) -> tuple[np.ndarray, int]:
     """Uniformly reduce aligned Ref2VA frames while retaining the source latent duration."""
     if frames.ndim != 4 or frames.shape[-1] != 3:
         raise ValueError("Prepared Ref2VA video frames have invalid geometry.")
@@ -174,8 +246,7 @@ def sample_reference_video_frames(frames: np.ndarray) -> tuple[list[np.ndarray],
     if len(timestamps) % 2:
         timestamps.append(timestamps[-1])
     blocks = [
-        (timestamps[index] + timestamps[index + 1]) / 2.0
-        for index in range(0, len(timestamps), 2)
+        (timestamps[index] + timestamps[index + 1]) / 2.0 for index in range(0, len(timestamps), 2)
     ]
     return [frames[index] for index in indices], blocks
 
@@ -189,12 +260,8 @@ def encode_reference_video_rows(
     from .packing import PIXEL_MEAN, PIXEL_STD, patchify_video_latents
 
     cfg = video_vae.config
-    latent_mean = mx.array(np.asarray(cfg.latents_mean, dtype=np.float32)).reshape(
-        1, -1, 1, 1, 1
-    )
-    latent_std = mx.array(np.asarray(cfg.latents_std, dtype=np.float32)).reshape(
-        1, -1, 1, 1, 1
-    )
+    latent_mean = mx.array(np.asarray(cfg.latents_mean, dtype=np.float32)).reshape(1, -1, 1, 1, 1)
+    latent_std = mx.array(np.asarray(cfg.latents_std, dtype=np.float32)).reshape(1, -1, 1, 1, 1)
     pixel_mean = np.asarray(PIXEL_MEAN, dtype=np.float32).reshape(1, 3, 1, 1, 1)
     pixel_std = np.asarray(PIXEL_STD, dtype=np.float32).reshape(1, 3, 1, 1, 1)
     rows = []
@@ -236,7 +303,9 @@ def encode_reference_audio_rows(
     for reference in references:
         if not reference.has_audio:
             continue
-        waveform = mx.array(np.asarray(reference.waveform, dtype=np.float32))[:, None, :]
+        waveform = adopt_numpy_array(
+            np.asarray(reference.waveform, dtype=np.float32)
+        )[:, None, :]
         mean, _ = audio_vae.encode(waveform)
         latents = mean.astype(mx.float32).transpose(0, 2, 1)
         reference.num_audio_latents = int(latents.shape[1])
@@ -339,7 +408,31 @@ def build_ref2va_packed_sequence(
     cursor = int(text_tags.size)
     rotary_time = float(text_tags.size)
 
+    # Ordinary Ref2VA blocks occupy their own rotary prefix. Timeline guides are positioned
+    # against the target clock and do not lengthen that prefix.
     for reference in references:
+        if reference.target_frame is not None:
+            continue
+        if reference.kind == "image":
+            rotary_time += 1.0
+        elif reference.kind == "audio":
+            rotary_time += float(reference.num_audio_latents)
+        else:
+            rotary_time += max(
+                float(reference.num_audio_latents),
+                _reference_video_span(
+                    max(reference.num_latent_frames, reference.source_num_latent_frames)
+                ),
+            )
+    target_rotary_time = rotary_time
+    rotary_time = float(text_tags.size)
+
+    for reference in references:
+        reference_time = (
+            target_rotary_time + _ROPE_FRAME_RESCALE * reference.target_frame
+            if reference.target_frame is not None
+            else rotary_time
+        )
         if reference.kind == "image":
             stop = cursor + reference.video_rows(patch_size)
             rows = slice(cursor, stop)
@@ -349,11 +442,12 @@ def build_ref2va_packed_sequence(
                 patch_height,
                 patch_width,
             )
-            position_ids[rows, 0] = rotary_time
+            position_ids[rows, 0] = reference_time
             position_ids[rows, 1:] = frame_grid
             video_indices.append(np.arange(cursor, stop, dtype=np.int64))
             cursor = stop
-            rotary_time += 1.0
+            if reference.target_frame is None:
+                rotary_time += 1.0
             continue
 
         if reference.kind == "audio":
@@ -363,12 +457,13 @@ def build_ref2va_packed_sequence(
                 position_ids,
                 rows,
                 reference.num_audio_latents,
-                rotary_time,
+                reference_time,
                 target_width_grid,
             )
             audio_indices.append(np.arange(cursor, stop, dtype=np.int64))
             cursor = stop
-            rotary_time += float(reference.num_audio_latents)
+            if reference.target_frame is None:
+                rotary_time += float(reference.num_audio_latents)
             continue
 
         audio_stop = cursor + reference.audio_rows
@@ -385,28 +480,27 @@ def build_ref2va_packed_sequence(
             position_ids,
             audio_rows,
             reference.num_audio_latents,
-            rotary_time,
+            reference_time,
             width_grid,
         )
-        source_latent_frames = max(
-            reference.num_latent_frames, reference.source_num_latent_frames
-        )
-        frame_time = _temporal_position_grid(reference.num_latent_frames, rotary_time)
+        source_latent_frames = max(reference.num_latent_frames, reference.source_num_latent_frames)
+        frame_time = _temporal_position_grid(reference.num_latent_frames, reference_time)
         if source_latent_frames > reference.num_latent_frames:
-            source_time = _temporal_position_grid(source_latent_frames, rotary_time)
-            frame_time = np.linspace(
-                source_time[0], source_time[-1], reference.num_latent_frames
-            )
+            source_time = _temporal_position_grid(source_latent_frames, reference_time)
+            frame_time = np.linspace(source_time[0], source_time[-1], reference.num_latent_frames)
         position_ids[video_rows, 0] = np.repeat(frame_time, frame_grid.shape[0])
         position_ids[video_rows, 1:] = np.tile(frame_grid, (reference.num_latent_frames, 1))
         if reference.audio_rows:
             audio_indices.append(np.arange(cursor, audio_stop, dtype=np.int64))
         video_indices.append(np.arange(audio_stop, video_stop, dtype=np.int64))
         cursor = video_stop
-        rotary_time += max(
-            float(reference.num_audio_latents),
-            _reference_video_span(source_latent_frames),
-        )
+        if reference.target_frame is None:
+            rotary_time += max(
+                float(reference.num_audio_latents),
+                _reference_video_span(source_latent_frames),
+            )
+
+    rotary_time = target_rotary_time
 
     continuation_audio_start = cursor
     continuation_video_start = continuation_audio_start + continuation_audio_rows
@@ -441,7 +535,9 @@ def build_ref2va_packed_sequence(
 
     target_video_index = np.arange(target_video_start, sequence_length, dtype=np.int64)
     target_audio_index = np.arange(target_audio_start, target_video_start, dtype=np.int64)
-    reference_video_index = np.concatenate(video_indices)
+    reference_video_index = (
+        np.concatenate(video_indices) if video_indices else np.empty(0, np.int64)
+    )
     reference_audio_index = (
         np.concatenate(audio_indices) if audio_indices else np.empty(0, np.int64)
     )
@@ -465,11 +561,11 @@ def build_ref2va_packed_sequence(
 
     return PackedSequence(
         sequence_length=sequence_length,
-        position_ids=mx.array(position_ids.astype(np.float32)),
-        token_tags=mx.array(token_tags.astype(np.int32)),
-        video_indices=mx.array(video_index.astype(np.int32)),
-        audio_indices=mx.array(audio_index.astype(np.int32)),
-        text_indices=mx.array(text_index.astype(np.int32)),
+        position_ids=adopt_numpy_array(position_ids, dtype=np.float32),
+        token_tags=adopt_numpy_array(token_tags, dtype=np.int32),
+        video_indices=adopt_numpy_array(video_index, dtype=np.int32),
+        audio_indices=adopt_numpy_array(audio_index, dtype=np.int32),
+        text_indices=adopt_numpy_array(text_index, dtype=np.int32),
         num_condition_video_rows=reference_video_rows + continuation_video_rows,
         num_condition_audio_rows=reference_audio_rows + continuation_audio_rows,
         num_continuation_video_rows=continuation_video_rows,

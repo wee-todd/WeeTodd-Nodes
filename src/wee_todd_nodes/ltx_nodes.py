@@ -6,13 +6,22 @@ import json
 import os
 import platform
 import secrets
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
-from ltx23_mlx.runtime import RUNTIME, LTX23GenerationConfig, LTX23ModelSpec
+from ltx23_mlx.runtime import RUNTIME, LTX23GenerationConfig, LTX23ModelSpec, resolve_ic_topology
 from ltx23_mlx.upscale import LTX23UpscalerSpec, upscale_video_to_file
 
+from .ltx23_conditioning import (
+    WeeToddLTX23ControlFrames,
+    WeeToddLTX23ControlVideo,
+    WeeToddLTX23ICLoRALoader,
+    WeeToddLTX23IngredientsReferenceSheet,
+    WeeToddLTX23Keyframe,
+    WeeToddLTX23VideoExtension,
+    prepared_conditioning,
+)
 from .publishing import _available_target
 
 
@@ -215,6 +224,53 @@ class WeeToddLTX23ModelLoader:
         )
 
 
+class WeeToddLTX23LoRALoader:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "model": ("WEETODD_LTX23_MODEL",),
+                "lora": ("STRING", {"default": ""}),
+                "strength": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0}),
+                "alpha": ("FLOAT", {"default": -1.0, "min": -1.0, "max": 65536.0}),
+            }
+        }
+
+    RETURN_TYPES = ("WEETODD_LTX23_MODEL", "STRING")
+    RETURN_NAMES = ("model", "lora_report")
+    FUNCTION = "attach"
+    CATEGORY = "WeeTodd/LTX 2.3/loaders"
+    DESCRIPTION = (
+        "Attach a local standard LTX 2.3 LoRA; chain nodes for ordered stacks. "
+        "Alpha -1 uses file metadata or rank. Runs on all stages with resident float/Q4/Q8 "
+        "or low-RAM block-streamed transformers. Task/control adapters use separate loaders "
+        "and cannot currently be combined with generic LoRAs."
+    )
+
+    def attach(self, model, lora, strength, alpha=-1.0):
+        from ltx23_mlx.lora import LTX23LoRASpec
+
+        if model.ic_loras:
+            raise ValueError("Generic LoRAs cannot be combined with IC-LoRA yet")
+        selected = Path(lora).expanduser()
+        if not selected.is_file() and not selected.is_absolute():
+            if ".." in selected.parts:
+                raise ValueError("Relative LoRA paths cannot contain '..'")
+            try:
+                import folder_paths
+
+                resolved = folder_paths.get_full_path("loras", lora)
+                if resolved:
+                    selected = Path(resolved)
+            except ImportError:
+                pass
+        if len(model.loras) >= 8:
+            raise ValueError("LTX 2.3 supports at most eight generic LoRAs")
+        spec = LTX23LoRASpec(str(selected), strength, None if alpha == -1 else alpha)
+        report = spec.inspect()
+        return replace(model, loras=(*model.loras, spec)), json.dumps(report, indent=2)
+
+
 class WeeToddLTX23GenerationConfig:
     @classmethod
     def INPUT_TYPES(cls):
@@ -252,7 +308,19 @@ class WeeToddLTX23GenerationConfig:
                 "stg_scale": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 20.0, "step": 0.1}),
                 "low_memory": ("BOOLEAN", {"default": True}),
                 "low_ram_streaming": ("BOOLEAN", {"default": False}),
-            }
+            },
+            "optional": {
+                "ic_lora_topology": (
+                    ["auto", "two_stage_clean", "control_refine", "upsample_only", "single_stage"],
+                    {
+                        "default": "auto",
+                        "tooltip": (
+                            "Auto uses full-resolution single stage for Motion Track and the "
+                            "qualified legacy topology for other controls."
+                        ),
+                    },
+                )
+            },
         }
 
     RETURN_TYPES = ("WEETODD_LTX23_CONFIG", "STRING")
@@ -274,6 +342,7 @@ class WeeToddLTX23GenerationConfig:
         stg_scale,
         low_memory,
         low_ram_streaming,
+        ic_lora_topology="auto",
     ):
         recommended = {"two_stage": 30, "two_stage_hq": 15, "distilled": 8, "one_stage": 30}
         resolved_seed = secrets.randbelow(0x80000000) if seed < 0 else seed
@@ -290,6 +359,7 @@ class WeeToddLTX23GenerationConfig:
             stg_scale=stg_scale,
             low_memory=low_memory,
             low_ram_streaming=low_ram_streaming,
+            ic_lora_topology=ic_lora_topology,
         )
         config.validate()
         info = {
@@ -316,6 +386,9 @@ class WeeToddLTX23Preflight:
     CATEGORY = "WeeTodd/LTX 2.3/loaders"
 
     def check(self, model, config):
+        from ltx23_mlx.ic_lora import validate_ic_stack
+        from ltx23_mlx.lora import validate_stack
+
         config.validate()
         model.validate(config.pipeline_mode)
         inventory = model.inventory(config.pipeline_mode)
@@ -326,6 +399,13 @@ class WeeToddLTX23Preflight:
             "num_frames": config.num_frames,
             "model_directory": model.root().name,
             **inventory,
+            "ic_loras": validate_ic_stack(model, config),
+            "loras": validate_stack(
+                model.loras,
+                model.root(),
+                config.pipeline_mode,
+                low_ram_streaming=config.low_ram_streaming,
+            ),
         }
         return model, json.dumps(report, indent=2, sort_keys=True)
 
@@ -341,7 +421,13 @@ class WeeToddLTX23Generate:
                 "filename_prefix": ("STRING", {"default": "WeeTodd/LTX23"}),
                 "unload_after_generate": ("BOOLEAN", {"default": True}),
             },
-            "optional": {"first_frame": ("IMAGE",)},
+            "optional": {
+                "first_frame": ("IMAGE",),
+                "keyframes": ("WEETODD_LTX23_KEYFRAMES",),
+                "audio_driver": ("AUDIO",),
+                "control": ("WEETODD_LTX23_CONTROL",),
+                "extension": ("WEETODD_LTX23_EXTENSION",),
+            },
         }
 
     RETURN_TYPES = ("STRING", "STRING")
@@ -359,11 +445,26 @@ class WeeToddLTX23Generate:
         filename_prefix,
         unload_after_generate,
         first_frame=None,
+        keyframes=None,
+        audio_driver=None,
+        control=None,
+        extension=None,
     ):
         import numpy as np
         from PIL import Image
 
         config.validate()
+        if first_frame is not None and (
+            keyframes
+            or audio_driver is not None
+            or control is not None
+            or extension is not None
+            or model.ic_loras
+        ):
+            raise ValueError(
+                "Use chained keyframes instead of first_frame; combined audio/control inputs "
+                "are not qualified"
+            )
         model.validate(config.pipeline_mode)
         released = _release_h3_stages()
         final = _safe_target(filename_prefix, config.seed)
@@ -386,19 +487,65 @@ class WeeToddLTX23Generate:
                     raise ValueError("LTX first frame must be an RGB ComfyUI IMAGE.")
                 image_path = final.with_name(f".{final.stem}.input.partial.png")
                 Image.fromarray((np.clip(frame, 0.0, 1.0) * 255).astype(np.uint8)).save(image_path)
-            info = RUNTIME.generate_to_file(
+            with prepared_conditioning(
                 model,
                 config,
-                prompt,
-                partial,
-                image_path=str(image_path) if image_path is not None else None,
-                unload_after=unload_after_generate,
-                check_interrupted=_check_interrupted(),
-                step_callback=_comfy_progress(
-                    config.stage1_steps
-                    + (0 if config.pipeline_mode == "one_stage" else config.stage2_steps)
-                ),
-            )
+                prompt=prompt,
+                keyframes=keyframes,
+                audio=audio_driver,
+                control=control,
+                extension=extension,
+            ) as (kwargs, contract):
+                generated_partial = (
+                    partial.with_name(f".{final.stem}.generated.partial{final.suffix}")
+                    if extension is not None
+                    else partial
+                )
+                info = RUNTIME.generate_to_file(
+                    model,
+                    config,
+                    prompt,
+                    generated_partial,
+                    image_path=str(image_path) if image_path is not None else None,
+                    unload_after=unload_after_generate,
+                    check_interrupted=_check_interrupted(),
+                    step_callback=_comfy_progress(
+                        config.stage1_steps
+                        + (
+                            config.stage2_steps
+                            if extension is None
+                            and config.pipeline_mode != "one_stage"
+                            and resolve_ic_topology(
+                                model, config, "control" if control is not None else None
+                            )
+                            in {"two_stage_dev", "two_stage_clean", "control_refine"}
+                            else 0
+                        )
+                    ),
+                    **kwargs,
+                )
+                if extension is not None:
+                    from wee_todd_mlx.conditioning_media import (
+                        assemble_external_extension,
+                        media_binary,
+                    )
+
+                    assemble_external_extension(
+                        extension["path"],
+                        generated_partial,
+                        partial,
+                        source_frames=config.num_frames,
+                        context_frames=config.num_frames,
+                        fps=config.frame_rate,
+                        sample_rate=48000,
+                        ffmpeg=media_binary({}, "ffmpeg"),
+                    )
+                    generated_partial.unlink(missing_ok=True)
+                    info["video_path"] = str(partial)
+                    info["audio_policy"] = "source_reencoded_and_generated_extension"
+                    info["extension"]["context_frames"] = config.num_frames
+                if contract["inputs"]:
+                    info["conditioning"] = contract
             if not partial.is_file() or partial.stat().st_size == 0:
                 raise RuntimeError("LTX 2.3 pipeline did not produce a video file.")
             info.update(
@@ -415,6 +562,10 @@ class WeeToddLTX23Generate:
             }
         except BaseException:
             partial.unlink(missing_ok=True)
+            if extension is not None:
+                partial.with_name(f".{final.stem}.generated.partial{final.suffix}").unlink(
+                    missing_ok=True
+                )
             partial_metadata.unlink(missing_ok=True)
             raise
         finally:
@@ -538,7 +689,14 @@ class WeeToddLTX23Unload:
 
 
 NODE_CLASS_MAPPINGS = {
+    "WeeToddLTX23ICLoRALoader": WeeToddLTX23ICLoRALoader,
+    "WeeToddLTX23Keyframe": WeeToddLTX23Keyframe,
+    "WeeToddLTX23ControlVideo": WeeToddLTX23ControlVideo,
+    "WeeToddLTX23VideoExtension": WeeToddLTX23VideoExtension,
+    "WeeToddLTX23ControlFrames": WeeToddLTX23ControlFrames,
+    "WeeToddLTX23IngredientsReferenceSheet": WeeToddLTX23IngredientsReferenceSheet,
     "WeeToddLTX23ModelLoader": WeeToddLTX23ModelLoader,
+    "WeeToddLTX23LoRALoader": WeeToddLTX23LoRALoader,
     "WeeToddLTX23GenerationConfig": WeeToddLTX23GenerationConfig,
     "WeeToddLTX23Preflight": WeeToddLTX23Preflight,
     "WeeToddLTX23Generate": WeeToddLTX23Generate,
@@ -548,7 +706,14 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
+    "WeeToddLTX23ICLoRALoader": "WeeTodd LTX 2.3 IC-LoRA Loader (MLX)",
+    "WeeToddLTX23Keyframe": "WeeTodd LTX 2.3 Timed Keyframe",
+    "WeeToddLTX23ControlVideo": "WeeTodd LTX 2.3 Control Video",
+    "WeeToddLTX23VideoExtension": "WeeTodd LTX 2.3 Video Extension",
+    "WeeToddLTX23ControlFrames": "WeeTodd LTX 2.3 Control Frames",
+    "WeeToddLTX23IngredientsReferenceSheet": "WeeTodd LTX 2.3 Ingredients Reference Sheet",
     "WeeToddLTX23ModelLoader": "WeeTodd LTX 2.3 Model Loader (MLX)",
+    "WeeToddLTX23LoRALoader": "WeeTodd LTX 2.3 LoRA Loader (MLX)",
     "WeeToddLTX23GenerationConfig": "WeeTodd LTX 2.3 Generation Config",
     "WeeToddLTX23Preflight": "WeeTodd LTX 2.3 Preflight",
     "WeeToddLTX23Generate": "WeeTodd LTX 2.3 Generate Video + Audio",

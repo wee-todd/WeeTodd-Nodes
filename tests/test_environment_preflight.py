@@ -3,14 +3,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-SCRIPT = (
-    Path(__file__).parents[1]
-    / ".agents"
-    / "skills"
-    / "python-environment-preflight"
-    / "scripts"
-    / "preflight.py"
-)
+SCRIPT = Path(__file__).parents[1] / "scripts" / "preflight_python_environment.py"
 
 
 def _project(tmp_path: Path, requires_python: str) -> Path:
