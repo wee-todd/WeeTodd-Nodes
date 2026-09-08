@@ -156,6 +156,7 @@ class ComponentReport:
     paging_format: str | None = None
     paging_fixed_bytes: int = 0
     paging_window_bytes: int = 0
+    paging_vision_bytes: int = 0
 
 
 @dataclass(frozen=True)
@@ -512,6 +513,7 @@ def _component_report(
     paging_format = None
     paging_fixed_bytes = 0
     paging_window_bytes = 0
+    paging_vision_bytes = 0
     if name == "transformer" and path.is_dir() and (path / "paged_manifest.json").is_file():
         from minimax_h3_mlx.paged_checkpoint import PagedCheckpointManifest
 
@@ -530,7 +532,10 @@ def _component_report(
         from minimax_h3_mlx.paged_text_encoder import PagedTextEncoderManifest
 
         paged = PagedTextEncoderManifest.load(path)
-        paging_format = "weetodd-h3-qwen-paged-v1"
+        paging_format = (
+            "weetodd-h3-qwen-paged-v2" if paged.supports_vision else "weetodd-h3-qwen-paged-v1"
+        )
+        paging_vision_bytes = paged.vision.tensor_bytes if paged.vision else 0
         paging_fixed_bytes = paged.fixed.tensor_bytes
         paging_window_bytes = max(record.tensor_bytes for record in paged.layers)
     return ComponentReport(
@@ -546,6 +551,7 @@ def _component_report(
         paging_format=paging_format,
         paging_fixed_bytes=paging_fixed_bytes,
         paging_window_bytes=paging_window_bytes,
+        paging_vision_bytes=paging_vision_bytes,
     )
 
 
@@ -671,10 +677,14 @@ def preflight_components(
             raise type(exc)(_component_resolution_error(spec, name, paths[name], exc)) from exc
     components = tuple(component_reports)
     by_name = {component.name: component for component in components}
-    if spec.task in {"fl2va", "ref2va"} and by_name["text_encoder"].paging_format:
+    if (
+        spec.task in {"fl2va", "ref2va"}
+        and by_name["text_encoder"].paging_format
+        and not by_name["text_encoder"].paging_vision_bytes
+    ):
         raise ValueError(
             "The selected paged text_encoder is text-only. FL2VA and Ref2VA require a "
-            "resident Qwen3-VL text encoder with vision weights."
+            "Qwen3-VL text encoder with vision weights (resident or vision-capable paged v2)."
         )
 
     budget = estimate_h3_token_budget(request)
@@ -695,7 +705,11 @@ def preflight_components(
 
     text_encoder = by_name["text_encoder"]
     qwen_weights = (
-        text_encoder.paging_fixed_bytes + text_encoder.paging_window_bytes
+        text_encoder.paging_fixed_bytes
+        + max(
+            text_encoder.paging_window_bytes,
+            text_encoder.paging_vision_bytes if spec.task != "t2va" else 0,
+        )
         if text_encoder.paging_format is not None
         else text_encoder.tensor_bytes
     )
@@ -748,8 +762,10 @@ def preflight_components(
         )
     if text_encoder.paging_format is not None:
         warnings.append(
-            "Paged text-encoder memory uses fixed tensors plus the largest Qwen layer; "
-            "the text-only pager does not load the vision tower."
+            "Paged text-encoder memory uses fixed tensors plus the larger active vision or "
+            "language stage. Reference preprocessing, retained reference features and "
+            "vision attention workspace depend on the actual reference media and are "
+            "not included in this header-only estimate."
         )
     if transformer.paging_format is not None:
         warnings.append(

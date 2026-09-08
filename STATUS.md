@@ -1,13 +1,13 @@
 # WeeTodd implementation status
 
-Reconciled 2026-09-07 against the local source and saved acceptance evidence.
+Reconciled 2026-09-08 against the local source and saved acceptance evidence.
 
 ## Shared renderer and ComfyUI
 
 The shared Python/MLX backend runs through ComfyUI or `scripts/render_headless.py`.
 The headless process blocks ComfyUI and node-catalog imports. It accepts versioned JSON
 recipes and records resolved assets, effective conditioning, results, and runtime unloading.
-The catalog contains 121 nodes and 42 UI workflows. Static validation establishes portable
+The catalog contains 121 nodes and 43 UI workflows. Static validation establishes portable
 contracts; it does not establish that every workflow has local models and selected input media.
 
 | Engine | Implemented | Qualification limits |
@@ -58,6 +58,18 @@ Matching frames retain the subject/action, but changes are subtle and fast-glove
 This is not general motion-fidelity qualification. Plain H3 T2VA repair
 recipes only; LTX, imported-movie UI support, long-clip windows and regional edits remain gated.
 See [controls, budgets and limits](studio/README.md#motion-fidelity-de-roping--experimental-h3).
+
+## H3 reference paging
+
+Qwen paging v2 retains vision features and releases vision before sequential language layers.
+The shared renderer accepts these pages for Ref2VA and FL2VA, with an experimental genuine Ref2VA
+Q8-paged Comfy workflow and Studio/headless recipe preparation command. Existing text-only v1
+pages remain T2VA-only. Tiny resident/paged tests cover actual image/video execution in FP32 and
+BF16, repeated requests, cancellation/failure cleanup and packed Q8 storage preservation.
+Transformer preparation from the genuine 13-shard Ref2VA source measured a 5.86GB complete-process
+peak. A one-image 640×384 saved Comfy graph completed 19 dense evaluations and published
+124 synchronized frames, with a 21.70GB full-process peak on an M3 Ultra/256 GiB host.
+Physical 36GB Mac qualification and broad reference-quality coverage remain open.
 
 ## Source checkpoints
 

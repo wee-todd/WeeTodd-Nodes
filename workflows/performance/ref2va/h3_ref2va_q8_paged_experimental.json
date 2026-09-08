@@ -1,0 +1,722 @@
+{
+  "last_node_id": 19,
+  "last_link_id": 25,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "WeeToddH3ComponentLoader",
+      "pos": [
+        40,
+        60
+      ],
+      "size": [
+        400,
+        340
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "components",
+          "type": "WEETODD_H3_COMPONENTS",
+          "links": [
+            4
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3ComponentLoader"
+      },
+      "widgets_values": [
+        "MiniMax-H3/Ref2VA",
+        "ref2va",
+        "MiniMax-H3/transformers/ref2va-q8-extended-paged",
+        "MiniMax-H3/text_encoders/q8-vision-paged",
+        "MiniMax-H3/Ref2VA/processor",
+        "MiniMax-H3/Ref2VA/tokenizer",
+        "MiniMax-H3/vae/q8/video_vae_affine_q8.safetensors",
+        "MiniMax-H3/FL2VA/audio_vae/audio_vae.safetensors",
+        false
+      ]
+    },
+    {
+      "id": 2,
+      "type": "WeeToddH3GenerationConfig",
+      "pos": [
+        40,
+        450
+      ],
+      "size": [
+        410,
+        420
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "config",
+          "type": "WEETODD_H3_CONFIG",
+          "links": [
+            1
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "resolved_resolution",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3GenerationConfig"
+      },
+      "widgets_values": [
+        5.0,
+        20,
+        20260908,
+        "exact dimensions",
+        "384 px short edge \u2014 fast smoke",
+        "16:9 \u2014 widescreen landscape",
+        384,
+        640,
+        384,
+        true,
+        "low_memory_bf16",
+        "automatic",
+        "mlx",
+        "euler",
+        "off"
+      ]
+    },
+    {
+      "id": 3,
+      "type": "WeeToddH3ValidatedSamplingPreset",
+      "pos": [
+        500,
+        470
+      ],
+      "size": [
+        500,
+        230
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "config",
+          "type": "WEETODD_H3_CONFIG",
+          "link": 1
+        }
+      ],
+      "outputs": [
+        {
+          "name": "config",
+          "type": "WEETODD_H3_CONFIG",
+          "links": [
+            3,
+            16,
+            21
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "loras",
+          "type": "WEETODD_H3_LORAS",
+          "links": [
+            22
+          ],
+          "slot_index": 1
+        },
+        {
+          "name": "trajectory_forecast",
+          "type": "WEETODD_H3_TRAJECTORY_FORECAST",
+          "links": null,
+          "slot_index": 2
+        },
+        {
+          "name": "preset_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 3
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3ValidatedSamplingPreset"
+      },
+      "widgets_values": [
+        "Dense baseline \u2014 20 points / 19 evaluations"
+      ]
+    },
+    {
+      "id": 4,
+      "type": "WeeToddH3Preflight",
+      "pos": [
+        500,
+        80
+      ],
+      "size": [
+        390,
+        260
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "components",
+          "type": "WEETODD_H3_COMPONENTS",
+          "link": 2
+        },
+        {
+          "name": "config",
+          "type": "WEETODD_H3_CONFIG",
+          "link": 3
+        }
+      ],
+      "outputs": [
+        {
+          "name": "components",
+          "type": "WEETODD_H3_COMPONENTS",
+          "links": [
+            15,
+            19,
+            23
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "preflight_report",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3Preflight"
+      },
+      "widgets_values": [
+        1024,
+        26.0,
+        ""
+      ]
+    },
+    {
+      "id": 18,
+      "type": "WeeToddH3PreviewOverride",
+      "pos": [
+        500,
+        760
+      ],
+      "size": [
+        500,
+        370
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "components",
+          "type": "WEETODD_H3_COMPONENTS",
+          "link": 4
+        }
+      ],
+      "outputs": [
+        {
+          "name": "components",
+          "type": "WEETODD_H3_COMPONENTS",
+          "links": [
+            2
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3PreviewOverride"
+      },
+      "widgets_values": [
+        "taeh3.safetensors",
+        "auto",
+        "taeh3_coreml_256.mlmodelc",
+        1,
+        6,
+        256,
+        "conservative collapse guard"
+      ]
+    },
+    {
+      "id": 5,
+      "type": "LoadImage",
+      "pos": [
+        40,
+        930
+      ],
+      "size": [
+        330,
+        330
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            5
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "MASK",
+          "type": "MASK",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoadImage"
+      },
+      "widgets_values": [
+        "",
+        "image"
+      ]
+    },
+    {
+      "id": 6,
+      "type": "WeeToddH3ReferenceImage",
+      "pos": [
+        420,
+        980
+      ],
+      "size": [
+        340,
+        190
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": 5
+        }
+      ],
+      "outputs": [
+        {
+          "name": "references",
+          "type": "WEETODD_H3_REFERENCES",
+          "links": [
+            17
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "reference_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3ReferenceImage"
+      },
+      "widgets_values": [
+        100
+      ]
+    },
+    {
+      "id": 14,
+      "type": "WeeToddH3ReferenceEncode",
+      "pos": [
+        1090,
+        80
+      ],
+      "size": [
+        760,
+        650
+      ],
+      "flags": {},
+      "order": 14,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "components",
+          "type": "WEETODD_H3_COMPONENTS",
+          "link": 15
+        },
+        {
+          "name": "config",
+          "type": "WEETODD_H3_CONFIG",
+          "link": 16
+        },
+        {
+          "name": "references",
+          "type": "WEETODD_H3_REFERENCES",
+          "link": 17
+        }
+      ],
+      "outputs": [
+        {
+          "name": "conditioning",
+          "type": "WEETODD_H3_CONDITIONING",
+          "links": [
+            18
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "conditioning_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3ReferenceEncode"
+      },
+      "widgets_values": [
+        "integrated_multimodal_description: Live-action cinematic realism. Use <Picture 1> as the subject and appearance reference. Describe a clear action, camera motion, lighting, and stable final state.\n\noverall_soundscape: Describe synchronized environmental sound and movement impacts.\n\nnon_diegetic_music: N/A"
+      ]
+    },
+    {
+      "id": 15,
+      "type": "WeeToddH3ReferenceStrength",
+      "pos": [
+        1910,
+        100
+      ],
+      "size": [
+        390,
+        220
+      ],
+      "flags": {},
+      "order": 15,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "conditioning",
+          "type": "WEETODD_H3_CONDITIONING",
+          "link": 18
+        }
+      ],
+      "outputs": [
+        {
+          "name": "conditioning",
+          "type": "WEETODD_H3_CONDITIONING",
+          "links": [
+            20
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "strength_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3ReferenceStrength"
+      },
+      "widgets_values": [
+        0.999,
+        1.0
+      ]
+    },
+    {
+      "id": 16,
+      "type": "WeeToddH3Sample",
+      "pos": [
+        2360,
+        100
+      ],
+      "size": [
+        410,
+        300
+      ],
+      "flags": {},
+      "order": 16,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "components",
+          "type": "WEETODD_H3_COMPONENTS",
+          "link": 19
+        },
+        {
+          "name": "conditioning",
+          "type": "WEETODD_H3_CONDITIONING",
+          "link": 20
+        },
+        {
+          "name": "config",
+          "type": "WEETODD_H3_CONFIG",
+          "link": 21
+        },
+        {
+          "name": "loras",
+          "type": "WEETODD_H3_LORAS",
+          "link": 22
+        }
+      ],
+      "outputs": [
+        {
+          "name": "latents",
+          "type": "WEETODD_H3_LATENTS",
+          "links": [
+            24
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "sampling_info",
+          "type": "STRING",
+          "links": [
+            25
+          ],
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3Sample"
+      },
+      "widgets_values": [
+        true,
+        "checkpoint_default"
+      ]
+    },
+    {
+      "id": 17,
+      "type": "WeeToddH3DirectPublishLatents",
+      "pos": [
+        2840,
+        90
+      ],
+      "size": [
+        530,
+        350
+      ],
+      "flags": {},
+      "order": 17,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "components",
+          "type": "WEETODD_H3_COMPONENTS",
+          "link": 23
+        },
+        {
+          "name": "latents",
+          "type": "WEETODD_H3_LATENTS",
+          "link": 24
+        },
+        {
+          "name": "sampling_info",
+          "type": "STRING",
+          "link": 25
+        }
+      ],
+      "outputs": [
+        {
+          "name": "video_path",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 0
+        },
+        {
+          "name": "generation_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3DirectPublishLatents"
+      },
+      "widgets_values": [
+        "WeeTodd/H3_Ref2VA_Q8_Paged",
+        18,
+        0.025,
+        "{\"workflow\": \"h3_ref2va_q8_paged\", \"status\": \"experimental\", \"evaluations\": 19}",
+        "",
+        "fixed"
+      ]
+    },
+    {
+      "id": 19,
+      "type": "MarkdownNote",
+      "pos": [
+        40.0,
+        -500.0
+      ],
+      "size": [
+        760,
+        500
+      ],
+      "flags": {},
+      "order": 18,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "title": "Setup and model downloads",
+      "properties": {},
+      "widgets_values": [
+        "## H3 Reference Q8 Paged \u2014 experimental\n\nUse genuine [MiniMax H3 Ref2VA weights](https://huggingface.co/MiniMaxAI/MiniMax-H3). Convert with scripts/convert_mixed_checkpoint.py --profile q8_extended, then scripts/convert_paged_checkpoint.py. Place pages in ComfyUI/models/MiniMax-H3/transformers/ref2va-q8-extended-paged. Never substitute FL2VA pages.\n\nConvert the compact Qwen encoder with scripts/convert_paged_text_encoder.py --include-vision and its full architecture config. Place it in ComfyUI/models/MiniMax-H3/text_encoders/q8-vision-paged. The existing text-only v1 export cannot encode references. Keep processor/tokenizer and VAE paths as shown.\n\nSelect one image and write a complete reference prompt. Queue the workflow after H3 Preflight succeeds. For a second reference, chain another H3 Reference Image before Reference Encode.\n\nFive seconds, 640\u00d7384, 19 dense evaluations, staged unloading. 26GB is an estimate budget, not an enforced memory limit or a measured 36GB guarantee. More/larger references increase workspace. Preview weights are optional; configure the Preview Override to match your installation.\n\nFor Studio/headless use scripts/prepare_h3_reference_recipe.py."
+      ],
+      "color": "#243447",
+      "bgcolor": "#15202b"
+    }
+  ],
+  "links": [
+    [
+      1,
+      2,
+      0,
+      3,
+      0,
+      "WEETODD_H3_CONFIG"
+    ],
+    [
+      2,
+      18,
+      0,
+      4,
+      0,
+      "WEETODD_H3_COMPONENTS"
+    ],
+    [
+      3,
+      3,
+      0,
+      4,
+      1,
+      "WEETODD_H3_CONFIG"
+    ],
+    [
+      4,
+      1,
+      0,
+      18,
+      0,
+      "WEETODD_H3_COMPONENTS"
+    ],
+    [
+      5,
+      5,
+      0,
+      6,
+      0,
+      "IMAGE"
+    ],
+    [
+      15,
+      4,
+      0,
+      14,
+      0,
+      "WEETODD_H3_COMPONENTS"
+    ],
+    [
+      16,
+      3,
+      0,
+      14,
+      1,
+      "WEETODD_H3_CONFIG"
+    ],
+    [
+      18,
+      14,
+      0,
+      15,
+      0,
+      "WEETODD_H3_CONDITIONING"
+    ],
+    [
+      19,
+      4,
+      0,
+      16,
+      0,
+      "WEETODD_H3_COMPONENTS"
+    ],
+    [
+      20,
+      15,
+      0,
+      16,
+      1,
+      "WEETODD_H3_CONDITIONING"
+    ],
+    [
+      21,
+      3,
+      0,
+      16,
+      2,
+      "WEETODD_H3_CONFIG"
+    ],
+    [
+      22,
+      3,
+      1,
+      16,
+      3,
+      "WEETODD_H3_LORAS"
+    ],
+    [
+      23,
+      4,
+      0,
+      17,
+      0,
+      "WEETODD_H3_COMPONENTS"
+    ],
+    [
+      24,
+      16,
+      0,
+      17,
+      1,
+      "WEETODD_H3_LATENTS"
+    ],
+    [
+      25,
+      16,
+      1,
+      17,
+      2,
+      "STRING"
+    ],
+    [
+      17,
+      6,
+      0,
+      14,
+      2,
+      "WEETODD_H3_REFERENCES"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {
+    "ds": {
+      "scale": 0.5,
+      "offset": [
+        40,
+        70
+      ]
+    }
+  },
+  "version": 0.4
+}

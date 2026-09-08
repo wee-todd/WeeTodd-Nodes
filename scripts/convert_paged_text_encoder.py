@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Convert the H3 Qwen3-VL text subset into sequential MLX layer pages."""
+"""Convert the H3 Qwen3-VL conditioner into sequential MLX layer pages."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ def main() -> int:
     parser.add_argument("destination")
     parser.add_argument("--layers", type=int, default=50)
     parser.add_argument("--architecture-config")
+    parser.add_argument("--include-vision", action="store_true")
     parser.add_argument("--skip-output-hashes", action="store_true")
     args = parser.parse_args()
     manifest = convert_to_paged_text_encoder(
@@ -23,12 +24,15 @@ def main() -> int:
         num_layers=args.layers,
         verify_output=not args.skip_output_hashes,
         architecture_config=args.architecture_config,
+        include_vision=args.include_vision,
     )
     print(
         json.dumps(
             {
                 "destination": str(manifest.root),
                 "layers": manifest.num_blocks,
+                "supports_vision": manifest.supports_vision,
+                "vision_bytes": manifest.vision.tensor_bytes if manifest.vision else 0,
                 "source_tensor_bytes": manifest.source_tensor_bytes,
                 "fixed_bytes": manifest.fixed.tensor_bytes,
                 "largest_layer_bytes": max(page.tensor_bytes for page in manifest.layers),

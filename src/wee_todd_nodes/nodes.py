@@ -1017,6 +1017,7 @@ class WeeToddH3Preflight:
     CATEGORY = "WeeTodd/H3/loaders"
     DESCRIPTION = (
         "Validate MiniMax H3 components and estimate staged memory from file headers. "
+        "Vision-capable paged Qwen is supported; reference workspace is not included. "
         "Set available memory to zero when unknown."
     )
 
@@ -1742,6 +1743,7 @@ class WeeToddH3ReferenceEncode:
     CATEGORY = "WeeTodd/H3/conditioning"
     DESCRIPTION = (
         "Prepare ordered Ref2VA media, then stage Qwen3-VL, the video VAE, and the audio VAE. "
+        "Resident and vision-capable paged Qwen are supported. "
         "Each weighted component unloads before the next stage."
     )
 
