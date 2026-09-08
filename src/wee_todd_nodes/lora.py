@@ -198,6 +198,48 @@ class H3LoRAStack:
 
     adapters: tuple[H3LoRASpec, ...] = ()
 
+    @classmethod
+    def from_recipe(cls, recipe: dict[str, object]) -> H3LoRAStack:
+        """Build the validated H3 stack represented by the shared recipe schema."""
+        value = recipe.get("loras")
+        if value in (None, {}):
+            return cls()
+        if not isinstance(value, dict) or not isinstance(value.get("adapters"), list):
+            raise ValueError("Malformed MiniMax H3 LoRA recipe; expected loras.adapters list.")
+        stack = cls()
+        for adapter in value["adapters"]:
+            if not isinstance(adapter, dict):
+                raise ValueError("Malformed MiniMax H3 LoRA adapter entry; expected an object.")
+            path = adapter.get("path")
+            if not isinstance(path, str) or not path:
+                raise ValueError("Malformed MiniMax H3 LoRA adapter path; expected a string.")
+            strength = adapter.get("strength", 1.0)
+            if type(strength) not in {int, float}:
+                raise ValueError("Malformed MiniMax H3 LoRA adapter strength; expected a number.")
+            for field in ("profile", "qkv_layout"):
+                if field in adapter and not isinstance(adapter[field], str):
+                    raise ValueError(
+                        f"Malformed MiniMax H3 LoRA adapter {field}; expected a string."
+                    )
+            grid = adapter.get("adaln_input_grid")
+            if grid is not None and not isinstance(grid, str):
+                raise ValueError(
+                    "Malformed MiniMax H3 LoRA adapter adaln_input_grid; "
+                    "expected a string or null."
+                )
+            activation = adapter.get("start_after_evaluations", 0)
+            if type(activation) is not int:
+                raise ValueError(
+                    "Malformed MiniMax H3 LoRA adapter start_after_evaluations; "
+                    "expected an integer."
+                )
+            try:
+                spec = H3LoRASpec(**adapter)
+            except TypeError as exc:
+                raise ValueError("Malformed MiniMax H3 LoRA adapter fields.") from exc
+            stack = stack.append(spec)
+        return stack
+
     def append(self, spec: H3LoRASpec) -> H3LoRAStack:
         spec.validate()
         if len(self.adapters) >= 8:
@@ -218,6 +260,17 @@ class H3LoRAStack:
                 raise ValueError(
                     "MiniMax H3 Turbo LoRAs require at least four active transformer "
                     "evaluations after the configured activation point."
+                )
+
+    def validate_for_motion(self, steps: int) -> None:
+        """Restrict experimental motion repair to standard full-schedule adapters."""
+        self.validate_for_steps(steps)
+        for spec in self.adapters:
+            if spec.resolved_profile != "standard":
+                raise ValueError("H3 motion refinement supports standard LoRA adapters only.")
+            if spec.start_after_evaluations != 0:
+                raise ValueError(
+                    "H3 motion refinement requires LoRA adapters active for the full schedule."
                 )
 
     @property

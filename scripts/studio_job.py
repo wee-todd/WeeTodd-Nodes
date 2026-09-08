@@ -194,6 +194,7 @@ def inputs_fingerprint(job):
         "gemma_model",
         "loras",
         "ic_loras",
+        "adaln_input_grid",
         "depthDirectory",
         "motionDirectory",
         "rifeWeights",

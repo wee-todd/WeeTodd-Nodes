@@ -144,6 +144,15 @@ def audio_filter(plan):
     return ";".join(filters)
 
 
+def motion_lora_stack(recipe):
+    """Construct and qualify the optional standard full-schedule repair stack."""
+    from wee_todd_nodes.lora import H3LoRAStack
+
+    stack = H3LoRAStack.from_recipe(recipe)
+    stack.validate_for_motion(recipe.get("config", {}).get("steps", 0))
+    return stack
+
+
 def validate_recipe(recipe):
     if recipe.get("engine") != "h3" or recipe.get("components", {}).get("task") != "t2va":
         raise ValueError("Motion Fidelity currently requires a plain H3 T2VA repair recipe.")
@@ -151,7 +160,6 @@ def validate_recipe(recipe):
         "attention",
         "fastvideo",
         "vdn",
-        "loras",
         "conditioning",
         "reference_images",
         "easycache",
@@ -164,6 +172,7 @@ def validate_recipe(recipe):
         raise ValueError("Motion Fidelity does not yet support conditioned or accelerated recipes.")
     if recipe.get("config", {}).get("steps", 0) < 16:
         raise ValueError("Motion Fidelity requires a full H3 recipe with at least 16 steps.")
+    motion_lora_stack(recipe)
     import json
     from pathlib import Path
 

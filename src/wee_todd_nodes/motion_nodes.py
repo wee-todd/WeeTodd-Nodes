@@ -7,6 +7,20 @@ from dataclasses import asdict
 from pathlib import Path
 
 
+def motion_recipe(components, config, prompt, loras=None):
+    """Serialize the shared headless recipe without loading adapter tensor payloads."""
+    recipe = {
+        "format": "weetodd-headless-v2",
+        "engine": "h3",
+        "components": dict(components) if isinstance(components, dict) else asdict(components),
+        "config": dict(config) if isinstance(config, dict) else asdict(config),
+        "prompt": prompt,
+    }
+    if loras is not None and loras.adapters:
+        recipe["loras"] = {"adapters": [asdict(spec) for spec in loras.adapters]}
+    return recipe
+
+
 class WeeToddH3MotionSettings:
     CATEGORY = "WeeTodd/H3/sampling"
     FUNCTION = "configure"
@@ -70,7 +84,8 @@ class WeeToddH3MotionRefine:
                 "source_in": ("FLOAT", {"default": 0, "min": 0, "step": 1 / 24}),
                 "duration": ("FLOAT", {"default": 2.5, "min": 2.5, "max": 14.375, "step": 1 / 24}),
                 "analyze_only": ("BOOLEAN", {"default": True}),
-            }
+            },
+            "optional": {"loras": ("WEETODD_H3_LORAS",)},
         }
 
     @classmethod
@@ -90,6 +105,7 @@ class WeeToddH3MotionRefine:
         source_in,
         duration,
         analyze_only=True,
+        loras=None,
     ):
         import signal
         import subprocess
@@ -102,13 +118,7 @@ class WeeToddH3MotionRefine:
         from minimax_h3_mlx.media import resolve_ffmpeg
         from wee_todd_mlx.motion_fidelity import validate_recipe
 
-        recipe = {
-            "format": "weetodd-headless-v2",
-            "engine": "h3",
-            "components": asdict(components),
-            "config": asdict(config),
-            "prompt": prompt,
-        }
+        recipe = motion_recipe(components, config, prompt, loras)
         validate_recipe(recipe)
         source = Path(source_video).expanduser().resolve(strict=True)
         destination = (

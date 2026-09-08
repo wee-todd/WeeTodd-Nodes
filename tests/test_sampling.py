@@ -1019,7 +1019,7 @@ def test_motion_refinement_preserves_canvas_and_joint_initialization(tmp_path):
             refinement_source=source,
             refinement_mode="motion",
         )
-    with pytest.raises(ValueError, match="plain H3"):
+    with pytest.raises(ValueError, match="conditioning or accelerators"):
         cache.sample(
             spec,
             _conditioning(spec),
@@ -1031,3 +1031,83 @@ def test_motion_refinement_preserves_canvas_and_joint_initialization(tmp_path):
     with pytest.raises(ValueError, match="initialized"):
         cache.sample(spec, _conditioning(spec), config, refinement_mode="motion")
     assert len(created) == 1
+
+
+def test_motion_refinement_applies_standard_lora_reports_it_and_does_not_leak(tmp_path):
+    from minimax_h3_mlx.dit import MiniMaxH3DiT
+    from minimax_h3_mlx.lora import LoRALinear
+    from tests.test_dit_smoke import tiny_config
+
+    created = []
+
+    class TinySampler(FakeSampler):
+        def __init__(self, spec):
+            super().__init__(spec)
+            self.dit = MiniMaxH3DiT(tiny_config())
+
+    def factory(spec):
+        sampler = TinySampler(spec)
+        created.append(sampler)
+        return sampler
+
+    spec = _spec(tmp_path)
+    config = H3GenerationConfig(steps=16, width=640, height=384, projection_backend="mlx")
+    source = H3Latents(
+        video=mx.zeros((1, 24, 37, 24, 40)),
+        audio=mx.zeros((2, 32, 207)),
+        num_frames=124,
+        width=640,
+        height=384,
+        fps=24,
+        sample_rate=32000,
+        transformer_evaluations=0,
+        seconds_per_evaluation=0,
+        total_seconds=0,
+        transformer_spec=spec,
+        generation_config=config,
+    )
+    adapter = tmp_path / "motion-standard.safetensors"
+    mx.save_safetensors(
+        adapter,
+        {
+            "blocks.0.attn.out_proj.lora_A.weight": mx.ones((2, 64)),
+            "blocks.0.attn.out_proj.lora_B.weight": mx.ones((64, 2)),
+        },
+        metadata={"base_model": "MiniMax-H3", "adapter_profile": "standard"},
+    )
+    stack = H3LoRAStack().append(H3LoRASpec(str(adapter)))
+    cache = H3TransformerCache(factory)
+
+    adapted = cache.sample(
+        spec,
+        _conditioning(spec),
+        config,
+        refinement_source=source,
+        refinement_mode="motion",
+        loras=stack,
+        unload_after=False,
+    )
+    plain = cache.sample(
+        spec,
+        _conditioning(spec),
+        config,
+        refinement_source=source,
+        refinement_mode="motion",
+        unload_after=False,
+    )
+
+    assert isinstance(created[0].dit.blocks[0].attn.out_proj, LoRALinear)
+    assert adapted.lora_report == (
+        {
+            "path": adapter.name,
+            "strength": 1.0,
+            "targets": 1,
+            "adaln_targets": 0,
+            "qkv_permuted_targets": 0,
+            "tensor_bytes": 1024,
+            "start_after_evaluations": 0,
+        },
+    )
+    assert plain.lora_report == ()
+    assert len(created) == 2
+    cache.unload()

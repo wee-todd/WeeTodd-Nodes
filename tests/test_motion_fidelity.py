@@ -5,9 +5,10 @@ import json
 import shutil
 import subprocess
 import sys
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 
+import mlx.core as mx
 import numpy as np
 import pytest
 
@@ -17,9 +18,11 @@ from wee_todd_mlx.motion_fidelity import (
     audio_filter,
     expansion_indices,
     latent_index,
+    motion_lora_stack,
     plan_motion,
     validate_recipe,
 )
+from wee_todd_nodes.lora import H3LoRASpec, H3LoRAStack
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
 bridge = importlib.import_module("studio_bridge")
@@ -96,7 +99,123 @@ def test_recipe_rejects_unsupported_engines_and_distilled_metadata(tmp_path):
     with pytest.raises(ValueError, match="Distilled"):
         validate_recipe(recipe)
     with pytest.raises(ValueError, match="accelerated"):
-        validate_recipe(dict(recipe, loras={"adapters": [{}]}))
+        validate_recipe(dict(recipe, attention={"enabled": True}))
+
+
+def _motion_lora(path, *, metadata=None):
+    mx.save_safetensors(
+        path,
+        {
+            "blocks.0.attn.out_proj.lora_A.weight": mx.ones((2, 64)),
+            "blocks.0.attn.out_proj.lora_B.weight": mx.ones((64, 2)),
+        },
+        metadata={"base_model": "MiniMax-H3", **(metadata or {})},
+    )
+    return path
+
+
+def _motion_recipe(tmp_path, adapter):
+    return {
+        "engine": "h3",
+        "components": {"task": "t2va", "transformer": str(tmp_path)},
+        "config": {"steps": 20},
+        "loras": {"adapters": [adapter]},
+    }
+
+
+def test_standard_full_schedule_motion_lora_recipe_is_accepted(tmp_path, monkeypatch):
+    path = _motion_lora(tmp_path / "motion.safetensors")
+    recipe = _motion_recipe(tmp_path, {"path": str(path), "strength": 0.7})
+    expected = {"status": "preflight_passed"}
+    monkeypatch.setattr("wee_todd_mlx.headless_preflight.preflight_recipe", lambda _: expected)
+
+    assert validate_recipe(recipe) is expected
+    stack = motion_lora_stack(recipe)
+    assert stack.metadata()[0]["profile"] == "standard"
+    assert stack.metadata()[0]["start_after_evaluations"] == 0
+
+
+@pytest.mark.parametrize(
+    "adapter, error",
+    [
+        ({"strength": 1.0}, "Malformed"),
+        ({"path": "ADAPTER", "profile": "turbo"}, "standard"),
+        ({"path": "ADAPTER", "start_after_evaluations": 1}, "full schedule"),
+    ],
+)
+def test_motion_lora_recipe_rejects_malformed_turbo_and_staged_before_preflight(
+    tmp_path, monkeypatch, adapter, error
+):
+    path = _motion_lora(tmp_path / "motion.safetensors")
+    adapter = {key: (str(path) if value == "ADAPTER" else value) for key, value in adapter.items()}
+    called = False
+
+    def preflight(_):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr("wee_todd_mlx.headless_preflight.preflight_recipe", preflight)
+
+    with pytest.raises(ValueError, match=error):
+        validate_recipe(_motion_recipe(tmp_path, adapter))
+    assert called is False
+
+
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        ("path", False),
+        ("path", ["adapter.safetensors"]),
+        ("strength", True),
+        ("strength", "0.7"),
+        ("profile", ["standard"]),
+        ("qkv_layout", {"layout": "native_interleaved"}),
+        ("adaln_input_grid", 42),
+        ("start_after_evaluations", False),
+        ("start_after_evaluations", "1"),
+    ],
+)
+def test_motion_lora_recipe_rejects_non_json_contract_field_types(tmp_path, field, value):
+    path = _motion_lora(tmp_path / "motion.safetensors")
+    adapter = {"path": str(path), field: value}
+
+    with pytest.raises(ValueError, match="Malformed MiniMax H3 LoRA adapter"):
+        motion_lora_stack(_motion_recipe(tmp_path, adapter))
+
+
+def test_motion_lora_recipe_preserves_file_and_tensor_contract_errors(tmp_path):
+    missing = tmp_path / "missing.safetensors"
+    with pytest.raises(FileNotFoundError, match="LoRA file not found"):
+        motion_lora_stack(_motion_recipe(tmp_path, {"path": str(missing)}))
+
+    malformed = tmp_path / "bad-shape.safetensors"
+    mx.save_safetensors(
+        malformed,
+        {
+            "blocks.0.attn.out_proj.lora_A.weight": mx.ones((2, 64)),
+            "blocks.0.attn.out_proj.lora_B.weight": mx.ones((64, 3)),
+        },
+    )
+    with pytest.raises(ValueError, match="Invalid adapter rank or shape"):
+        motion_lora_stack(_motion_recipe(tmp_path, {"path": str(malformed)}))
+
+
+def test_motion_node_appends_optional_lora_socket_and_serializes_existing_stack(tmp_path):
+    from wee_todd_nodes.motion_nodes import WeeToddH3MotionRefine, motion_recipe
+
+    path = _motion_lora(tmp_path / "motion.safetensors")
+    stack = H3LoRAStack().append(H3LoRASpec(str(path), strength=0.65, profile="standard"))
+    required = list(WeeToddH3MotionRefine.INPUT_TYPES()["required"])
+
+    recipe = motion_recipe({"task": "t2va"}, {"steps": 20}, "repair", stack)
+
+    assert required == [
+        "components", "config", "motion_settings", "source_video", "prompt", "source_in",
+        "duration", "analyze_only",
+    ]
+    assert WeeToddH3MotionRefine.INPUT_TYPES()["optional"]["loras"] == ("WEETODD_H3_LORAS",)
+    assert recipe["loras"]["adapters"] == [asdict(stack.adapters[0])]
+    assert "loras" not in motion_recipe({"task": "t2va"}, {"steps": 20}, "repair")
 
 
 def test_audio_retime_preserves_pitch_and_exact_sample_count(tmp_path):
@@ -317,6 +436,64 @@ def test_exported_job_embeds_override_and_prompt_change_invalidates_resume(tmp_p
     changed["manifestSHA256"] = jobs.digest(body)
     with pytest.raises(ValueError, match="Job or source inputs changed"):
         jobs.execute(changed, output, resume=True)
+
+
+@pytest.mark.parametrize("changed_dependency", ["adapter", "adaln_input_grid"])
+def test_exported_motion_job_embeds_lora_and_dependency_change_invalidates_resume(
+    tmp_path, monkeypatch, changed_dependency
+):
+    adapter = _motion_lora(tmp_path / "repair-motion.safetensors")
+    grid = tmp_path / "repair-adaln-grid.safetensors"
+    mx.save_safetensors(grid, {"adaln_input_grid": mx.ones((2, 64))})
+    request, recipe_file = _motion_editor_request(tmp_path)
+    recipe = json.loads(recipe_file.read_text())
+    transformer = tmp_path / "transformer"
+    transformer.mkdir()
+    recipe["components"]["transformer"] = str(transformer)
+    expected_loras = {
+        "adapters": [
+            {
+                "path": str(adapter),
+                "strength": 0.55,
+                "adaln_input_grid": str(grid),
+            }
+        ]
+    }
+    recipe["loras"] = expected_loras
+    recipe_file.write_text(json.dumps(recipe))
+    Path(request["project"]["clips"][0]["sourcePath"]).write_bytes(b"source")
+    monkeypatch.setattr("wee_todd_mlx.motion_fidelity.validate_recipe", lambda _: None)
+    monkeypatch.setattr(jobs, "renderer_fingerprint", lambda: "renderer")
+    job_file = tmp_path / "movie.json"
+
+    jobs.export_job(request, job_file)
+
+    exported = json.loads(job_file.read_text())
+    embedded = exported["motionRecipes"]["clip"]
+    assert embedded["loras"] == expected_loras
+    stack = motion_lora_stack(embedded)
+    assert stack.adapters == (
+        H3LoRASpec(str(adapter), strength=0.55, adaln_input_grid=str(grid)),
+    )
+    before = jobs.inputs_fingerprint(exported)
+    output = tmp_path / "job-output"
+    output.mkdir()
+    (output / "job-state.json").write_text(
+        json.dumps(
+            {
+                "manifestSHA256": exported["manifestSHA256"],
+                "inputsFingerprint": before,
+                "completed": {},
+                "status": "running",
+            }
+        )
+    )
+    dependency = adapter if changed_dependency == "adapter" else grid
+    dependency.write_bytes(f"changed {changed_dependency} bytes".encode())
+
+    assert jobs.inputs_fingerprint(exported) != before
+    with pytest.raises(ValueError, match="Job or source inputs changed"):
+        jobs.execute(exported, output, resume=True)
 
 
 def test_node_settings_contract_and_validation():

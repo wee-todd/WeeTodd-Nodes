@@ -186,10 +186,12 @@ enhancement stale. It does not invalidate the base generation.
   Long refinements report completed/total evaluations in the status area.
   The partial interval is resampled instead of taking the tail of a heavily shifted schedule.
   The seed belongs to enhancement independently of the base clip.
-- Use a plain H3 T2VA repair recipe with at least 16 schedule points. The default uses the selected
+- Use an H3 T2VA repair recipe with at least 16 schedule points. The default uses the selected
   base render's recipe. Choose an explicit compatible repair recipe when the original used image,
-  reference or audio conditioning. Its prompt and components govern refinement. FastH3/VDN,
-  LoRAs, cache accelerators and extra conditioning are rejected, not silently stripped.
+  reference or audio conditioning. Its prompt and components govern refinement. A selected repair
+  recipe may include standard LoRAs active for the full schedule; they apply only to refinement and
+  their application is recorded in the result. Turbo/distilled or staged LoRAs, FastH3/VDN, cache
+  accelerators and extra conditioning are rejected before weighted work.
 - Input is constant 24 fps, with frame-aligned trims, 32-pixel-grid dimensions and 60–345 source
   frames. Expansion is padded to H3's `17k+5` geometry and must fit the configured budget, at most
   345 frames. The current RGB conversion also limits expanded width × height × frames to
