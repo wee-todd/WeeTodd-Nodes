@@ -58,6 +58,8 @@ RECOMMENDED = {
     "WeeToddLTX23Preflight",
 }
 EXPERIMENTAL = {
+    "WeeToddH3MotionSettings",
+    "WeeToddH3MotionRefine",
     "WeeToddLTX23ICLoRALoader",
     "WeeToddLTX23Keyframe",
     "WeeToddLTX23ControlVideo",
@@ -142,6 +144,14 @@ FOUNDATION = set()
 NOT_READY = set()
 
 NOTE_OVERRIDES = {
+    "WeeToddH3MotionSettings": (
+        "Experimental adaptive or uniform temporal expansion, partial-denoise strength, "
+        "seed and frame budget."
+    ),
+    "WeeToddH3MotionRefine": (
+        "Analyze or refine a native 24 fps H3 movie in an isolated process; retain original audio "
+        "and recover original frame timing. Plain T2VA recipe only."
+    ),
     "WeeToddH3FastH3ProductionProfile": (
         "Native FastH3 VSA profile with fail-closed schedule, attention, and checkpoint wiring. "
         "Balanced is recommended; the explicit 40-layer Speed candidate requires listening "

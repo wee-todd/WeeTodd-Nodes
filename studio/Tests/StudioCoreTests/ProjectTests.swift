@@ -129,3 +129,81 @@ final class ProjectTests: XCTestCase {
   }
 
 }
+
+extension ProjectTests {
+  func testMotionSettingsDoNotInvalidateBaseGenerationAndOldClipsDecode() throws {
+    var clip = Clip(name: "H3", engine: .h3)
+    let oldData = try JSONEncoder().encode(clip)
+    let fingerprint = clip.generationFingerprint
+    clip.motionFidelity = MotionFidelitySettings()
+    clip.motionFidelity!.enabled = true
+    clip.motionFidelity!.strength = 0.7
+    clip.motionRecipeID = "repair.json"
+    XCTAssertEqual(clip.generationFingerprint, fingerprint)
+    XCTAssertFalse(clip.motionIsCurrent)
+    let restored = try JSONDecoder().decode(Clip.self, from: oldData)
+    XCTAssertNil(restored.motionFidelity)
+    XCTAssertNil(restored.motionResult)
+    XCTAssertEqual(restored.playbackPath, restored.sourcePath)
+    XCTAssertEqual(restored.playbackIn, restored.sourceIn)
+    let roundTrip = try JSONDecoder().decode(Clip.self, from: JSONEncoder().encode(clip))
+    XCTAssertEqual(roundTrip.motionFidelity, clip.motionFidelity)
+  }
+}
+
+extension ProjectTests {
+  func testEnhancedPlaybackAndPortablePathsRejectStaleInputs() throws {
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let source = folder.appendingPathComponent("source.mp4")
+    let output = folder.appendingPathComponent("enhanced.mp4")
+    let recipe = folder.appendingPathComponent("repair.json")
+    try Data("source".utf8).write(to: source)
+    try Data("enhanced".utf8).write(to: output)
+    try Data("{}".utf8).write(to: recipe)
+    var clip = Clip(name: "Motion", engine: .h3)
+    clip.sourcePath = source.path
+    clip.sourceIn = 2
+    clip.duration = 3
+    clip.motionFidelity = MotionFidelitySettings()
+    clip.motionFidelity!.enabled = true
+    func modified(_ url: URL) throws -> Double {
+      let a = try FileManager.default.attributesOfItem(atPath: url.path)
+      return (a[.modificationDate] as! Date).timeIntervalSince1970
+    }
+    let values: [String: Any] = [
+      "path": output.path, "sourcePath": source.path, "sourceIn": 2, "duration": 3,
+      "outputIn": 0, "recipeID": "", "sourceSHA256": "source-hash", "sha256": "output-hash",
+      "settings": try JSONSerialization.jsonObject(with: JSONEncoder().encode(clip.motionFidelity)),
+      "sourceSize": 6, "outputSize": 8, "sourceModified": try modified(source),
+      "recipePath": recipe.path, "recipeSize": 2, "recipeModified": try modified(recipe),
+      "outputModified": try modified(output), "report": folder.appendingPathComponent("plan.json").path
+    ]
+    clip.motionResult = try JSONDecoder().decode(MotionFidelityResult.self,
+      from: JSONSerialization.data(withJSONObject: values))
+    XCTAssertTrue(clip.motionIsCurrent)
+    XCTAssertEqual(clip.playbackPath, output.path)
+    XCTAssertEqual(clip.playbackIn, 0)
+    clip.motionFidelity!.enabled = false
+    XCTAssertEqual(clip.playbackPath, source.path)
+    XCTAssertEqual(clip.playbackIn, 2)
+    clip.motionFidelity!.enabled = true
+    var project = StudioProject()
+    project.clips = [clip]
+    ProjectStorage.mapPaths(&project) { "Media/" + URL(fileURLWithPath: $0).lastPathComponent }
+    XCTAssertEqual(project.clips[0].motionResult?.path, "Media/enhanced.mp4")
+    XCTAssertEqual(project.clips[0].motionResult?.sourcePath, "Media/source.mp4")
+    XCTAssertEqual(project.clips[0].motionResult?.recipePath, "Media/repair.json")
+    let copiedRecipe = folder.appendingPathComponent("collected-repair.json")
+    try FileManager.default.copyItem(at: recipe, to: copiedRecipe)
+    clip.motionResult!.recipePath = copiedRecipe.path
+    try FileManager.default.removeItem(at: recipe)
+    XCTAssertTrue(clip.motionIsCurrent)
+    clip.duration = 2.5
+    XCTAssertFalse(clip.motionIsCurrent)
+    clip.duration = 3
+    try Data("changed source".utf8).write(to: source)
+    XCTAssertFalse(clip.motionIsCurrent)
+  }
+}

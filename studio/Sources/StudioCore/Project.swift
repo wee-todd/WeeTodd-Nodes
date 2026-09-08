@@ -151,6 +151,9 @@ public struct Clip: Codable, Identifiable, Equatable {
   public var extensionSource = ""
   public var depthDirectory = ""
   public var motionDirectory = ""
+  public var motionFidelity: MotionFidelitySettings?
+  public var motionResult: MotionFidelityResult?
+  public var motionRecipeID: String?
   public var renderedSignature = ""
   public var validatedSignature = ""
   public var extensionClipID: UUID?
@@ -321,6 +324,14 @@ public enum ProjectStorage {
     }
     for i in project.clips.indices {
       project.clips[i].sourcePath = transform(project.clips[i].sourcePath)
+      if project.clips[i].motionResult != nil {
+        project.clips[i].motionResult!.path = transform(project.clips[i].motionResult!.path)
+        project.clips[i].motionResult!.sourcePath = transform(project.clips[i].motionResult!.sourcePath)
+        project.clips[i].motionResult!.report = transform(project.clips[i].motionResult!.report)
+        if let recipe = project.clips[i].motionResult!.recipePath {
+          project.clips[i].motionResult!.recipePath = transform(recipe)
+        }
+      }
       project.clips[i].extensionSource = transform(project.clips[i].extensionSource)
       project.clips[i].depthDirectory = transform(project.clips[i].depthDirectory)
       project.clips[i].motionDirectory = transform(project.clips[i].motionDirectory)
@@ -342,6 +353,9 @@ public enum ProjectStorage {
 extension Clip {
   public var generationFingerprint: String {
     var c = self
+    c.motionFidelity = nil
+    c.motionResult = nil
+    c.motionRecipeID = nil
     c.sourcePath = ""
     c.sourceIn = 0
     c.versions = []

@@ -1044,3 +1044,34 @@ if __name__ == "__main__":
     test_pruned_adaln_curve_forward_and_cache()
     test_modulation_cache_matches_live_projection()
     print("\nall smoke tests passed")
+
+
+def test_motion_sigma_initialization_uses_source_at_requested_noise(monkeypatch):
+    from minimax_h3_mlx.scheduler import MiniMaxH3Scheduler
+
+    cfg = tiny_config()
+    original = MiniMaxH3Scheduler.scale_noise
+    values = []
+
+    def capture(self, sample, timestep, noise):
+        values.append(timestep)
+        return original(self, sample, timestep, noise)
+
+    monkeypatch.setattr(MiniMaxH3Scheduler, "scale_noise", capture)
+    pipeline = MiniMaxH3Pipeline(MiniMaxH3DiT(cfg), None, None, None)
+    result = pipeline.sample_latents(
+        mx.zeros((1, 3, cfg.text_dim)),
+        np.full((3,), TAG_TEXT, dtype=np.int32),
+        duration_seconds=5,
+        num_inference_steps=5,
+        height=64,
+        width=64,
+        drop_adaln=False,
+        verbose=False,
+        initial_video_latents=mx.zeros((1, cfg.latents_dim, 37, 4, 4)),
+        initial_audio_latents=mx.zeros((2, cfg.audio_latents_dim, 207)),
+        refinement_strength=0.5,
+        refinement_start_sigma=0.5,
+    )
+    assert result.transformer_evaluations == 2
+    assert values == pytest.approx([0.5, 0.8])

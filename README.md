@@ -6,8 +6,8 @@ WeeTodd keeps each model engine behind a separate ComfyUI adapter. H3 generation
 and audio as one synchronized latent contract. Weighted components load only when the graph runs
 and can unload between Qwen3-VL, transformer, video VAE, and audio VAE stages.
 
-- 53 composable nodes under `WeeTodd/H3`
-- 119 registered nodes across all engines and media utilities; 42 shipped UI workflows
+- 55 composable nodes under `WeeTodd/H3`
+- 121 registered nodes across all engines and media utilities; 42 shipped UI workflows
 
 See [implementation status](STATUS.md) for current capabilities and qualification limits.
 
@@ -30,6 +30,15 @@ select `mlx` retain that selection. Eligible projections in paged transformer ch
 wrapped when each block window loads. On an M3 Ultra q8-paged 384p Turbo control, MPP reduced
 sampling from 113.35 to 108.49 seconds (4.3%) with the same 7.23 GB MLX peak and a byte-identical
 MP4. Add a modifier or conditioning node only when the feature is needed.
+
+## Experimental H3 Motion Fidelity
+
+Studio clips, movie/clip headless jobs and the **H3 Motion Fidelity Settings / Refine** nodes now
+support optional De-Roping. The shared native renderer expands source motion, partially refines
+joint video/audio latents, and recovers original frame timing with the source soundtrack. The
+original is retained. Use a plain H3 T2VA repair recipe; the feature is off by default and has strict
+native-frame and memory budgets. A real MLX render establishes execution and timing, while broad
+visual improvement remains unqualified. See [Studio controls and limits](studio/README.md#motion-fidelity-de-roping--experimental-h3).
 
 ## Choose a workflow
 
@@ -1314,6 +1323,8 @@ This table is generated from the registered node contracts. Run
 | Florence-2 Model Loader (MLX) | Select a local MLX Florence-2 bundle for text-guided auto masking. The node validates the bundle but does not load weights until detection executes. | MLX preprocessors — Segmentation | Experimental |
 | Florence-2 Text Auto Mask (MLX) | Ground a text description with Florence-2 on sparse video frames, interpolate its location, and emit either a guided subject silhouette or a fast rectangular mask. | MLX preprocessors — Segmentation | Experimental |
 | Unload Florence-2 (MLX) | Release Florence-2 MLX state without changing CorridorKey, H3, or LTX state. | MLX preprocessors — Segmentation | Experimental |
+| H3 Motion Fidelity Settings (Experimental) | Experimental adaptive or uniform temporal expansion, partial-denoise strength, seed and frame budget. | H3 — Sampling and acceleration | Experimental |
+| H3 Motion Fidelity Refine (Experimental) | Analyze or refine a native 24 fps H3 movie in an isolated process; retain original audio and recover original frame timing. Plain T2VA recipe only. | H3 — Output | Experimental |
 <!-- END GENERATED NODE CATALOG -->
 
 ## Troubleshooting

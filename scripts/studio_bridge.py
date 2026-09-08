@@ -369,6 +369,121 @@ def render(prepared, destination):
     return result
 
 
+def motion_request(request):
+    """Resolve an explicit repair recipe or the recipe of the selected base render."""
+    from wee_todd_mlx.motion_fidelity import MotionSettings, validate_recipe
+
+    clip = next(c for c in request["project"]["clips"] if c["id"] == request["clipID"])
+    if clip["engine"] != "h3":
+        raise ValueError("Motion Fidelity is currently available for H3 clips only.")
+    settings = clip.get("motionFidelity") or {}
+    MotionSettings(**settings).validate()
+    recipe_path = clip.get("motionRecipeID")
+    if not recipe_path:
+        version = next(
+            (v for v in clip.get("versions", []) if v["path"] == clip.get("sourcePath")), None
+        )
+        recipe_path = version.get("recipePath") if version else None
+    recipe_evidence = {}
+    if recipe_path:
+        from studio_job import file_hash
+
+        recipe_file = Path(recipe_path)
+        recipe_evidence = {
+            "recipeSHA256": file_hash(recipe_file),
+            "recipeSize": recipe_file.stat().st_size,
+            "recipeModified": recipe_file.stat().st_mtime,
+        }
+        recipe = json.loads(recipe_file.read_text())
+    else:
+        recipe, _ = compose_recipe(request)
+    validate_recipe(recipe)
+    return {
+        "recipe": recipe,
+        "clip": clip,
+        "settings": settings,
+        "runtime": request["runtime"],
+        "recipePath": recipe_path or "",
+        "recipeEvidence": recipe_evidence,
+    }
+
+
+def motion_enhance(request, destination, *, analyze=False):
+    current = motion_request(request)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    request_path = destination.with_name(destination.name + "-request.json")
+    write_json(request_path, current)
+    command = [
+        sys.executable,
+        str(ROOT / "scripts/motion_fidelity.py"),
+        "--request",
+        str(request_path),
+        "--output-directory",
+        str(destination),
+    ]
+    if analyze:
+        command.append("--analyze-only")
+    run(command)
+    result = json.loads((destination / "result.json").read_text())
+    if not analyze:
+        from studio_job import file_hash
+
+        clip = current["clip"]
+        source, output = Path(clip["sourcePath"]), Path(result["video"])
+        recipe_path = Path(current["recipePath"]) if current["recipePath"] else None
+        result["motionResult"] = {
+            "path": str(output),
+            "sourcePath": str(source),
+            "sourceIn": clip.get("sourceIn", 0),
+            "duration": clip["duration"],
+            "outputIn": result.get("sourceIn", 0),
+            "recipeID": clip.get("motionRecipeID") or "",
+            "settings": current["settings"],
+            "sourceSHA256": result["sourceSHA256"],
+            "sha256": file_hash(output),
+            "report": result["report"],
+            "sourceSize": source.stat().st_size,
+            "sourceModified": source.stat().st_mtime,
+            "outputSize": output.stat().st_size,
+            "outputModified": output.stat().st_mtime,
+            "recipePath": str(recipe_path) if recipe_path else None,
+            **current["recipeEvidence"],
+        }
+    return result
+
+
+def resolve_motion_output(clip):
+    """Do not silently export a base movie when an enhancement was requested."""
+    if not (clip.get("motionFidelity") or {}).get("enabled"):
+        return
+    from studio_job import file_hash
+
+    result = clip.get("motionResult") or {}
+    if (
+        not result
+        or result.get("settings") != clip["motionFidelity"]
+        or result.get("sourcePath") != clip.get("sourcePath")
+        or result.get("sourceIn") != clip.get("sourceIn", 0)
+        or result.get("duration") != clip.get("duration")
+        or result.get("recipeID", "") != (clip.get("motionRecipeID") or "")
+        or not Path(result.get("path", "")).is_file()
+        or file_hash(clip["sourcePath"]) != result.get("sourceSHA256")
+        or file_hash(result["path"]) != result.get("sha256")
+        or (
+            result.get("recipePath")
+            and (
+                not Path(result["recipePath"]).is_file()
+                or file_hash(result["recipePath"]) != result.get("recipeSHA256")
+            )
+        )
+    ):
+        raise ValueError(
+            "Motion Fidelity is pending or stale. Enhance the clip or export a headless job."
+        )
+    clip["sourcePath"] = result["path"]
+    clip["sourceIn"] = result.get("outputIn", 0)
+
+
 def resolved_settings(project, clip):
     s = dict(clip.get("settingsOverride") or project["settings"])
     for key in ("width", "height", "upscaleWidth", "upscaleHeight"):
@@ -654,6 +769,8 @@ def export_movie(request, destination, *, cache_directory=None):
     tracks = {t["id"]: t for t in project.get("audioTracks", [])}
     solo = any(t.get("solo") for t in tracks.values())
     project = copy.deepcopy(project)
+    for clip in project["clips"]:
+        resolve_motion_output(clip)
     project["audio"] = [
         a
         for a in project.get("audio", [])
@@ -1037,6 +1154,8 @@ def main():
             "preview",
             "sequence",
             "bridge-frames",
+            "motion-analyze",
+            "motion-enhance",
         ],
     )
     parser.add_argument("--request", type=Path, required=True)
@@ -1057,6 +1176,10 @@ def main():
         result = import_sequence(request, args.output.resolve())
     elif args.command == "bridge-frames":
         result = bridge_frames(request, args.output.resolve())
+    elif args.command in {"motion-analyze", "motion-enhance"}:
+        result = motion_enhance(
+            request, args.output.resolve(), analyze=args.command == "motion-analyze"
+        )
     elif args.command == "prepare":
         result = prepare(request, args.output.resolve())
     elif args.command == "render":

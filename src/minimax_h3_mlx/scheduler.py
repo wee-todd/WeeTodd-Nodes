@@ -10,6 +10,25 @@ import mlx.core as mx
 import numpy as np
 
 
+def refinement_sigmas(video_sigma: float, evaluations: int, video_shift=12.0, audio_shift=3.0):
+    """Resample a partial joint schedule from an explicit video noise fraction.
+
+    Taking half of a shifted schedule retains almost pure noise. For source-preserving
+    refinement, invert the video shift first, then apply both modality shifts to the
+    same base clock. The existing generation and spatial-refinement grids are unchanged.
+    """
+    if not np.isfinite(video_sigma) or not 0 < video_sigma <= 1 or evaluations < 1:
+        raise ValueError("Refinement requires a finite noise fraction and positive step count.")
+    if min(video_shift, audio_shift) <= 0:
+        raise ValueError("Refinement sigma shifts must be positive.")
+    base_start = video_sigma / (video_shift - (video_shift - 1) * video_sigma)
+    base = np.linspace(base_start, 0, evaluations + 1, dtype=np.float32)
+    return tuple(
+        (np.float32(shift) * base / (1 + np.float32(shift - 1) * base)).tolist()
+        for shift in (video_shift, audio_shift)
+    )
+
+
 def _linspace_1_to_0(n: int) -> np.ndarray:
     """``linspace(1, 0, n)`` in float32, bit-identical to ``torch.linspace``.
 

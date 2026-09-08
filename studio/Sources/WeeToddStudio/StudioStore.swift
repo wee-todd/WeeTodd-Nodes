@@ -227,7 +227,7 @@ extension Encodable {
       Task { @MainActor in
         guard let self, self.isPlaying else { return }
         let local =
-          time.seconds - (self.previewMode == "Movie" ? 0 : self.selectedClip?.sourceIn ?? 0)
+          time.seconds - (self.previewMode == "Movie" ? 0 : self.selectedClip?.playbackIn ?? 0)
         let duration =
           self.previewMode == "Movie" ? self.project.duration : self.selectedClip?.duration ?? 0
         if local >= duration {
@@ -349,7 +349,7 @@ extension Encodable {
       max(0, seconds), previewMode == "Movie" ? project.duration : selectedClip?.duration ?? 0)
     player.seek(
       to: CMTime(
-        seconds: (previewMode == "Movie" ? 0 : selectedClip?.sourceIn ?? 0) + playhead,
+        seconds: (previewMode == "Movie" ? 0 : selectedClip?.playbackIn ?? 0) + playhead,
         preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
   }
   func togglePlayback() {
@@ -371,7 +371,7 @@ extension Encodable {
       player.replaceCurrentItem(with: nil)
       return
     }
-    player.replaceCurrentItem(with: AVPlayerItem(url: URL(fileURLWithPath: c.sourcePath)))
+    player.replaceCurrentItem(with: AVPlayerItem(url: URL(fileURLWithPath: c.playbackPath)))
     seek(playhead)
   }
   func save(asNew: Bool = false) {
@@ -571,6 +571,14 @@ extension Encodable {
       }
       for i in p.clips.indices {
         p.clips[i].sourcePath = try collect(p.clips[i].sourcePath)
+        if p.clips[i].motionResult != nil {
+          p.clips[i].motionResult!.path = try collect(p.clips[i].motionResult!.path)
+          p.clips[i].motionResult!.sourcePath = try collect(p.clips[i].motionResult!.sourcePath)
+          p.clips[i].motionResult!.report = try collect(p.clips[i].motionResult!.report)
+          if let recipe = p.clips[i].motionResult!.recipePath {
+            p.clips[i].motionResult!.recipePath = try collect(recipe)
+          }
+        }
         p.clips[i].extensionSource = try collect(p.clips[i].extensionSource)
         p.clips[i].depthDirectory = try collect(p.clips[i].depthDirectory)
         p.clips[i].motionDirectory = try collect(p.clips[i].motionDirectory)

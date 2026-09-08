@@ -384,3 +384,29 @@ def test_audio_vae_mlx_normalization_boundary(tmp_path):
 
     assert result.waveform.shape == (2, 4)
     assert result.waveform.tolist() == [[1.0] * 4, [1.0] * 4]
+
+
+@pytest.mark.parametrize("tokens", [263, 264, 265])
+def test_audio_context_crops_only_known_codec_padding_token(tmp_path, tokens):
+    import mlx.core as mx
+
+    class Encoder:
+        config = type(
+            "Config",
+            (),
+            {"sampling_rate": 32000, "latents_mean": [0.0] * 32, "latents_std": [1.0] * 32},
+        )()
+
+        def encode(self, waveform):
+            assert waveform.shape == (2, 1, 210667)
+            return mx.ones((2, 32, tokens)), None
+
+    cache = H3AudioVAECache(lambda _: Encoder())
+    waveform = np.zeros((2, 210667), np.float32)
+    if tokens == 265:
+        with pytest.raises(RuntimeError, match="wrong token count"):
+            cache.encode_continuation(_audio_vae_spec(tmp_path), waveform, num_frames=158)
+    else:
+        result = cache.encode_continuation(_audio_vae_spec(tmp_path), waveform, num_frames=158)
+        assert result.shape == (2, 32, 263)
+    assert not cache.loaded
