@@ -11,6 +11,12 @@ and can unload between Qwen3-VL, transformer, video VAE, and audio VAE stages.
 
 See [implementation status](STATUS.md) for current capabilities and qualification limits.
 
+[WeeTodd Studio](studio/README.md) is the native Swift editor in this repository. It combines generated
+and imported clips, titles, transitions and multiple audio tracks, and exports resumable movie/clip
+jobs for the shared headless renderer. A managed native Python runtime can be installed from Studio
+Settings. This initial build still requires model recipes and finishing-tool configuration; see the
+Studio guide for build instructions, tested behavior, and consumer-release limitations.
+
 Recent experimental controls include target-frame H3 image, clip, and audio guides; an H3 token
 and attention-workspace estimator; independent MLX attention-head and feed-forward row chunking;
 LTX 2.5 timed input keyframes; learned generated-keyframe slots; lazy ordered LTX 2.5 LoRA stacks;

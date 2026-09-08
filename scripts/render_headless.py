@@ -547,6 +547,10 @@ def render_ltx(recipe, target):
 
 
 def main():
+    if "--job" in sys.argv[1:]:
+        from studio_job import cli as run_studio_job
+
+        return run_studio_job()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--recipe", type=Path, required=True)
     parser.add_argument("--output-directory", type=Path, required=True)

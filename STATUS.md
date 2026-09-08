@@ -28,15 +28,21 @@ model detection, automatic downloads/conversions, DoRA/LyCORIS, or arbitrary mis
 
 ## Standalone graphical interface
 
-At this backend checkpoint, standalone means a working command-line renderer. There is no
-packaged graphical editor. A native Swift application is the next implementation milestone.
-Its requested design includes a central movie viewport and timeline, left clip/project
-inspectors, a right asset browser, and a prompt editor that fills the window.
+WeeTodd Studio now lives in `studio/` as a native Swift macOS application around the shared
+renderer. It includes the requested editor layout, full-window prompt editor, native Light/Dark
+appearance, clip-state colors and prioritized Actions, three collapsible asset stores, movie/still/
+sequence import, multiple audio tracks, titles/transitions, versions, split/extension/bridge tools,
+project save/recovery and Collect Media. Movie settings resolve at clip level during finishing.
 
-The editor will combine H3, LTX, and imported movie clips, titles, and simple transitions.
-Project output settings will resolve per clip, with explicit overrides and provenance.
-Media roles will select compatible conditioning automatically; unsupported combinations must
-remain visible and must fail before rendering. Model inference remains in the shared MLX backend.
+Movie and clip headless-job export embeds generation and finishing plans. `WeeToddCLI` or
+`render_headless.py --job` executes them sequentially with preflight, cancellation, integrity checks
+and resumable render/finishing stages. Studio can install a private native Python/MLX runtime using
+pinned, hash-verified dependencies. It preserves other environments and shared model files.
+
+The app is an initial development build. Model recipes, FFmpeg/FFprobe, and optional RIFE still need
+configuration; automatic model downloads, retail signing/notarization and clean-Mac qualification
+remain release work. MetalFX interpolation is experimental and requires explicit depth/motion/camera
+guides. See [Studio usage and limits](studio/README.md) for the exact implementation boundary.
 
 ## Checkpoint validation and remaining work
 
@@ -44,7 +50,15 @@ remain visible and must fail before rendering. Model inference remains in the sh
 - The focused node/runtime/headless/library/workflow review passed 468 tests.
 - README catalog and portable H3 API preflight passed.
 - Full publisher-checkpoint parity and fresh expensive model renders were not run in this review.
-- Complete the Swift interface and validate actual import, edit, save, render, and export flows.
+- The backend checkpoint is `e31a27c`; its validation figures above retain their original scope.
+- Studio adds 10 Swift document tests and 13 Python bridge/job tests, including real media exports.
+  The current full Python suite passed 1,318 tests with one skipped (optional algorithm search excluded).
+- A new LTX 2.5 job completed generation, finishing, title assembly, and verified resume.
+- A fresh app-managed native runtime produced byte-identical generated and assembled MP4s for that
+  one-second fixture. Both used the existing shared model files.
+- MetalFX spatial + RIFE finishing and explicit-guide MetalFX interpolation completed with audio
+  and verified output timing/dimensions. No general interpolation-quality claim follows from these tests.
+- Complete retail packaging/model onboarding and qualification on clean, lower-memory Macs.
 - Qualify additional adapter/task/precision combinations before promoting them in the interface.
 
 Local research and detailed historical reports remain outside version control by project policy.
