@@ -171,7 +171,13 @@ the original. Export a headless job to process pending enhancements with Studio 
   action. Use Uniform when you want the entire clip treated.
 - **Maximum hold** is 2–4×. Sensitivity affects adaptive coverage; refinement strength controls
   partial denoising. A value of 0.5 starts video at 50% noise; audio uses its corresponding
-  shifted clock. Evaluation count is the ceiling of the recipe's full evaluations × strength.
+  shifted clock. The inspector displays strength numerically with 0.01 increments.
+  By default, evaluation count is the ceiling of the recipe's full evaluations × strength.
+  Enable **Set refinement evaluations** to choose 1–64 evaluations independently of strength;
+  the initial suggested value is 14. This makes equal-budget strength comparisons possible
+  without changing the base generation recipe. More evaluations cost time and do not guarantee
+  better visual results. Existing projects retain their automatic evaluation counts.
+  Long refinements report completed/total evaluations in the status area.
   The partial interval is resampled instead of taking the tail of a heavily shifted schedule.
   The seed belongs to enhancement independently of the base clip.
 - Use a plain H3 T2VA repair recipe with at least 16 schedule points. The default uses the selected
@@ -198,7 +204,10 @@ ComfyUI exposes **H3 Motion Fidelity Settings** and **H3 Motion Fidelity Refine*
 Components, Generation Config and Motion Settings; provide a source movie path, native trim and
 repair prompt. Analyze-only defaults on. The adapter runs the same isolated helper used by Studio
 and jobs, returning a movie path and JSON analysis report. No paid workflow or external node pack
-is required. The existing 42 shipped workflows are unchanged.
+is required. The settings node's optional **evaluations** input uses 0 for the existing automatic
+behavior, or 1–64 for a fixed count. Headless motion settings use `"evaluations": 14` for a fixed
+count; omission or `null` keeps the automatic behavior. A change invalidates enhancement only,
+while the original generation remains reusable. The existing 42 shipped workflows are unchanged.
 
 Validation includes a real native MLX partial-denoise render, exact 73-frame recovery at 24 fps,
 32 kHz source-audio remuxing, mixed audio holds, optional bypass, old project decoding and separate
@@ -213,7 +222,7 @@ action, but changes were subtle and fast-glove blur remained. This does not esta
 visual improvement or qualify dialogue/identity preservation across scenes.
 The packaged CLI completed a v2 enhanced movie and reused the same final hash on resume. Native
 Studio Enhance added a separate Clip Asset; toggling the source comparison reused it. The complete
-suite passed 1,345 Python tests (one skip) and 12 Swift tests for this checkpoint.
+suite passed 1,349 Python tests (one skip) and 13 Swift tests for this checkpoint.
 LTX, imported-movie UI support, regional editing, overlapping long-clip windows, side-by-side viewing,
 per-stage latent resume and broad dialogue/identity qualification remain future work.
 

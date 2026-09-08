@@ -17,6 +17,7 @@ class MotionSettings:
     sensitivity: float = 0.5
     seed: int = 42
     maxFrames: int = 345
+    evaluations: int | None = None
 
     def validate(self):
         if type(self.enabled) is not bool or self.mode not in {"adaptive", "uniform"}:
@@ -31,6 +32,10 @@ class MotionSettings:
             raise ValueError("Expanded H3 clips must fit a 73–345 frame budget.")
         if type(self.seed) is not int or not 0 <= self.seed < 2**32:
             raise ValueError("Motion seed must be an unsigned 32-bit integer.")
+        if self.evaluations is not None and (
+            type(self.evaluations) is not int or not 1 <= self.evaluations <= 64
+        ):
+            raise ValueError("Motion refinement evaluations must be an integer from 1 to 64.")
 
 
 def aligned_frames(count):

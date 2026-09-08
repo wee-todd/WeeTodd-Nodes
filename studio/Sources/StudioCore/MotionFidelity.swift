@@ -8,6 +8,7 @@ public struct MotionFidelitySettings: Codable, Equatable {
   public var sensitivity = 0.5
   public var seed = 42
   public var maxFrames = 345
+  public var evaluations: Int?
   public init() {}
 }
 public struct MotionFidelityResult: Codable, Equatable {

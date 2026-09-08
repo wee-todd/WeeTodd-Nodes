@@ -997,13 +997,20 @@ def test_motion_refinement_preserves_canvas_and_joint_initialization(tmp_path):
         refinement_source=source,
         refinement_mode="motion",
         refinement_strength=0.5,
+        refinement_evaluations=14,
     )
     kwargs = created[0].calls[0][2]
     assert kwargs["initial_video_latents"] is source.video
     assert kwargs["initial_audio_latents"] is source.audio
     assert kwargs["refinement_strength"] == 0.5
+    assert kwargs["refinement_evaluations"] == 14
     assert kwargs["preserve_initial_audio"] is True
     assert not cache.loaded
+    with pytest.raises(ValueError, match="motion only"):
+        cache.sample(
+            spec, _conditioning(spec), config,
+            refinement_source=source, refinement_evaluations=14,
+        )
     with pytest.raises(ValueError, match="preserve source dimensions"):
         cache.sample(
             spec,

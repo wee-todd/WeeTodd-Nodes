@@ -39,8 +39,23 @@ struct MotionFidelityInspector: View {
             Text("Uniform").tag("uniform")
           }
           Stepper("Maximum hold: \(clip.motionFidelity?.maxHold ?? 2)×", value: setting(\.maxHold), in: 2...4)
-          Text("Refinement strength")
-          Slider(value: setting(\.strength), in: 0.05...1, step: 0.05)
+          Text("Refinement strength: \((clip.motionFidelity?.strength ?? 0.5).formatted(.number.precision(.fractionLength(2))))")
+          Slider(value: setting(\.strength), in: 0.05...1, step: 0.01)
+          Text("Initial video noise. Higher values allow larger changes to the source.")
+            .font(.caption).foregroundStyle(.secondary)
+          Toggle("Set refinement evaluations", isOn: Binding(
+            get: { clip.motionFidelity?.evaluations != nil },
+            set: { setting(\.evaluations).wrappedValue = $0 ? 14 : nil }))
+          if clip.motionFidelity?.evaluations != nil {
+            Stepper("Evaluations: \(clip.motionFidelity?.evaluations ?? 14)", value: Binding(
+              get: { clip.motionFidelity?.evaluations ?? 14 },
+              set: { setting(\.evaluations).wrappedValue = $0 }), in: 1...64)
+            Text("Fixed work at every strength. More evaluations take longer; improvement is not guaranteed.")
+              .font(.caption).foregroundStyle(.secondary)
+          } else {
+            Text("Uses the recipe’s evaluation count multiplied by strength, rounded up.")
+              .font(.caption).foregroundStyle(.secondary)
+          }
           Text("Motion sensitivity")
           Slider(value: setting(\.sensitivity), in: 0...1, step: 0.05)
           TextField("Seed", value: setting(\.seed), format: .number).textFieldStyle(.roundedBorder)

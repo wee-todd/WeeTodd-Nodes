@@ -18,18 +18,35 @@ class WeeToddH3MotionSettings:
         return {
             "required": {
                 "mode": (["adaptive", "uniform"],),
-                "strength": ("FLOAT", {"default": 0.5, "min": 0.05, "max": 1, "step": 0.05}),
+                "strength": ("FLOAT", {"default": 0.5, "min": 0.05, "max": 1, "step": 0.01}),
                 "max_hold": ("INT", {"default": 2, "min": 2, "max": 4}),
                 "sensitivity": ("FLOAT", {"default": 0.5, "min": 0, "max": 1, "step": 0.05}),
                 "seed": ("INT", {"default": 42, "min": 0, "max": 2**32 - 1}),
                 "max_frames": ("INT", {"default": 345, "min": 73, "max": 345}),
-            }
+            },
+            "optional": {
+                "evaluations": (
+                    "INT",
+                    {
+                        "default": 0,
+                        "min": 0,
+                        "max": 64,
+                        "tooltip": "0 uses the recipe's evaluation count multiplied by strength. "
+                        "1–64 explicitly sets refinement work independently of strength.",
+                    },
+                ),
+            },
         }
 
-    def configure(self, mode, strength, max_hold, sensitivity, seed, max_frames):
+    def configure(self, mode, strength, max_hold, sensitivity, seed, max_frames, evaluations=0):
         from wee_todd_mlx.motion_fidelity import MotionSettings
 
-        settings = MotionSettings(True, mode, strength, max_hold, sensitivity, seed, max_frames)
+        if type(evaluations) is not int:
+            raise ValueError("Motion refinement evaluations must be an integer.")
+        settings = MotionSettings(
+            True, mode, strength, max_hold, sensitivity, seed, max_frames,
+            None if evaluations == 0 else evaluations,
+        )
         settings.validate()
         return (asdict(settings),)
 
