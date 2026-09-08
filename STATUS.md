@@ -44,6 +44,14 @@ configuration; automatic model downloads, retail signing/notarization and clean-
 remain release work. MetalFX interpolation is experimental and requires explicit depth/motion/camera
 guides. See [Studio usage and limits](studio/README.md) for the exact implementation boundary.
 
+## Source checkpoints
+
+- `e31a27c`: shared headless renderer and conditioned ComfyUI workflows.
+- `4c56ea2`: native Studio editor, managed runtime installation and resumable movie/clip jobs.
+- Publication cleanup: shipped Python preflight no longer depends on ignored agent files. App
+  packaging verifies a fresh bundle before replacing the previous build. Project/job exports and
+  macOS metadata are excluded from Git; user data and existing runtimes are preserved.
+
 ## Checkpoint validation and remaining work
 
 - 1,304 tests passed and one skipped in the suite excluding optional algorithm-search tests.
@@ -52,12 +60,14 @@ guides. See [Studio usage and limits](studio/README.md) for the exact implementa
 - Full publisher-checkpoint parity and fresh expensive model renders were not run in this review.
 - The backend checkpoint is `e31a27c`; its validation figures above retain their original scope.
 - Studio adds 10 Swift document tests and 13 Python bridge/job tests, including real media exports.
-  The current full Python suite passed 1,318 tests with one skipped (optional algorithm search excluded).
+  At that checkpoint, the full Python suite passed 1,318 tests with one skipped.
 - A new LTX 2.5 job completed generation, finishing, title assembly, and verified resume.
 - A fresh app-managed native runtime produced byte-identical generated and assembled MP4s for that
   one-second fixture. Both used the existing shared model files.
 - MetalFX spatial + RIFE finishing and explicit-guide MetalFX interpolation completed with audio
   and verified output timing/dimensions. No general interpolation-quality claim follows from these tests.
+- Publication cleanup adds six packaging/preflight regressions. The full Python suite passed
+  1,324 tests with one skipped (optional algorithm search excluded); all 10 Swift tests passed.
 - Complete retail packaging/model onboarding and qualification on clean, lower-memory Macs.
 - Qualify additional adapter/task/precision combinations before promoting them in the interface.
 

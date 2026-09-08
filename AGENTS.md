@@ -1,11 +1,11 @@
 # WeeTodd Nodes agent guide
 
-This is a standalone ComfyUI custom-node project for MiniMax H3 and LTX 2.3 on Apple Silicon
-through MLX.
+This project provides ComfyUI custom nodes and the native Swift WeeTodd Studio editor for
+MiniMax H3, LTX 2.3, and LTX 2.5 on Apple Silicon through a shared Python/MLX renderer.
 
 ## Scope boundary
 
-- Use MiniMax H3, LTX 2.3, MLX, ComfyUI, and directly relevant media utilities.
+- Use MiniMax H3, LTX 2.3/2.5, MLX, ComfyUI, WeeTodd Studio, and directly relevant media utilities.
 - Do not import unrelated UI, launch, account, or image-generation functionality.
 - Treat third-party implementations as research references only; independently implement and test project behavior.
 - Never commit model weights, outputs, caches, tokens, credentials, or machine-specific paths.
@@ -13,7 +13,8 @@ through MLX.
 ## Development rules
 
 - Keep node imports lightweight; load MLX weights only when a graph executes.
-- Keep the H3 and LTX 2.3 engines isolated behind separate ComfyUI adapters.
+- Keep the H3 and LTX engines isolated behind separate adapters. Studio and headless jobs must
+  reuse the shared renderer without importing ComfyUI or maintaining a second sampler.
 - Before changing an LTX 2.5 loader, sampler, VAE, conditioning contract, or optimization default,
   compare current Lightricks LTX-2 releases, LTX-2.5 checkpoint files, and native ComfyUI changes
   against the baseline in `docs/reference/LTX25_MLX_INTEGRATION.md`. Update the baseline and OKF log
@@ -65,3 +66,8 @@ python scripts/update_readme_node_catalog.py --project . --check
 ```
 
 Full parity and checkpoint tests are optional and expensive. State clearly when they were not run.
+
+For Studio changes, also run `swift test --package-path studio`, the Python Studio bridge and
+packaging tests, and `python3 scripts/build_studio_app.py --configuration release`. Shipped runtime
+setup must use `scripts/preflight_python_environment.py`; it cannot depend on ignored local skills.
+Keep Studio projects, exported jobs, collected media, and app-managed runtime data out of commits.

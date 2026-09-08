@@ -157,22 +157,6 @@ checkpoint. Review the [CorridorKey license](https://github.com/nikopueringer/Co
 before installation. The license permits production use but restricts redistribution, competing
 products, commercial software integration, and paid inference services.
 
-### Optional Florence-2 MLX auto masking
-
-Download the MIT-licensed [Florence-2 base fine-tune Q8 MLX bundle](https://huggingface.co/mlx-community/Florence-2-base-ft-8bit)
-and keep every tokenizer, processor, configuration, and safetensors file together under:
-
-```text
-ComfyUI/models/florence2/Florence-2-base-ft-8bit/
-```
-
-The Florence loader is lazy and does not execute checkpoint-supplied remote Python code. It uses
-MLX-VLM's native Florence architecture, the current installed Transformers processor, and the
-checkpoint-declared BART tokenizer. The published Q4 conversion is intentionally rejected because local validation found unreliable
-coordinate-token decoding. Q8 measured 0.665 GiB MLX peak for one reviewed 768-pixel
-reference-sheet silhouette. The clean ComfyUI graph completed in 3.23 seconds and unloaded after
-the node completed. This is not a complete CorridorKey graph or complete-ComfyUI peak measurement.
-
 Install the official MLX runtime in ComfyUI's active Python environment:
 
 ```bash
@@ -196,6 +180,22 @@ foreground and alpha arrays, and its despill and despeckle options are placehold
 therefore performs compositing and generic mask cleanup independently and does not claim float EXR
 parity yet. Blue-screen MLX support remains gated until an official blue MLX checkpoint and stable
 engine contract are available.
+
+### Optional Florence-2 MLX auto masking
+
+Download the MIT-licensed [Florence-2 base fine-tune Q8 MLX bundle](https://huggingface.co/mlx-community/Florence-2-base-ft-8bit)
+and keep every tokenizer, processor, configuration, and safetensors file together under:
+
+```text
+ComfyUI/models/florence2/Florence-2-base-ft-8bit/
+```
+
+The Florence loader is lazy and does not execute checkpoint-supplied remote Python code. It uses
+MLX-VLM's native Florence architecture, the current installed Transformers processor, and the
+checkpoint-declared BART tokenizer. The published Q4 conversion is intentionally rejected because local validation found unreliable
+coordinate-token decoding. Q8 measured 0.665 GiB MLX peak for one reviewed 768-pixel
+reference-sheet silhouette. The clean ComfyUI graph completed in 3.23 seconds and unloaded after
+the node completed. This is not a complete CorridorKey graph or complete-ComfyUI peak measurement.
 
 ## Model downloads and reuse
 
@@ -592,7 +592,7 @@ Implementation order follows control usefulness and available checkpoint terms:
 | Edges | Canny; TEED soft edge | Canny for exact structure; TEED for learned contours | Both available |
 | Depth | Video Depth Anything Small; Depth Anything V2 Small | Video depth for consistency; frame depth for speed | Both available |
 | Pose | whole-body pose; body-only pose | Whole-body for face and hand motion; body-only for speed | DWPose available |
-| Structure | depth-derived normals; realistic line art; segmentation | Normals and line art are available; segmentation remains gated | Partial |
+| Structure | depth-derived normals; realistic line art; segmentation | Normals, line art, and Florence-2 text masks are available | Available |
 | Motion | colored trajectory guides; automated optical-flow extraction | Use the optical-flow extractor or manual Motion Track guide with the dedicated adapter | Both available |
 
 The MLX Canny defaults match current ComfyUI normalized thresholds: low `0.4`, high `0.8`, a 5×5
@@ -1348,12 +1348,13 @@ reference density.
 
 ## Development validation
 
-Run inexpensive validation before each commit:
+Run these checks from the repository root using its compatible arm64 development environment:
 
 ```bash
 python scripts/audit_workflow_catalog.py --project .
 python scripts/update_readme_node_catalog.py --check
-python scripts/validate_okf.py knowledge
+python scripts/preflight_python_environment.py --project . --python python --require-architecture arm64
+python scripts/preflight_h3_workflow.py --project . --all-api
 python scripts/lint_docs.py
 python -m compileall -q src __init__.py
 python -m pytest -q tests/test_nodes.py tests/test_runtime.py tests/test_readme.py tests/test_workflows.py
@@ -1361,6 +1362,14 @@ ruff check src/wee_todd_nodes tests
 ```
 
 `tests/test_readme.py` and `tests/test_workflows.py` are required by the README/workflow commit gate.
+For Studio changes, also run `swift test --package-path studio` and
+`python -m pytest -q tests/test_studio_bridge.py tests/test_studio_packaging.py`, then build the app
+using the [Studio instructions](studio/README.md). The build verifies its ad-hoc signature before
+replacing the previous bundle.
+
+Local `knowledge/`, research reports, and `.agents/` skills are intentionally untracked. If the local
+knowledge bundle is installed, validate it separately with `python scripts/validate_okf.py knowledge`;
+a fresh clone does not include it. See [AGENTS.md](AGENTS.md) for the local commit-gate procedure.
 Full checkpoint parity and real generation tests are optional and expensive.
 
 ## License and status

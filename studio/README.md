@@ -6,7 +6,8 @@ not a notarized consumer release.
 
 ## Build and open
 
-Build on Apple Silicon with Xcode 26 or newer (the MetalFX frame interpolator uses the macOS 26 SDK):
+Run these commands from the repository root on Apple Silicon with Xcode 26 or newer.
+The MetalFX frame interpolator uses the macOS 26 SDK:
 
 ```bash
 python3 scripts/build_studio_app.py --configuration release
@@ -17,7 +18,9 @@ The GUI supports macOS 14 and newer. Actual model/runtime requirements can requi
 MetalFX frame interpolation additionally requires macOS 26 and a supporting GPU. The helper checks
 hardware support. The build script makes an ad-hoc signed application containing the Swift GUI,
 `WeeToddCLI`, `StudioMetal`, the renderer source, and the runtime dependency lock. Building the
-app does not install Python dependencies or copy models.
+app does not install Python dependencies or copy models. All packaging/runtime preflight code is
+tracked; no local agent skills are required. Packaging starts with a fresh bundle, verifies its
+signature, and replaces the previous app only after success, removing obsolete bundled source files.
 
 In **Studio Settings**, choose **Set Up Managed Renderer** to download private Python 3.12.13 and
 install pinned, hash-verified native dependencies. The installer verifies arm64, the project Python
@@ -150,3 +153,21 @@ Before a broad consumer release: complete model discovery/download UI and tool p
 notarize the app, test clean Macs and lower-memory hardware, qualify more conditioning combinations,
 and improve live timeline playback. Useful next features are audio waveforms, proxy/cache management,
 crash-recovery history, and a render-cost/memory estimate before queuing large movies.
+
+## Development files and cleanup
+
+- `studio/.build/` contains Swift build products and the local app. Rebuilding refreshes the bundled
+  renderer; an already installed private runtime retains its own source snapshot. Set up a new runtime
+  when adopting renderer changes, and export new headless jobs for that runtime.
+- Studio projects, collected media folders, headless job JSON and companion instructions are ignored
+  throughout the repository because they contain user content and local file paths.
+- Application Support contains user work as well as caches: generated clip versions, autosave,
+  global assets, imported recipes, jobs and runtime receipts. Back it up before manual maintenance.
+  Collect Media is the supported way to preserve a movie's referenced media for portability.
+- Prior managed runtimes are retained for existing jobs. There is no automatic cache cleanup or
+  rollback selector yet; do not remove a runtime or render directory still referenced by a project/job.
+
+Run `swift test --package-path studio` and
+`python -m pytest -q tests/test_studio_bridge.py tests/test_studio_packaging.py` before packaging.
+The packaging tests exercise a source tree without `.agents/`, stale-bundle replacement, and failure
+preservation without downloading Python or installing models.

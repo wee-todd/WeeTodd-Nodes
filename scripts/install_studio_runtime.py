@@ -24,7 +24,7 @@ def install(source, destination, uv):
         raise ValueError("WeeTodd's native runtime requires Apple Silicon and macOS.")
     if destination.exists():
         raise ValueError("Choose a new runtime folder. Existing runtimes are preserved.")
-    preflight = source / ".agents/skills/python-environment-preflight/scripts/preflight.py"
+    preflight = source / "scripts/preflight_python_environment.py"
     run(
         [
             sys.executable,
