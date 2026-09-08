@@ -138,6 +138,7 @@ extension ProjectTests {
     clip.motionFidelity = MotionFidelitySettings()
     clip.motionFidelity!.enabled = true
     clip.motionFidelity!.strength = 0.7
+    clip.motionFidelity!.evaluations = 14
     clip.motionRecipeID = "repair.json"
     XCTAssertEqual(clip.generationFingerprint, fingerprint)
     XCTAssertFalse(clip.motionIsCurrent)
@@ -148,6 +149,15 @@ extension ProjectTests {
     XCTAssertEqual(restored.playbackIn, restored.sourceIn)
     let roundTrip = try JSONDecoder().decode(Clip.self, from: JSONEncoder().encode(clip))
     XCTAssertEqual(roundTrip.motionFidelity, clip.motionFidelity)
+  }
+
+  func testLegacyMotionSettingsKeepAutomaticEvaluationBudget() throws {
+    let data = Data(#"{"enabled":true,"mode":"uniform","strength":0.5,"maxHold":2,"sensitivity":0.5,"seed":42,"maxFrames":345}"#.utf8)
+    var settings = try JSONDecoder().decode(MotionFidelitySettings.self, from: data)
+    XCTAssertNil(settings.evaluations)
+    settings.evaluations = 14
+    let restored = try JSONDecoder().decode(MotionFidelitySettings.self, from: JSONEncoder().encode(settings))
+    XCTAssertEqual(restored.evaluations, 14)
   }
 }
 

@@ -215,6 +215,7 @@ class H3TransformerCache:
         refinement_source: H3Latents | None = None,
         refinement_strength: float = 1.0,
         refinement_mode: str = "spatial",
+        refinement_evaluations: int | None = None,
         refinement_resize_method: str = "bilinear",
         refinement_learned_upscaler: H3LearnedLatentUpscalerSpec | None = None,
         refinement_upscaler_callback=None,
@@ -229,6 +230,11 @@ class H3TransformerCache:
         config.validate()
         if refinement_mode not in {"spatial", "motion"}:
             raise ValueError("Unknown H3 refinement mode.")
+        if refinement_evaluations is not None:
+            if refinement_mode != "motion":
+                raise ValueError("Explicit refinement evaluations are supported for motion only.")
+            if type(refinement_evaluations) is not int or not 1 <= refinement_evaluations <= 64:
+                raise ValueError("Refinement evaluations must be an integer from 1 to 64.")
         if refinement_mode == "motion":
             if refinement_source is None or spec.task != "t2va":
                 raise ValueError("Motion refinement requires initialized native T2VA latents.")
@@ -368,6 +374,7 @@ class H3TransformerCache:
             continuation is not None,
             refinement_source is not None,
             round(float(refinement_strength), 6) if refinement_source is not None else None,
+            refinement_evaluations,
             conditioning.condition_video_rows is not None,
             conditioning.condition_audio_rows is not None,
             float(conditioning.visual_condition_strength),
@@ -718,6 +725,7 @@ class H3TransformerCache:
                         refinement_start_sigma=(
                             refinement_strength if refinement_mode == "motion" else None
                         ),
+                        refinement_evaluations=refinement_evaluations,
                         preserve_initial_audio=refinement_source is not None,
                         fun_control=fun_control,
                     )

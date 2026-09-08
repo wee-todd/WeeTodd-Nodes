@@ -146,7 +146,7 @@ NOT_READY = set()
 NOTE_OVERRIDES = {
     "WeeToddH3MotionSettings": (
         "Experimental adaptive or uniform temporal expansion, partial-denoise strength, "
-        "seed and frame budget."
+        "optional independent refinement evaluations, seed and frame budget."
     ),
     "WeeToddH3MotionRefine": (
         "Analyze or refine a native 24 fps H3 movie in an isolated process; retain original audio "

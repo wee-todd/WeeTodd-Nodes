@@ -52,6 +52,15 @@ def test_adaptive_quiet_clip_is_noop_and_burst_is_local():
     assert burst == plan_motion(73, settings, latent)
 
 
+def test_explicit_refinement_evaluations_validate_and_survive_plan():
+    settings = MotionSettings(mode="uniform", evaluations=14)
+    assert plan_motion(73, settings)["settings"]["evaluations"] == 14
+    for invalid in (0, -1, 65, True, 14.5):
+        with pytest.raises(ValueError, match="evaluations"):
+            MotionSettings(evaluations=invalid).validate()
+    MotionSettings().validate()
+
+
 @pytest.mark.parametrize(
     "settings",
     [
@@ -156,9 +165,14 @@ def test_node_settings_contract_and_validation():
 
     settings = WeeToddH3MotionSettings().configure("adaptive", 0.5, 2, 0.5, 42, 345)[0]
     assert MotionSettings(**settings) == replace(MotionSettings(), enabled=True)
+    fixed = WeeToddH3MotionSettings().configure("uniform", 0.92, 4, 0.5, 42, 345, 14)[0]
+    assert fixed["evaluations"] == 14
     assert WeeToddH3MotionRefine.INPUT_TYPES()["required"]["config"] == ("WEETODD_H3_CONFIG",)
     with pytest.raises(ValueError):
         WeeToddH3MotionSettings().configure("uniform", 2, 2, 0.5, 42, 345)
+    for invalid in (-1, 65, True, 14.5):
+        with pytest.raises(ValueError, match="evaluations"):
+            WeeToddH3MotionSettings().configure("uniform", 0.5, 2, 0.5, 42, 345, invalid)
 
 
 def test_failed_worker_removes_intermediates_without_removing_report(tmp_path, monkeypatch):

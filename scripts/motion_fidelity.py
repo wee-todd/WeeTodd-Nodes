@@ -289,6 +289,11 @@ def _execute(request, target, analyze_only=False):
                 refinement_source=initial,
                 refinement_mode="motion",
                 refinement_strength=settings.strength,
+                refinement_evaluations=settings.evaluations,
+                step_callback=lambda completed, total: bridge.emit(
+                    event="progress",
+                    message=f"Refining H3 motion: {completed}/{total} evaluations",
+                ),
                 unload_after=True,
             )
             del initial, video_latents, audio_latents, waveform, conditioning

@@ -349,6 +349,7 @@ class MiniMaxH3Pipeline:
         initial_audio_latents: mx.array | None = None,
         refinement_strength: float = 1.0,
         refinement_start_sigma: float | None = None,
+        refinement_evaluations: int | None = None,
         preserve_initial_audio: bool = False,
         fun_control=None,
     ) -> LatentResult:
@@ -378,6 +379,13 @@ class MiniMaxH3Pipeline:
             raise ValueError("`refinement_strength` must be greater than 0 and no more than 1.")
         if preserve_initial_audio and not has_initial_latents:
             raise ValueError("Preserving initial audio requires H3 refinement latents.")
+        if refinement_evaluations is not None:
+            if not has_initial_latents or refinement_start_sigma is None:
+                raise ValueError(
+                    "Refinement evaluations require an explicit motion noise schedule."
+                )
+            if type(refinement_evaluations) is not int or not 1 <= refinement_evaluations <= 64:
+                raise ValueError("Refinement evaluations must be an integer from 1 to 64.")
 
         tags = np.asarray(text_token_tags, dtype=np.int32)
         if tags.ndim != 1 or tags.size == 0:
@@ -595,7 +603,11 @@ class MiniMaxH3Pipeline:
                 raise ValueError("An explicit refinement sigma requires joint initial latents.")
             from .scheduler import refinement_sigmas
 
-            active_steps = max(1, int(math.ceil(len(video_sched.timesteps) * refinement_strength)))
+            active_steps = (
+                refinement_evaluations
+                if refinement_evaluations is not None
+                else max(1, int(math.ceil(len(video_sched.timesteps) * refinement_strength)))
+            )
             video_sigmas, audio_sigmas = refinement_sigmas(
                 refinement_start_sigma, active_steps, video_sched.shift, audio_sched.shift
             )

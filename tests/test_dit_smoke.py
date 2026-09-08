@@ -1075,3 +1075,25 @@ def test_motion_sigma_initialization_uses_source_at_requested_noise(monkeypatch)
     )
     assert result.transformer_evaluations == 2
     assert values == pytest.approx([0.5, 0.8])
+
+
+@pytest.mark.parametrize("strength", [0.35, 0.8, 0.92])
+def test_motion_evaluation_budget_is_independent_of_strength(strength):
+    cfg = tiny_config()
+    pipeline = MiniMaxH3Pipeline(MiniMaxH3DiT(cfg), None, None, None)
+    result = pipeline.sample_latents(
+        mx.zeros((1, 3, cfg.text_dim)),
+        np.full((3,), TAG_TEXT, dtype=np.int32),
+        duration_seconds=5,
+        num_inference_steps=16,
+        height=64,
+        width=64,
+        drop_adaln=False,
+        verbose=False,
+        initial_video_latents=mx.zeros((1, cfg.latents_dim, 37, 4, 4)),
+        initial_audio_latents=mx.zeros((2, cfg.audio_latents_dim, 207)),
+        refinement_strength=strength,
+        refinement_start_sigma=strength,
+        refinement_evaluations=3,
+    )
+    assert result.transformer_evaluations == 3
