@@ -131,6 +131,15 @@ final class ProjectTests: XCTestCase {
 }
 
 extension ProjectTests {
+  func testMotionPromptEditorSessionRejectsAnOldTokenForTheSameClipID() {
+    let clipID = UUID()
+    let old = MotionPromptEditorSession(clipID: clipID)
+    let replacement = MotionPromptEditorSession(clipID: clipID)
+
+    XCTAssertTrue(old.matches(clipID: clipID, token: old.token))
+    XCTAssertFalse(replacement.matches(clipID: clipID, token: old.token))
+  }
+
   func testMotionSettingsDoNotInvalidateBaseGenerationAndOldClipsDecode() throws {
     var clip = Clip(name: "H3", engine: .h3)
     let oldData = try JSONEncoder().encode(clip)
@@ -140,15 +149,18 @@ extension ProjectTests {
     clip.motionFidelity!.strength = 0.7
     clip.motionFidelity!.evaluations = 14
     clip.motionRecipeID = "repair.json"
+    clip.motionPrompt = "  A completely different repair prompt.\n  "
     XCTAssertEqual(clip.generationFingerprint, fingerprint)
     XCTAssertFalse(clip.motionIsCurrent)
     let restored = try JSONDecoder().decode(Clip.self, from: oldData)
     XCTAssertNil(restored.motionFidelity)
     XCTAssertNil(restored.motionResult)
+    XCTAssertNil(restored.motionPrompt)
     XCTAssertEqual(restored.playbackPath, restored.sourcePath)
     XCTAssertEqual(restored.playbackIn, restored.sourceIn)
     let roundTrip = try JSONDecoder().decode(Clip.self, from: JSONEncoder().encode(clip))
     XCTAssertEqual(roundTrip.motionFidelity, clip.motionFidelity)
+    XCTAssertEqual(roundTrip.motionPrompt, clip.motionPrompt)
   }
 
   func testLegacyMotionSettingsKeepAutomaticEvaluationBudget() throws {
@@ -193,6 +205,7 @@ extension ProjectTests {
     clip.motionResult = try JSONDecoder().decode(MotionFidelityResult.self,
       from: JSONSerialization.data(withJSONObject: values))
     XCTAssertTrue(clip.motionIsCurrent)
+    XCTAssertNil(clip.motionResult?.motionPrompt)
     XCTAssertEqual(clip.playbackPath, output.path)
     XCTAssertEqual(clip.playbackIn, 0)
     clip.motionFidelity!.enabled = false
@@ -213,6 +226,10 @@ extension ProjectTests {
     clip.duration = 2.5
     XCTAssertFalse(clip.motionIsCurrent)
     clip.duration = 3
+    clip.motionPrompt = "New repair direction"
+    XCTAssertFalse(clip.motionIsCurrent)
+    clip.motionPrompt = nil
+    XCTAssertTrue(clip.motionIsCurrent)
     try Data("changed source".utf8).write(to: source)
     XCTAssertFalse(clip.motionIsCurrent)
   }

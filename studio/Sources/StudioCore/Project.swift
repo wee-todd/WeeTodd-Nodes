@@ -154,6 +154,7 @@ public struct Clip: Codable, Identifiable, Equatable {
   public var motionFidelity: MotionFidelitySettings?
   public var motionResult: MotionFidelityResult?
   public var motionRecipeID: String?
+  public var motionPrompt: String?
   public var renderedSignature = ""
   public var validatedSignature = ""
   public var extensionClipID: UUID?
@@ -356,6 +357,7 @@ extension Clip {
     c.motionFidelity = nil
     c.motionResult = nil
     c.motionRecipeID = nil
+    c.motionPrompt = nil
     c.sourcePath = ""
     c.sourceIn = 0
     c.versions = []

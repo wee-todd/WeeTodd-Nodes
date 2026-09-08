@@ -41,6 +41,10 @@ native-frame and memory budgets. A real MLX render establishes execution and tim
 visual improvement remains unqualified. See [Studio controls and limits](studio/README.md#motion-fidelity-de-roping--experimental-h3).
 Refinement strength and evaluation count can be set independently for equal-budget comparisons;
 older projects and graphs retain their automatic evaluation counts.
+Each Studio clip can also override its repair recipe prompt in a full-window editor. The editor
+loads the exact resolved prompt, preserves saved nonblank text verbatim, and can reset to the
+recipe prompt. The override is embedded in headless jobs and participates only in enhancement
+freshness, so changing it leaves the base generation reusable.
 
 ## Choose a workflow
 

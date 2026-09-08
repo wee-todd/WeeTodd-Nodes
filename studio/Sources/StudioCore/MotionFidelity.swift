@@ -30,13 +30,30 @@ public struct MotionFidelityResult: Codable, Equatable {
   public var recipeSHA256: String?
   public var recipeSize: Int?
   public var recipeModified: Double?
+  public var motionPrompt: String?
+}
+public struct MotionPromptEditorSession: Equatable {
+  public let clipID: UUID
+  public let token: UUID
+
+  public init(clipID: UUID, token: UUID = UUID()) {
+    self.clipID = clipID
+    self.token = token
+  }
+
+  public func matches(clipID: UUID, token: UUID) -> Bool {
+    self.clipID == clipID && self.token == token
+  }
 }
 extension Clip {
   public var motionIsCurrent: Bool {
     guard let settings = motionFidelity, settings.enabled, let result = motionResult,
       result.settings == settings, result.sourcePath == sourcePath,
       result.sourceIn == sourceIn, result.duration == duration,
-      result.recipeID == (motionRecipeID ?? "") else { return false }
+      result.recipeID == (motionRecipeID ?? ""), result.motionPrompt == motionPrompt
+    else {
+      return false
+    }
     func matches(_ path: String, _ size: Int, _ modified: Double) -> Bool {
       guard let a = try? FileManager.default.attributesOfItem(atPath: path),
         let date = a[.modificationDate] as? Date, let bytes = a[.size] as? NSNumber

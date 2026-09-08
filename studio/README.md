@@ -164,6 +164,12 @@ settings marks the clip yellow without invalidating its base generation. Actions
 motion work. A stale or missing enhancement blocks direct movie export rather than silently using
 the original. Export a headless job to process pending enhancements with Studio closed.
 
+Choose **Edit Repair Prompt** to open the complete resolved repair prompt in a full-window editor.
+Save keeps the nonblank text exactly as written, including surrounding whitespace; it does not
+rewrite or reformat the prompt. **Use Recipe Prompt** clears the clip override and returns repair to
+the selected recipe's original prompt. Changing or clearing the override makes only the existing
+enhancement stale. It does not invalidate the base generation.
+
 - **Adaptive** uses third temporal differences of H3 video latents, adjusted for the VAE's five-phase
   cadence, to allocate integer frame holds. It is a heuristic, not a reliable artifact detector.
   A quiet plan bypasses refinement. **Uniform** expands every source frame equally.
@@ -192,7 +198,11 @@ the original. Export a headless job to process pending enhancements with Studio 
   uses the original trimmed soundtrack, re-encoded to AAC, at the original duration and frame
   rate. Silent sources receive silence. Model refinement can still alter mouth motion or identity.
 
-Movie/clip jobs with Motion Fidelity use `weetodd-studio-job-v2` and embed their repair recipes.
+Movie/clip jobs with Motion Fidelity use `weetodd-studio-job-v2` and embed their repair recipes,
+including a clip's resolved prompt override. The bridge's read-only `motion-prepare` action returns
+the resolved prompt, original recipe prompt and whether the clip uses an override; it validates the
+recipe without writing preparation files or loading model weights. Whitespace-only or non-string
+overrides are rejected before enhancement starts.
 The current `WeeToddCLI` runs generation, enhancement, upscaling/interpolation and assembly serially.
 Completed enhancements are hash-checked on resume; an interrupted enhancement restarts that clip's
 refinement. It does not resume inside transformer sampling. The app-managed native runtime needs
