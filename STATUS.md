@@ -69,7 +69,11 @@ BF16, repeated requests, cancellation/failure cleanup and packed Q8 storage pres
 Transformer preparation from the genuine 13-shard Ref2VA source measured a 5.86GB complete-process
 peak. A one-image 640×384 saved Comfy graph completed 19 dense evaluations and published
 124 synchronized frames, with a 21.70GB full-process peak on an M3 Ultra/256 GiB host.
-Physical 36GB Mac qualification and broad reference-quality coverage remain open.
+The headless output is byte-identical, with a 21.26GB complete-process peak and all runtimes
+released. A Studio clip job exported and passed CLI preflight. The final Python suite excluding
+optional algorithm search passed 1,407 tests with one skip; all 14 Swift tests passed and the
+release application was rebuilt. Physical 36GB Mac and broad reference-quality qualification
+remain open. Full BF16-versus-Q8 model parity was not run.
 
 ## Source checkpoints
 

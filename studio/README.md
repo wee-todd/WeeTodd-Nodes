@@ -51,7 +51,8 @@ See the [model preparation commands](../README.md#experimental-h3-reference-pagi
 requires an existing compact Q8 Qwen encoder containing vision weights and a genuine Ref2VA
 transformer. The current GUI does not perform these conversions automatically. Clip/movie headless
 export preserves this recipe so Studio can be closed during generation. One-image 640×384 generation measured a 21.70GB complete Comfy process peak on an M3 Ultra
-with 256 GiB. A 36GB physical-device maximum is not yet established; the header-based estimate omits reference-dependent workspace.
+with 256 GiB. The headless output was byte-identical and peaked at 21.26GB.
+A 36GB physical-device maximum is not yet established; the header-based estimate omits reference-dependent workspace.
 
 ## Editing
 

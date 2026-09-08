@@ -491,15 +491,19 @@ intermediate mixed checkpoint, and final pages; paging reduces active memory, no
 A saved Comfy API render completed all 19 evaluations and published 124 frames at 24 fps with
 stereo 32 kHz audio. At 640×384 with one image, the complete Comfy process peaked at **21.70GB**;
 the largest instrumented MLX phase peaked at 8.30GB. Audio/video duration drift was 8.33 ms.
+The matching headless recipe produced a byte-identical MP4 at a 21.26GB complete-process peak,
+imported no ComfyUI modules and released every weighted runtime. Studio recipe composition,
+clip-job export/preflight and the rebuilt application passed their checks.
 This was measured on an M3 Ultra with 256 GiB of memory, not a physical 36GB Mac. The render
 retains the reference subject and scene in the inspected frames; broad identity/quality testing
 remains open. Do not substitute the smaller MLX-only figure for the full-process measurement.
 
 The preflight's 26GB value is an estimate budget, not a hard memory cap. Its weight-stage estimate
 includes vision paging but excludes media-dependent reference workspace. Suitability for a physical
-36GB Mac and larger reference sets still needs qualification. Q8 changes numerical results relative
-to BF16; small FP32/BF16 image/video tests establish paging parity with the equivalent resident Q8
-encoder, not full-model BF16 generation parity.
+36GB Mac and larger reference sets still needs qualification. Smaller hosts can reread more pages
+from SSD instead of retaining filesystem cache; do not transfer the larger host's runtime to them.
+Q8 changes numerical results relative to BF16. Small FP32/BF16 image/video tests establish paging
+parity with the equivalent resident Q8 encoder, not full-model BF16 generation parity.
 
 For Studio or a headless clip, prepare a recipe using the same model layout:
 
