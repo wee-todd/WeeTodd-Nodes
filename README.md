@@ -7,7 +7,7 @@ and audio as one synchronized latent contract. Weighted components load only whe
 and can unload between Qwen3-VL, transformer, video VAE, and audio VAE stages.
 
 - 55 composable nodes under `WeeTodd/H3`
-- 121 registered nodes across all engines and media utilities; 42 shipped UI workflows
+- 121 registered nodes across all engines and media utilities; 43 shipped UI workflows
 
 See [implementation status](STATUS.md) for current capabilities and qualification limits.
 
@@ -63,7 +63,9 @@ The profile names are intentionally simple:
 | Balance | Quality, speed, and memory all matter. | Two base evaluations plus four Turbo evaluations at 512p. |
 | Performance | Quality-first compute has priority. | Dense 20-point schedule with 19 real evaluations at 512p. |
 
-Each H3 profile includes the same four task graphs. Media selectors are empty by design. Select
+The core H3 profiles include the same four task graphs. Additional experimental graphs can use
+different sizes: the paged Ref2VA candidate starts at 640×384 with the dense schedule.
+Media selectors are empty by design. Select
 images, video, or audio after loading the workflow.
 
 | Task | Speed | Balance | Performance |
@@ -450,6 +452,73 @@ Reference model sources (select only what your workflow needs):
 
 Use the genuine Ref2VA partition for Ref2VA workflows. The shipped graphs do not enable the FL2VA
 compatibility override.
+
+## Experimental H3 reference paging
+
+The [Q8 paged Ref2VA workflow](workflows/performance/ref2va/h3_ref2va_q8_paged_experimental.json)
+and [matching API graph](examples/h3_ref2va_q8_paged_api.json) use genuine Ref2VA transformer
+weights with the existing Q8-extended profile and four-block paging. They start at 640×384,
+five seconds, one image reference and 19 dense evaluations. Chain another **H3 Reference Image**
+for more images. More reference rows increase memory and sampling time.
+
+Qwen paging v2 retains a separate vision page. Each reference's visual features are materialized
+before the vision tower is released; language layers then load sequentially. Existing text-only
+v1 exports remain supported for T2VA and are rejected for visual conditioning. The converter uses
+bounded file copying for the Qwen pages and preserves packed Q8 storage. Hashes are verified by
+default. Conversion does not download weights or change the originals.
+
+Prepare the genuine native Ref2VA transformer, then the **compact Q8 Qwen encoder containing
+vision weights**. Do not use the FL2VA Q8 transformer linked above as a Ref2VA substitute.
+`--architecture-config` must identify the full Qwen3-VL architecture, including the original
+64-layer text configuration and vision configuration. This tool repackages an existing compact
+Q8 encoder; conversion/quantization of a full raw Qwen checkpoint is not implemented here.
+
+```bash
+python scripts/convert_mixed_checkpoint.py /path/to/Ref2VA/transformer \
+  /path/to/ref2va-q8-extended --profile q8_extended --max-shard-mib 512
+python scripts/convert_paged_checkpoint.py /path/to/ref2va-q8-extended \
+  /path/to/ComfyUI/models/MiniMax-H3/transformers/ref2va-q8-extended-paged
+python scripts/convert_paged_text_encoder.py /path/to/compact-qwen-q8 \
+  /path/to/ComfyUI/models/MiniMax-H3/text_encoders/q8-vision-paged \
+  --include-vision --architecture-config /path/to/full-qwen-config.json
+```
+
+The first two commands were exercised against all 13 genuine native Ref2VA shards, with source
+SHA256 values matching the download records. Combined transformer preparation used a measured
+5.86GB full-process peak on the validation Mac. Keep sufficient disk space for the original,
+intermediate mixed checkpoint, and final pages; paging reduces active memory, not model storage.
+
+A saved Comfy API render completed all 19 evaluations and published 124 frames at 24 fps with
+stereo 32 kHz audio. At 640×384 with one image, the complete Comfy process peaked at **21.70GB**;
+the largest instrumented MLX phase peaked at 8.30GB. Audio/video duration drift was 8.33 ms.
+The matching headless recipe produced a byte-identical MP4 at a 21.26GB complete-process peak,
+imported no ComfyUI modules and released every weighted runtime. Studio recipe composition,
+clip-job export/preflight and the rebuilt application passed their checks.
+This was measured on an M3 Ultra with 256 GiB of memory, not a physical 36GB Mac. The render
+retains the reference subject and scene in the inspected frames; broad identity/quality testing
+remains open. Do not substitute the smaller MLX-only figure for the full-process measurement.
+
+The preflight's 26GB value is an estimate budget, not a hard memory cap. Its weight-stage estimate
+includes vision paging but excludes media-dependent reference workspace. Suitability for a physical
+36GB Mac and larger reference sets still needs qualification. Smaller hosts can reread more pages
+from SSD instead of retaining filesystem cache; do not transfer the larger host's runtime to them.
+Q8 changes numerical results relative to BF16. Small FP32/BF16 image/video tests establish paging
+parity with the equivalent resident Q8 encoder, not full-model BF16 generation parity.
+
+For Studio or a headless clip, prepare a recipe using the same model layout:
+
+```bash
+python scripts/prepare_h3_reference_recipe.py --models /path/to/ComfyUI/models \
+  --reference /path/to/hero.png --prompt-file /path/to/prompt.txt \
+  --output /path/to/H3_Reference_Q8_Paged.json
+python scripts/render_headless.py --recipe /path/to/H3_Reference_Q8_Paged.json \
+  --output-directory /path/to/new-render
+```
+
+Recipe preparation validates models and media before writing a new file. Import that recipe in
+Studio Runtime Settings, select it for an H3 clip, attach the desired image with the **Reference**
+role and write the native H3 prompt. Studio's clip/movie job export retains the same paged model
+paths and conditioning. Model preparation remains an explicit setup step in this development build.
 
 ## LTX 2.5 model layout
 
@@ -1214,7 +1283,7 @@ This table is generated from the registered node contracts. Run
 | H3 Component Loader | Describe every MiniMax H3 component. This node does not load tensor weights. | H3 — Loaders | Recommended |
 | H3 Model Preview Override | Attach a true-color TAE preview and optional collapse guard to H3 sampling. Core ML can keep preview decoding on the Apple Neural Engine; MLX remains the fallback. Place this node between the component loader and sampler. | H3 — Sampling and acceleration | Experimental |
 | H3 Quantized Transformer Loader | Select and validate a named mixed-precision H3 transformer without loading weights. Both q8 profiles are approximate and keep BlockCache disabled by default. | H3 — Loaders | Experimental |
-| H3 Component Preflight | Validate MiniMax H3 components and estimate staged memory from file headers. Set available memory to zero when unknown. | H3 — Loaders | Recommended |
+| H3 Component Preflight | Validate MiniMax H3 components and estimate staged memory from file headers. Vision-capable paged Qwen is supported; reference workspace is not included. Set available memory to zero when unknown. | H3 — Loaders | Recommended |
 | H3 Token + Memory Budget | Estimate H3 text, condition, audio, and video rows plus dense-attention scale without loading a checkpoint. Add encoded reference rows for Ref2VA planning. | H3 — Loaders | Supported |
 | H3 First Frame | Use one image as the first-frame endpoint for an FL2VA generation. | H3 — Conditioning | Supported |
 | H3 Last Frame | Use one image as the last-frame endpoint for an FL2VA generation. | H3 — Conditioning | Supported |
@@ -1229,7 +1298,7 @@ This table is generated from the registered node contracts. Run
 | H3 Timeline Audio Guide | Place an audio guide at an exact Ref2VA target frame. | H3 — Conditioning | Supported |
 | H3 Encode First / Last Frames | Encode FL2VA prompt vision rows and first/last-frame VAE rows in separate staged phases. Each weighted component unloads before the next phase. | H3 — Conditioning | Supported |
 | H3 Encode Timed Keyframes | Encode up to eight sparse FL2VA images at exact 24 fps timestamps, unloading Qwen3-VL before the video VAE stage. | H3 — Conditioning | Experimental |
-| H3 Encode References | Prepare ordered Ref2VA media, then stage Qwen3-VL, the video VAE, and the audio VAE. Each weighted component unloads before the next stage. | H3 — Conditioning | Experimental |
+| H3 Encode References | Prepare ordered Ref2VA media, then stage Qwen3-VL, the video VAE, and the audio VAE. Resident and vision-capable paged Qwen are supported. Each weighted component unloads before the next stage. | H3 — Conditioning | Experimental |
 | H3 Reference Strength | Adjust how strongly FL2VA or Ref2VA trusts visual and audio condition rows. Defaults preserve the released H3 behavior. | H3 — Conditioning | Experimental |
 | H3 Text Encode (Qwen3-VL) | Encode a text-only H3 prompt with Qwen3-VL. The vision tower stays unloaded. A bounded persistent feature cache can skip repeat encodes without keeping weights loaded. | H3 — Conditioning | Recommended |
 | H3 Unload Qwen3-VL | Release the process-local Qwen3-VL conditioner and clear the MLX cache. | H3 — Conditioning | Supported |

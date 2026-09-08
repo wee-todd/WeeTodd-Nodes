@@ -39,6 +39,21 @@ Runtime settings, autosave, global assets, recipes, previews and jobs live under
 `~/Library/Application Support/WeeTodd Studio`. User media and model weights stay in their existing
 locations. `WEETODD_STUDIO_DATA` selects a separate data directory for isolated development tests.
 
+## H3 reference clips with paged Q8 models
+
+Import a recipe produced by `scripts/prepare_h3_reference_recipe.py`, select **H3 Reference Q8
+Paged** for the clip, and attach images with the **Reference** role. The shared renderer uses genuine
+Ref2VA Q8 transformer pages and vision-capable Qwen v2 pages. Start with one image, five seconds,
+640×384 and the recipe's 19 dense evaluations; add a second reference only after checking memory.
+The existing text-only Qwen page export cannot encode reference images.
+
+See the [model preparation commands](../README.md#experimental-h3-reference-paging). Preparation
+requires an existing compact Q8 Qwen encoder containing vision weights and a genuine Ref2VA
+transformer. The current GUI does not perform these conversions automatically. Clip/movie headless
+export preserves this recipe so Studio can be closed during generation. One-image 640×384 generation measured a 21.70GB complete Comfy process peak on an M3 Ultra
+with 256 GiB. The headless output was byte-identical and peaked at 21.26GB.
+A 36GB physical-device maximum is not yet established; the header-based estimate omits reference-dependent workspace.
+
 ## Editing
 
 - Clip inspector at upper left, inherited movie settings below; central viewport and timeline;

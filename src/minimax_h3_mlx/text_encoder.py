@@ -21,8 +21,11 @@ AdaLN modulation keys off.
 
 from __future__ import annotations
 
+import gc
 import glob
 import json
+from contextlib import contextmanager
+from dataclasses import replace
 from pathlib import Path
 
 import mlx.core as mx
@@ -92,16 +95,16 @@ class MiniMaxH3TextEncoder:
         self.model_config.text_config = self.text_config
         self.model_config.vision_config = self.vision_config
 
-        self.language = Qwen3VLModel(self.text_config)
-        self.vision = VisionModel(self.vision_config) if load_vision else None
+        self._load_vision_enabled = load_vision
+        self.vision = None
         if (model_dir / "paged_text_encoder_manifest.json").is_file():
-            if load_vision:
-                raise ValueError(
-                    "The paged H3 text encoder is text-only. Use the compact resident encoder "
-                    "when image conditioning requires Qwen3-VL vision."
-                )
+            # Construct only the fixed embedding/norm shell. Constructing the complete stack
+            # first transiently allocates every decoder layer even if it is immediately removed.
+            self.language = Qwen3VLModel(replace(self.text_config, num_hidden_layers=0))
             self._load_paged_weights(model_dir)
         else:
+            self.language = Qwen3VLModel(self.text_config)
+            self.vision = VisionModel(self.vision_config) if load_vision else None
             self._load_weights(model_dir, dtype, verbose)
 
         self.image_token_id = raw["image_token_id"]
@@ -252,6 +255,7 @@ class MiniMaxH3TextEncoder:
                 f"Paged H3 text encoder has {manifest.num_blocks} layers; "
                 f"conditioning requires {self.num_layers}."
             )
+        self.paged_manifest = manifest
         store = PagedTensorStore(manifest)
         source = store.load_fixed()
         fixed: dict[str, mx.array] = {}
@@ -260,7 +264,17 @@ class MiniMaxH3TextEncoder:
                 target = self._wanted(key)
                 if target is None or target[0] != "language":
                     continue
-                fixed[target[1]] = tensor
+                fixed[target[1]] = (
+                    tensor if tensor.dtype == mx.uint32 else tensor.astype(self.dtype)
+                )
+            quantized = {key.removesuffix(".scales") for key in fixed if key.endswith(".scales")}
+            if quantized:
+                nn.quantize(
+                    self.language, group_size=64, bits=8, mode="affine",
+                    class_predicate=lambda path, _module: path in quantized,
+                )
+            # The optional final norm is never used by H3.
+            fixed.pop("norm.weight", None)
             expected = {
                 key
                 for key, _ in tree_flatten(self.language.parameters())
@@ -281,8 +295,85 @@ class MiniMaxH3TextEncoder:
             fixed.clear()
             source.clear()
             store.release()
-        self.paged_layers = PagedTextLayerExecutor(manifest, self.text_config)
+        self.paged_layers = PagedTextLayerExecutor(
+            manifest, self.text_config, dtype=self.dtype
+        )
         self.skipped_tensors = 0
+
+    def _load_paged_vision(self):
+        """Validate and materialize the vision page without constructing language layers."""
+        from mlx.utils import tree_flatten, tree_unflatten
+        from mlx_vlm.models.qwen3_vl.vision import VisionModel
+
+        record = self.paged_manifest.vision
+        values = {}
+        local = {}
+        module = None
+        try:
+            values = dict(mx.load(str(self.paged_manifest.root / record.file)))
+            if any(not key.startswith("visual.") for key in values):
+                raise ValueError("Paged H3 vision page contains non-visual tensors.")
+            local = {key.removeprefix("visual."): value for key, value in values.items()}
+            module = VisionModel(self.vision_config)
+            quantized = {key.removesuffix(".scales") for key in local if key.endswith(".scales")}
+            if quantized:
+                nn.quantize(
+                    module, group_size=64, bits=8, mode="affine",
+                    class_predicate=lambda path, _module: path in quantized,
+                )
+            expected = dict(tree_flatten(module.parameters()))
+            missing = sorted(expected.keys() - local.keys())
+            unexpected = sorted(local.keys() - expected.keys())
+            if missing or unexpected:
+                raise KeyError(
+                    f"Paged H3 vision tensors mismatch: missing {missing[:4]}, "
+                    f"unexpected {unexpected[:4]}."
+                )
+            local = module.sanitize(local)
+            for key, tensor in local.items():
+                reference = expected[key]
+                if tensor.shape != reference.shape:
+                    raise ValueError(
+                        f"Paged H3 vision tensor {key} has shape {tensor.shape}; "
+                        f"expected {reference.shape}."
+                    )
+                if (reference.dtype == mx.uint32 and tensor.dtype != mx.uint32) or (
+                    reference.dtype != mx.uint32 and not mx.issubdtype(tensor.dtype, mx.floating)
+                ):
+                    raise ValueError(
+                        f"Paged H3 vision tensor {key} has invalid dtype {tensor.dtype}."
+                    )
+            local = {
+                key: tensor if tensor.dtype == mx.uint32 else tensor.astype(self.dtype)
+                for key, tensor in local.items()
+            }
+            module.update(tree_unflatten(list(local.items())))
+            mx.eval(module.parameters())
+            return module
+        finally:
+            values.clear()
+            local.clear()
+            module = None
+            gc.collect()
+            mx.clear_cache()
+
+    @contextmanager
+    def _vision_stage(self, required: bool):
+        paged = getattr(self, "paged_manifest", None)
+        try:
+            if required and paged is not None:
+                if not self._load_vision_enabled or not paged.supports_vision:
+                    raise ValueError(
+                        "This paged H3 encoder has no enabled vision page. Convert with "
+                        "include_vision=True and enable load_vision for visual conditioning."
+                    )
+                self.vision = self._load_paged_vision()
+            yield
+        finally:
+            if paged is not None:
+                self.vision = None
+                gc.collect()
+                mx.clear_cache()
 
     # -- tokenizer / processor -------------------------------------------------------------
 
@@ -542,6 +633,7 @@ class MiniMaxH3TextEncoder:
                         )
                     # Complete the sequential state before the layer's mapped weights are retired.
                     mx.eval(h)
+                    del layer
         # No `model.norm(h)`: H3 conditions on the unnormalized state.
         return h
 
@@ -564,82 +656,86 @@ class MiniMaxH3TextEncoder:
         image_grid_thw = None
         video_grid_thw = None
 
-        if references and vision_inputs:
-            if self.vision is None:
-                raise ValueError(
-                    "This encoder was built with `load_vision=False`; it cannot take visual "
-                    "references."
+        with self._vision_stage(bool(vision_inputs)):
+            if references and vision_inputs:
+                if self.vision is None:
+                    raise ValueError(
+                        "This encoder was built with `load_vision=False`; it cannot take visual "
+                        "references."
+                    )
+                features = []
+                deepstack_groups = []
+                image_grids = []
+                video_grids = []
+                for pad_id, pixels, grid_np in vision_inputs:
+                    grid = adopt_numpy_array(grid_np, dtype=np.int32)
+                    hidden, deep = encode_vision(
+                        self.vision,
+                        adopt_numpy_array(np.asarray(pixels)).astype(self.dtype),
+                        grid,
+                    )
+                    # Detach each ordered reference from the lazy vision graph before the next.
+                    mx.eval(hidden, *deep)
+                    features.append(hidden.astype(self.dtype))
+                    deepstack_groups.append(deep)
+                    if pad_id == self.image_token_id:
+                        image_grids.append(grid_np)
+                    else:
+                        video_grids.append(grid_np)
+                inputs_embeds = self.language.embed_tokens(input_ids)
+                visual_mask = (input_ids == self.image_token_id) | (
+                    input_ids == self.config.video_token_id
                 )
-            features = []
-            deepstack_groups = []
-            image_grids = []
-            video_grids = []
-            for pad_id, pixels, grid_np in vision_inputs:
-                grid = adopt_numpy_array(grid_np, dtype=np.int32)
-                hidden, deep = encode_vision(
+                combined = mx.concatenate(features, axis=0)
+                expanded = mx.broadcast_to(visual_mask[..., None], inputs_embeds.shape)
+                if int(expanded.sum().item()) != combined.size:
+                    raise ValueError(
+                        "The Ref2VA presentation rows do not match the Qwen3-VL vision features."
+                    )
+                inputs_embeds = _masked_scatter(inputs_embeds, expanded, combined)
+                visual_pos_masks = visual_mask
+                if deepstack_groups:
+                    deepstack_embeds = [
+                        mx.concatenate([group[layer] for group in deepstack_groups], axis=0)
+                        for layer in range(len(deepstack_groups[0]))
+                    ]
+                if image_grids:
+                    image_grid_thw = adopt_numpy_array(
+                        np.concatenate(image_grids), dtype=np.int32
+                    )
+                if video_grids:
+                    video_grid_thw = adopt_numpy_array(
+                        np.concatenate(video_grids), dtype=np.int32
+                    )
+            elif vision_inputs:
+                if self.vision is None:
+                    raise ValueError(
+                        "This encoder was built with `load_vision=False`; it cannot take images."
+                    )
+                pixel_values, grid_np = vision_inputs
+                image_grid_thw = adopt_numpy_array(grid_np, dtype=np.int32)
+                hidden, deepstack_embeds = encode_vision(
                     self.vision,
-                    adopt_numpy_array(np.asarray(pixels)).astype(self.dtype),
-                    grid,
+                    adopt_numpy_array(np.asarray(pixel_values)).astype(self.dtype),
+                    image_grid_thw,
                 )
-                features.append(hidden.astype(self.dtype))
-                deepstack_groups.append(deep)
-                if pad_id == self.image_token_id:
-                    image_grids.append(grid_np)
-                else:
-                    video_grids.append(grid_np)
-            inputs_embeds = self.language.embed_tokens(input_ids)
-            visual_mask = (input_ids == self.image_token_id) | (
-                input_ids == self.config.video_token_id
-            )
-            combined = mx.concatenate(features, axis=0)
-            expanded = mx.broadcast_to(visual_mask[..., None], inputs_embeds.shape)
-            if int(expanded.sum().item()) != combined.size:
-                raise ValueError(
-                    "The Ref2VA presentation rows do not match the Qwen3-VL vision features."
-                )
-            inputs_embeds = _masked_scatter(inputs_embeds, expanded, combined)
-            visual_pos_masks = visual_mask
-            if deepstack_groups:
-                deepstack_embeds = [
-                    mx.concatenate([group[layer] for group in deepstack_groups], axis=0)
-                    for layer in range(len(deepstack_groups[0]))
-                ]
-            if image_grids:
-                image_grid_thw = adopt_numpy_array(
-                    np.concatenate(image_grids), dtype=np.int32
-                )
-            if video_grids:
-                video_grid_thw = adopt_numpy_array(
-                    np.concatenate(video_grids), dtype=np.int32
-                )
-        elif vision_inputs:
-            if self.vision is None:
-                raise ValueError(
-                    "This encoder was built with `load_vision=False`; it cannot take images."
-                )
-            pixel_values, grid_np = vision_inputs
-            image_grid_thw = adopt_numpy_array(grid_np, dtype=np.int32)
-            hidden, deepstack_embeds = encode_vision(
-                self.vision,
-                adopt_numpy_array(np.asarray(pixel_values)).astype(self.dtype),
-                image_grid_thw,
-            )
-            inputs_embeds = self.language.embed_tokens(input_ids)
-            image_mask = input_ids == self.image_token_id
-            # The vision tower emits one row per *merged* patch, not one per request token, so the
-            # rows have to be scattered into the `<|image_pad|>` positions. A `where` cannot do it:
-            # its operands would have to broadcast, and (1, num_patches, 5120) does not broadcast
-            # against (1, sequence_length, 5120) for any request that carries prompt text as well.
-            expanded = mx.broadcast_to(image_mask[..., None], inputs_embeds.shape)
-            image_features = hidden.astype(inputs_embeds.dtype)
-            if int(expanded.sum().item()) != image_features.size:
-                raise ValueError(
-                    f"The request reserves {int(image_mask.sum().item())} image rows but the "
-                    f"vision tower produced {image_features.shape[0]}. The image processor's "
-                    "patch geometry and the vision config disagree."
-                )
-            inputs_embeds = _masked_scatter(inputs_embeds, expanded, image_features)
-            visual_pos_masks = image_mask
+                inputs_embeds = self.language.embed_tokens(input_ids)
+                image_mask = input_ids == self.image_token_id
+                # Scatter merged patch rows into image-pad positions. They cannot broadcast
+                # over the longer request sequence, which also includes prompt text.
+                expanded = mx.broadcast_to(image_mask[..., None], inputs_embeds.shape)
+                image_features = hidden.astype(inputs_embeds.dtype)
+                if int(expanded.sum().item()) != image_features.size:
+                    raise ValueError(
+                        f"The request reserves {int(image_mask.sum().item())} image rows but the "
+                        f"vision tower produced {image_features.shape[0]}. The image processor's "
+                        "patch geometry and the vision config disagree."
+                    )
+                inputs_embeds = _masked_scatter(inputs_embeds, expanded, image_features)
+                visual_pos_masks = image_mask
+
+            if inputs_embeds is not None:
+                mx.eval(inputs_embeds, *(deepstack_embeds or []))
 
         # Qwen3-VL's 3D M-RoPE index, derived from the vision-start/pad token ids.
         position_ids, _ = LanguageModel.get_rope_index(

@@ -652,3 +652,33 @@ def test_reference_task_requires_processor_configuration(tmp_path: Path):
             H3ComponentSetSpec(str(root), task="ref2va"),
             H3PreflightRequest(),
         )
+
+
+@pytest.mark.parametrize("task", ["t2va", "fl2va", "ref2va"])
+def test_preflight_vision_pager_reports_sequential_stage_memory(tmp_path, task):
+    spec = _portable_optimized_spec(tmp_path)
+    root = Path(spec.checkpoint)
+    model = json.loads((root / "model_index.json").read_text())
+    model["_minimax_h3"] = {"partition": "ref2va" if task == "ref2va" else "fl2va", "tasks": [task]}
+    _json(root / "model_index.json", model)
+    encoder = Path(spec.text_encoder)
+    manifest_path = encoder / "paged_text_encoder_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["format"] = "weetodd-h3-qwen-paged-v2"
+    manifest["vision"] = {
+        "file": "pages/vision.safetensors",
+        "tensor_count": 1,
+        "tensor_bytes": 256,
+        "sha256": "0" * 64,
+    }
+    _safetensors(encoder / manifest["vision"]["file"], {"visual.weight": ("F16", [128], 256)})
+    _json(manifest_path, manifest)
+    report = preflight_components(
+        H3ComponentSetSpec(**{**spec.__dict__, "task": task}), H3PreflightRequest(prompt_tokens=10)
+    )
+    text = next(item for item in report.components if item.name == "text_encoder")
+    assert text.paging_format == "weetodd-h3-qwen-paged-v2"
+    assert text.paging_vision_bytes == 256
+    assert report.qwen_stage_bytes == 32 + (32 if task == "t2va" else 256) + 10 * 5120 * 2 * 4
+    if task != "t2va":
+        assert any("reference" in warning and "workspace" in warning for warning in report.warnings)
