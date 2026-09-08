@@ -392,6 +392,7 @@
         "Node name for S&R": "WeeToddLTX25Generate"
       },
       "widgets_values": [
+        "",
         "WeeTodd/LTX25_ingredients_speed",
         true
       ]

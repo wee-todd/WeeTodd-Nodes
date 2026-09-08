@@ -7,6 +7,8 @@ from typing import Any
 
 import mlx.core as mx
 
+from wee_todd_mlx.numpy_import import adopt_numpy_array
+
 
 @dataclass(frozen=True)
 class LTX25AudioDrivenReport:
@@ -23,11 +25,24 @@ class LTX25AudioDrivenReport:
         return self.__dict__.copy()
 
 
+@dataclass(frozen=True)
+class LTX25PublicationAudioReport:
+    source_sample_rate: int
+    source_channels: int
+    source_samples: int
+    published_samples: int
+    duration_seconds: float
+    output_policy: str = "original_audio_trim_or_silence_pad"
+
+    def as_dict(self) -> dict[str, object]:
+        return self.__dict__.copy()
+
+
 def _host_audio(audio: Any):
     import numpy as np
 
     if not isinstance(audio, dict) or "waveform" not in audio or "sample_rate" not in audio:
-        raise ValueError("LTX 2.5 audio-driven conditioning requires a ComfyUI AUDIO input.")
+        raise ValueError("LTX 2.5 audio processing requires a ComfyUI AUDIO input.")
     waveform = audio["waveform"]
     detach = getattr(waveform, "detach", None)
     if detach is not None:
@@ -69,6 +84,23 @@ def _linear_resample(waveform, source_rate: int, target_rate: int):
     return np.asarray(channels, dtype=np.float32)[None]
 
 
+def prepare_publication_audio(*, audio: Any, duration_seconds: float):
+    """Prepare untouched ComfyUI audio for final muxing without conditioning the model."""
+
+    waveform, sample_rate = _host_audio(audio)
+    source_samples = int(waveform.shape[-1])
+    publication_samples = max(1, round(float(duration_seconds) * sample_rate))
+    publication = _fit_samples(waveform, publication_samples)
+    report = LTX25PublicationAudioReport(
+        source_sample_rate=sample_rate,
+        source_channels=int(waveform.shape[1]),
+        source_samples=source_samples,
+        published_samples=publication_samples,
+        duration_seconds=float(duration_seconds),
+    )
+    return adopt_numpy_array(publication), report
+
+
 def prepare_audio_driven_conditioning(
     *,
     audio: Any,
@@ -88,7 +120,9 @@ def prepare_audio_driven_conditioning(
     conditioning_rate = 16000
     conditioning = _linear_resample(publication, sample_rate, conditioning_rate)
     encoder, processor = audio_conditioner.load()
-    latent = encode_audio(mx.array(conditioning), conditioning_rate, encoder, processor)
+    latent = encode_audio(
+        adopt_numpy_array(conditioning), conditioning_rate, encoder, processor
+    )
     tokens, _token_count = audio_patchifier.patchify(latent)
     if tokens.shape[1] < target_tokens:
         missing = target_tokens - tokens.shape[1]
@@ -107,7 +141,12 @@ def prepare_audio_driven_conditioning(
         audio_tokens=int(tokens.shape[1]),
         duration_seconds=duration_seconds,
     )
-    return tokens, mx.array(np.ascontiguousarray(publication)), report
+    return tokens, adopt_numpy_array(np.ascontiguousarray(publication)), report
 
 
-__all__ = ["LTX25AudioDrivenReport", "prepare_audio_driven_conditioning"]
+__all__ = [
+    "LTX25AudioDrivenReport",
+    "LTX25PublicationAudioReport",
+    "prepare_audio_driven_conditioning",
+    "prepare_publication_audio",
+]

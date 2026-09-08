@@ -81,8 +81,8 @@
         5,
         0,
         "ratio + size",
-        "384 px short edge \u2014 fast smoke",
-        "16:9 \u2014 widescreen landscape",
+        "384 px short edge — fast smoke",
+        "16:9 — widescreen landscape",
         384,
         640,
         384,
@@ -90,7 +90,8 @@
         "low_memory_bf16",
         "automatic",
         "mlx",
-        "euler"
+        "euler",
+        "off"
       ]
     },
     {
@@ -291,7 +292,8 @@
         "Node name for S&R": "WeeToddH3Sample"
       },
       "widgets_values": [
-        true
+        true,
+        "checkpoint_default"
       ]
     },
     {
@@ -347,7 +349,8 @@
         18,
         0.025,
         "{\"workflow\":\"h3_i2v_speed\",\"profile\":\"speed\",\"task\":\"i2v\",\"seed\":0,\"real_transformer_evaluations\":4,\"cache\":\"disabled\",\"preview\":\"enabled\",\"reference_sizing\":\"not applicable\"}",
-        ""
+        "",
+        "fixed"
       ]
     },
     {
@@ -408,7 +411,7 @@
         "Node name for S&R": "WeeToddH3ValidatedSamplingPreset"
       },
       "widgets_values": [
-        "Turbo \u2014 drbaph v4 step-600 \u2014 384p low-memory \u2014 5 points / 4 evaluations"
+        "Turbo — drbaph v4 step-600 — 384p low-memory — 5 points / 4 evaluations"
       ]
     },
     {

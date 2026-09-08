@@ -6,7 +6,10 @@ WeeTodd keeps each model engine behind a separate ComfyUI adapter. H3 generation
 and audio as one synchronized latent contract. Weighted components load only when the graph runs
 and can unload between Qwen3-VL, transformer, video VAE, and audio VAE stages.
 
-- 47 composable nodes under `WeeTodd/H3`
+- 53 composable nodes under `WeeTodd/H3`
+- 119 registered nodes across all engines and media utilities; 42 shipped UI workflows
+
+See [implementation status](STATUS.md) for current capabilities and qualification limits.
 
 Recent experimental controls include target-frame H3 image, clip, and audio guides; an H3 token
 and attention-workspace estimator; independent MLX attention-head and feed-forward row chunking;
@@ -44,6 +47,8 @@ images, video, or audio after loading the workflow.
 | Task | Speed | Balance | Performance |
 | --- | --- | --- | --- |
 | T2V + audio | [Open workflow](workflows/speed/t2v/h3_t2v_speed.json) | [Open workflow](workflows/balance/t2v/h3_t2v_balance.json) | [Open workflow](workflows/performance/t2v/h3_t2v_performance.json) |
+| FastH3 T2V + audio | [40-layer candidate](workflows/speed/t2v/h3_fasth3_40layer_candidate.json) | — | [Compact indexed Metal workflow](workflows/performance/t2v/h3_fasth3_compact_vsa_performance.json) |
+| VDN-H3 T2V + audio (experimental) | — | [8-step paged workflow](workflows/balance/t2v/h3_vdn_8_step_experimental.json) | [Resident / warm — high memory](workflows/performance/t2v/h3_vdn_8_step_resident_experimental.json) |
 | I2V + audio | [Open workflow](workflows/speed/i2v/h3_i2v_speed.json) | [Open workflow](workflows/balance/i2v/h3_i2v_balance.json) | [Open workflow](workflows/performance/i2v/h3_i2v_performance.json) |
 | First/last-frame video + audio | [Open workflow](workflows/speed/fflf2va/h3_fflf2va_speed.json) | [Open workflow](workflows/balance/fflf2va/h3_fflf2va_balance.json) | [Open workflow](workflows/performance/fflf2va/h3_fflf2va_performance.json) |
 | Ref2VA | [Open workflow](workflows/speed/ref2va/h3_ref2va_speed.json) | [Open workflow](workflows/balance/ref2va/h3_ref2va_balance.json) | [Open workflow](workflows/performance/ref2va/h3_ref2va_performance.json) |
@@ -62,9 +67,13 @@ Frames** when the graph needs numbered middle frames.
 | Performance | [LTX 2.5 Ingredients quality](workflows/performance/ref2va/ltx25_ingredients_reference_sheet_quality.json) | Full 15-forward CFG++ Ingredients generation. |
 | Balance | [LTX 2.5 Ingredients balanced](workflows/balance/ref2va/ltx25_ingredients_reference_sheet_balanced.json) | Hybrid 12-forward CFG++ Ingredients generation. |
 | Speed | [LTX 2.5 Ingredients + Sol speed](workflows/speed/ref2va/ltx25_ingredients_reference_sheet_speed.json) | Eight-forward Q8 Ingredients generation with compact reference sizing and paged-speed Sol Attention. |
+| Speed | [LTX 2.5 MSR speed](workflows/speed/ref2va/ltx25_msr_two_subject_speed.json) | MSR starting graph with Q8 paging, eight real forwards, automatic priority density, and Sol-aligned reference layouts. |
+| Balance | [LTX 2.5 MSR balance](workflows/balance/ref2va/ltx25_msr_two_subject_balance.json) | Two-subject Q8 MSR graph with 25-frame dense references and exact attention. |
+| Performance | [LTX 2.5 MSR performance](workflows/performance/ref2va/ltx25_msr_two_subject_performance.json) | BF16 quality-first MSR graph with 33-frame full-canvas references and exact attention. |
 | Balance | [LTX 2.5 Union Canny](workflows/balance/ref2va/ltx25_union_canny_balanced.json) | MLX-native Canny preprocessing with baked Q8 Union Control. |
 | Balance | [LTX 2.5 Union Depth](workflows/balance/ref2va/ltx25_union_depth_balanced.json) | MLX Video Depth Anything preprocessing with baked Q8 Union Control. |
 | Balance | [LTX 2.5 Union Pose](workflows/balance/ref2va/ltx25_union_pose_balanced.json) | Preprocessed pose-video control with baked Q8 Union Control. |
+| Balance | [LTX 2.5 CrossView Warp + reference](workflows/balance/ref2va/ltx25_crossview_warp_balanced.json) | Create a depth-warped camera view, preview its disocclusion holes, and stack the trained warp/source pair with an Ingredients character-and-scene reference frame. The original soundtrack is preserved. |
 | Performance | [LTX 2.5 Motion Track quality](workflows/performance/i2v/ltx25_motion_track_quality.json) | MLX-generated colored trajectories with the dedicated Motion Track IC-LoRA and full 15-forward CFG++. |
 | Performance | [LTX 2.5 768×512 guided HQ](workflows/performance/t2v/ltx25_768x512_guided_hq.json) | Development transformer with selectable 30-step guided Euler or 15-step guided `res_2s`, followed by the official distilled-LoRA refinement stage. |
 | Balance | [LTX 2.5 768×512 practical DFR](workflows/balance/t2v/ltx25_768x512_dfr_conv_vae.json) | Exact prebaked Q8 DFR sampling with bounded convolutional-VAE publication. |
@@ -74,6 +83,23 @@ Frames** when the graph needs numbered middle frames.
 | Performance | [LTX 2.5 1920×1088](workflows/performance/t2v/ltx25_1920x1088_two_stage.json) | High-resolution quality-first generation. |
 | Balance | [LTX 2.5 chained timeline](workflows/balance/continuation/ltx25_768p_15s_three_window_chain.json) | Experimental long-timeline continuation and selective regeneration. |
 | Balance | [LTX 2.5 video refine](workflows/balance/video-upscale/ltx25_any_video_pixel_spatial_2x.json) | Refine and upscale any source movie while preserving its audio. |
+| Balance | [Florence-2 text mask + CorridorKey](workflows/balance/keying/corridorkey_mlx_florence2_text_mask.json) | MLX text grounding on sparse frames, standard mask refinement, and CorridorKey extraction with both previews connected. |
+
+### CorridorKey workflow
+
+Use the [balanced CorridorKey MLX workflow](workflows/balance/keying/corridorkey_mlx_auto_chroma.json)
+to extract a straight-color foreground and alpha matte from green-screen footage. The default
+auto-chroma node creates the coarse, eroded hint that CorridorKey expects. Any standard ComfyUI
+`MASK` from SAM, Florence-2, Impact Pack, or another segmentation node can replace that hint after
+passing through **CorridorKey Mask Refine**.
+
+For text-selected subjects, use the [Florence-2 text-mask CorridorKey workflow](workflows/balance/keying/corridorkey_mlx_florence2_text_mask.json).
+The tested Q8 Florence model runs through MLX-VLM, evaluates frame 0, each selected stride, and the
+final frame, then interpolates one union box across the remaining frames. The default mode refines
+each localized region into an image-guided silhouette. The fast mode emits a rectangle. The
+default eight-frame stride reduces detector work. Set the stride to one when motion or occlusion
+makes tracking more important than preprocessing speed. Review the green contour before running
+or accepting the final key. The orange rectangle shows the Florence search region.
 
 ## Install
 
@@ -89,12 +115,263 @@ COMFYUI_ROOT=/path/to/ComfyUI
   -e "$COMFYUI_ROOT/custom_nodes/WeeTodd-Nodes"
 ```
 
-The project requires MLX 0.32.0 or later. Confirm that ComfyUI uses arm64 Python before installing:
+Install the LTX runtime extra before loading an LTX 2.3 or LTX 2.5 workflow:
+
+```bash
+"$COMFYUI_ROOT/.venv/bin/python" -m pip install \
+  -e "$COMFYUI_ROOT/custom_nodes/WeeTodd-Nodes[ltx]"
+```
+
+The LTX extra pins the first upstream revision that builds with current Hatchling. Older WeeTodd
+checkouts pinned a revision whose subpackage metadata referenced a README outside the package and
+could fail during editable installation. Update the repository before troubleshooting that error.
+
+WeeTodd discovers ffmpeg from an explicit node value, `WEETODD_FFMPEG`, the ComfyUI Python
+environment, the process PATH, standard Homebrew/MacPorts locations, or `imageio-ffmpeg`. ComfyUI
+Desktop does not need to inherit an interactive shell profile and users should not need to add a
+symlink inside its `.venv`.
+
+The project requires MLX 0.32.2 or later. Confirm that ComfyUI uses arm64 Python before installing:
 
 ```bash
 "$COMFYUI_ROOT/.venv/bin/python" -c \
   'import platform, sys; print(sys.version); print(platform.machine())'
 ```
+
+LTX 2.5 configuration resolves checkpoint-dependent memory controls at execution. A paged
+transformer automatically enables low-RAM streaming, and streaming automatically selects the
+compatible `reference_fp32` feed-forward path. Resolved settings and every adjustment are written
+to generation metadata. Older saved workflows whose feed-forward value shifted into the prompt
+context field are repaired when the Generation Config node executes.
+
+### Optional CorridorKey MLX setup
+
+CorridorKey is a separately licensed optional runtime. WeeTodd does not include its source or
+checkpoint. Review the [CorridorKey license](https://github.com/nikopueringer/CorridorKey/blob/main/LICENSE)
+before installation. The license permits production use but restricts redistribution, competing
+products, commercial software integration, and paid inference services.
+
+### Optional Florence-2 MLX auto masking
+
+Download the MIT-licensed [Florence-2 base fine-tune Q8 MLX bundle](https://huggingface.co/mlx-community/Florence-2-base-ft-8bit)
+and keep every tokenizer, processor, configuration, and safetensors file together under:
+
+```text
+ComfyUI/models/florence2/Florence-2-base-ft-8bit/
+```
+
+The Florence loader is lazy and does not execute checkpoint-supplied remote Python code. It uses
+MLX-VLM's native Florence architecture, the current installed Transformers processor, and the
+checkpoint-declared BART tokenizer. The published Q4 conversion is intentionally rejected because local validation found unreliable
+coordinate-token decoding. Q8 measured 0.665 GiB MLX peak for one reviewed 768-pixel
+reference-sheet silhouette. The clean ComfyUI graph completed in 3.23 seconds and unloaded after
+the node completed. This is not a complete CorridorKey graph or complete-ComfyUI peak measurement.
+
+Install the official MLX runtime in ComfyUI's active Python environment:
+
+```bash
+"$COMFYUI_ROOT/.venv/bin/python" -m pip install \
+  "corridorkey-mlx @ git+https://github.com/nikopueringer/corridorkey-mlx.git@04503e797060e091f991bc88b85ec61b0b9b862b"
+```
+
+Download `corridorkey_mlx.safetensors` from the
+[official CorridorKey MLX v1.0.0 release](https://github.com/nikopueringer/corridorkey-mlx/releases/tag/v1.0.0).
+Place the checkpoint in `ComfyUI/models/corridorkey/` or a shared `corridorkey` model root.
+
+The loader provides four profiles. Compiled 512 is the fastest preview. Compiled 1024 is the
+default balance. Compiled 2048 is the quality-first path. Tiled 512 reduces Metal peak allocation
+and preserves the source aspect ratio at the cost of more model passes. On an M3 Ultra synthetic
+1,280×720 probe, compiled 1024 took 0.40 seconds after warm-up at a 3.44 GiB MLX peak. Tiled 512
+took 0.66 seconds at a 2.03 GiB peak. Treat these measurements as execution checks, not footage
+quality benchmarks.
+
+The current official MLX backend supports the green checkpoint. Its public engine returns 8-bit
+foreground and alpha arrays, and its despill and despeckle options are placeholders. WeeTodd
+therefore performs compositing and generic mask cleanup independently and does not claim float EXR
+parity yet. Blue-screen MLX support remains gated until an official blue MLX checkpoint and stable
+engine contract are available.
+
+## Model downloads and reuse
+
+Choose a workflow first; install only its dependencies. The supported H3/LTX candidates are
+alternatives, not a requirement to download every checkpoint. Optional control, preview,
+upscaling, and refinement assets are needed only by workflows that use them.
+
+Reuse compatible files from existing shared model roots instead of keeping separate copies for
+ComfyUI and headless generation. The filenames below identify reference recipes, not a blanket
+publisher restriction. Generic loaders still require a supported architecture, task, tensor
+layout, and quantization format; some third-party variants need conversion. Exact checkpoint
+pins on qualified FastH3 profiles apply to those measured profiles, not all model loading.
+
+Share compatible encoders, VAEs, and upscalers by reference. Differently trained or quantized
+variants are distinct assets. Do not rename an incompatible model to make it appear compatible,
+and do not delete presumed duplicates based on filenames or size alone. The read-only
+`scripts/inspect_model_library.py` inventory can identify physical aliases and optionally verify
+duplicate content without moving or deleting weights.
+
+### Shared-library headless recipes
+
+The local asset registry can bind an existing, preflight-valid headless v2 recipe to persistent
+asset IDs. Import only the recipes you want to use; this registers paths and does not copy,
+convert, or download weights. These standalone CLI arguments accept local paths (unlike the
+relative model-root selectors in ComfyUI nodes).
+
+```bash
+python scripts/import_model_recipe.py --recipe recipe.json \
+  --model-library library.json --output library-recipe.json
+python scripts/render_headless.py --recipe library-recipe.json \
+  --model-library library.json --output-directory preflight-result --preflight-only
+python scripts/render_headless.py --recipe library-recipe.json \
+  --model-library library.json --output-directory render-result
+```
+
+Use new output names/directories. The runner saves the resolved recipe and asset provenance in
+its result directory. Preflight-only validates existing engine contracts without a render;
+it is not a quality certificate or complete third-party compatibility guarantee. LTX 2.3's
+current preflight is primarily a bundle-presence check.
+
+Headless recipes can add a versioned `conditioning` object. Every render now runs
+preflight; unknown media fields and unsupported task combinations fail before weight
+loading. The runner saves `effective-conditioning.json` alongside the original resolved
+recipe. For example, add endpoint images to a compatible H3 FL2VA or LTX recipe:
+
+```json
+{
+  "version": 1,
+  "task": "fflf",
+  "inputs": [
+    {"id": "start", "kind": "image", "role": "keyframe", "path": "first.png", "frame_index": 0},
+    {"id": "end", "kind": "image", "role": "keyframe", "path": "last.png", "frame_index": "last"}
+  ]
+}
+```
+
+Place this object under the recipe's `conditioning` key. Paths refer to existing local
+files, relative to the runner's working directory or absolute. H3 FFLF requires
+`components.task="fl2va"`; LTX 2.3 FFLF/A2V requires Dev `two_stage`. Resident and
+low-RAM block-streamed transformers both accept normalized generic LoRA stacks. Keyframe indices are decoded
+pixel-frame positions, not latent indices. `last` resolves after frame-count alignment.
+
+Task transport currently covers H3 T2V, keyframes, image/video/audio Ref2VA, audio-driven
+Ref2VA, and Fun ControlNet-Union; LTX 2.5 keyframes, one source-audio A2V input, compatible
+preprocessed IC-LoRA guides, MSR, and extension; and LTX 2.3 keyframes, A2V, IC-LoRA control,
+Ingredients references, and video extension. A2V uses one `kind="audio", role="audio_driver"` input.
+LTX uses `audio_policy="source"` and freezes the waveform. H3 uses the Ref2VA partition with
+`audio_policy="generated"`: the input drives motion/timing and a new soundtrack, rather than
+copying the source samples. H3 video soundtracks require an explicit `soundtrack_path` on
+the video input, or a separate audio reference. Embedded soundtracks are not inferred.
+LTX controls use `role="control"` and an explicit `control_type` such as `canny_edges`,
+`depth_map`, or `pose_skeleton`, with the matching IC-LoRA in the component specification.
+H3 control uses `components.task="t2va"`, a local `components.fun_controlnet` SafeTensors path,
+and exactly one preprocessed Canny, depth, HED, MLSD, or pose video. The five-block Union branch is
+injected at base layers 0, 10, 20, 30, and 40; its residual is never applied to audio rows. Cached,
+sparse-attention, VDN, and layer-thinned combinations fail closed pending separate qualification.
+Inputs are not automatically preprocessed into control maps. The published checkpoint's license
+excludes the U.S., EU, UK, and Republic of Korea. WeeTodd does not bundle the checkpoint, and it
+must not be downloaded or executed in an excluded territory.
+
+LTX 2.5 MSR uses `task="ref2va"` with one to five still-image `role="reference"` inputs.
+Each input declares `reference_role`, `description`, conditioning/attention strengths,
+reference frames, size policy, and density priority. The dedicated adapter must be both
+`components.msr_lora_path` and the sole `components.ic_loras` entry, with distilled
+full-resolution single-stage mode enabled. Headless rendering orders one optional background
+last and automatically prepends the exact `Image 1...Image N` prompt guide once.
+
+LTX 2.3 extension accepts resident distilled or Dev `one_stage`, an exact 8n+1 source
+matching the config's width, height, fps, and frame count, and generates additions in groups
+of eight. Distilled mode is the production speed path: eight positive-only evaluations with
+a fused distilled checkpoint. Dev `one_stage` remains the slower 30-step CFG/STG quality
+alternative. Final headless and Comfy publication preserves the supplied source segment and
+appends only the new decoded segment; the contract reports
+`audio_policy="source_reencoded_and_generated_extension"`. H3 external extension requires
+the genuine Ref2VA checkpoint, a 2-15 second constant-24-fps source with embedded mono/stereo
+audio at the configured output size, a 4-15 second generation window, and the released six-part
+Ref2VA continuation prompt structure. The whole source video/audio is supplied as a reference
+and its final frame is also placed at target frame zero as an explicit seam anchor. The old
+FL2VA/T2VA latent-overlap route is rejected for external extension because its first render was
+visually unusable; latent-overlap continuation remains an experimental internal node.
+LTX 2.5 extension similarly accepts a matching constant-rate source with embedded audio,
+an after-only 8n+1 context from 9 through 241 frames, and a multiple-of-eight addition. It
+encodes low- and high-resolution video histories plus synchronized audio through the native
+VAEs, uses the same 0.5 continuation strength as latent chaining, removes the repeated context,
+and appends the new frames to the full source. Unqualified multi-control stacks and accelerated
+H3 conditioning combinations remain gated.
+Short transport diagnostics do not qualify visual quality.
+Use `scripts/validate_task_conditioning.py` for an explicit candidate-by-task preflight
+matrix and selected diagnostic renders. Do not combine `conditioning` with legacy
+`reference_images`; legacy recipes remain supported without changing their sampling settings.
+
+Symlink/hardlink aliases share an asset ID while retaining the selected path. After moving a
+model on the same filesystem, re-import a direct-path recipe pointing to its new location to
+refresh the registry; existing references can then follow it. Changed files invalidate old
+references. Registry revisions use file identity, size, modification time, headers, and support
+files—not full weight-payload hashes or proof that two separately copied checkpoints match.
+
+Imported H3 recipes store explicit resolved LoRA profile/QKV settings to preserve existing math
+if a path changes. New H3 `auto` selection reads declared profile, step, and QKV metadata; when
+profile metadata is absent it defaults to standard independently of the filename. Select Turbo
+explicitly for metadata-poor distilled adapters. The common adapter inspector validates A/B,
+default/turbo A/B, down/up, and lowercase A/B pair structures; H3, resident LTX 2.3, and LTX 2.5
+use its rank, schema, and canonical target descriptors. Conversion and missing-dependency downloads
+remain separate implementation work. Unsupported tensor formats are rejected, never silently
+omitted.
+
+### LTX 2.3 IC-LoRA controls
+
+Attach one explicitly typed adapter with **LTX 2.3 IC-LoRA Loader (MLX)**. Supply a matching
+preprocessed video through **LTX 2.3 Control Video**, or connect an `IMAGE` batch from the MLX
+Canny, depth, DWPose, or Motion Track preprocessor through **LTX 2.3 Control Frames**. Guides must
+match the requested frame count and output geometry. Temporary bridge media is removed after the
+render.
+
+The Generation Config's `ic_lora_topology=auto` is the production-safe choice. It keeps the
+qualified clean two-stage path for Union Control, selects the explicit Dev-transformer plus
+distilled-helper two-stage candidate for Ingredients, and uses full-resolution single-stage
+generation for Motion Track so the adapter and trajectory reference remain active for every denoise
+step. The explicit `two_stage_clean` mode preserves legacy parity, but Motion Track can lose its
+control in the clean second stage. `control_refine` keeps control during a short full-resolution
+refine; `upsample_only` and `single_stage` are also available for deliberate testing. Alternate
+Ingredients topologies remain fail-closed.
+
+For Ingredients, use the trained 768×448 bucket at 24 fps for at least 121 frames, set the IC-LoRA
+loader strength to `1.4`, and keep the reference-sheet strength at `1.0`. These are different
+controls: the former scales adapter weights; the latter controls how strongly the appended
+reference latent is preserved.
+
+### LTX 2.3 standard LoRAs
+
+Chain **LTX 2.3 LoRA Loader (MLX)** nodes after the model loader, then run Preflight and Generate.
+Use a local safetensors path or a path relative to a configured ComfyUI `loras` root. Generic
+LoRAs remain active through T2V, FFLF, A2V, and extension generation, including
+normalized per-block loading in low-RAM streaming mode. Specialized IC-LoRA/task-adapter topology
+rules remain separate from ordinary style/character adapters. The headless
+equivalent is a top-level recipe field:
+
+```json
+"loras": {"adapters": [{"path": "/local/models/style.safetensors", "strength": 0.75}]}
+```
+
+Up to eight standard adapters apply in order to all stages. Supported pair names include A/B,
+default/turbo A/B, down/up, and lowercase A/B; native and supported Comfy projection names are
+normalized without renaming or copying the adapter. Per-target alpha and explicit user alpha use
+the actual pair rank. Common global alpha metadata uses a matching declared global rank when
+present, or the pair rank otherwise; absent or dynamic/baked alpha means unit tensor scaling. The
+node's `-1` means automatic. Unknown targets, shapes, non-finite values, and
+unsupported tensor fields fail rather than being silently dropped.
+
+This experimental path fuses only targeted projections in memory and retains float or affine
+Q4/Q8 precision. Quantized fusion can introduce rounding; it is not exact full-precision adapter
+math. It does not create another checkpoint file. With `low_ram_streaming=true`, block targets are
+normalized and applied when each block is bound; small non-block targets remain resident.
+`low_memory=true` staged unloading remains available. Adapter jobs always unload afterward so a refined model cannot
+contaminate the next job. Quantized input dimensions receive their final check against the loaded
+projection because packed tensor shapes alone do not uniquely determine group size and bit width.
+
+Task/control adapters (IC-LoRA/MSR) use dedicated loaders and cannot currently be combined with
+generic LoRAs. DoRA, LyCORIS, rsLoRA, and stage-specific adapter scheduling are not implemented by
+this generic loader. Files can come from any source, but they must match supported LTX 2.3
+projection and scaling contracts; this is not a promise that arbitrary LoRAs or arbitrary model
+families are interchangeable.
 
 ## H3 model layout
 
@@ -140,7 +417,7 @@ ComfyUI/models/
     └── taeh3_coreml_256.mlpackage
 ```
 
-Model sources:
+Reference model sources (select only what your workflow needs):
 
 - [Official MiniMax H3 components](https://huggingface.co/MiniMaxAI/MiniMax-H3)
 - [Q8-extended paged transformer](https://huggingface.co/Vayden/MiniMax-H3-MLX-q8-extended-paged)
@@ -156,11 +433,13 @@ compatibility override.
 
 Accept the [LTX 2.5 license](https://huggingface.co/Lightricks/LTX-2.5), then place the split files
 in standard ComfyUI folders.
+These are BF16 reference filenames; supported Q8-paged replacements can be used for the
+corresponding transformer and text encoder. A workflow does not need both precisions installed.
 
-| ComfyUI folder | Required file |
+| ComfyUI folder | Component / workflow dependency |
 | --- | --- |
 | `models/diffusion_models/` | `ltx-2.5-22b-distilled-transformer-bf16.safetensors` |
-| `models/diffusion_models/` | Official DFR: `ltx-2.5-22b-dev-transformer-bf16.safetensors` |
+| `models/diffusion_models/` | Guided modes / official DFR: `ltx-2.5-22b-dev-transformer-bf16.safetensors` |
 | `models/loras/` | Guided modes: `ltx-2.5-22b-distilled-lora-450-bf16.safetensors` |
 | `models/text_encoders/` | `gemma4-12b-with-proj-ltx-2.5-bf16.safetensors` |
 | `models/vae/` | `ltx-2.5-video-vae-conv-bf16.safetensors` |
@@ -174,6 +453,8 @@ in standard ComfyUI folders.
 | `models/loras/` | Optional Motion Track: [`ltx-2.3-22b-ic-lora-motion-track-control-ref0.5.safetensors`](https://huggingface.co/Lightricks/LTX-2.3-22b-IC-LoRA-Motion-Track-Control) |
 | `models/loras/` | Optional Ingredients reference sheet: [`ltx-2.3-22b-ic-lora-ingredients-0.9.safetensors`](https://huggingface.co/Lightricks/LTX-2.3-22b-IC-LoRA-Ingredients) |
 | `models/loras/LTX-2.5/` | Optional multi-subject reference: [`LTX-2.5-Licon-MSR-V1.safetensors`](https://huggingface.co/LiconStudio/LTX-2.5-Multiple-Subject-Reference) |
+| `models/loras/LTX-2.5/` | Optional CrossView control: [`LTX2.3-22B_IC-LoRA-CrossView-Warp_v2_6000.safetensors`](https://huggingface.co/Cseti/LTX2.3-22B_IC-LoRA-CrossView-Warp_v2) |
+| `models/controlnet/` | Optional H3 Union branch: [`MiniMax-H3-Fun-Controlnet-Union.safetensors`](https://huggingface.co/alibaba-pai/MiniMax-H3-Fun-Controlnet-Union). Its MiniMax H3 Community License excludes the U.S., EU, UK, and Republic of Korea; do not download or run it in those territories. |
 | `models/diffusion_models/` | Derived DFR stage one: `ltx-2.5-22b-dev-distilled450-q8-paged/` |
 | `models/diffusion_models/` | Derived DFR stage two: `ltx-2.5-22b-dev-distilled450-detail2x-q8-paged/` |
 
@@ -186,6 +467,22 @@ iterations with CFG, STG, and audio-video modality guidance. **HQ guided** runs 
 the official rank-450 distilled LoRA for the three full-resolution refinement iterations. Guided
 iterations require several transformer predictions, so the displayed iteration count is not a
 claim about total transformer forwards.
+
+**LTX 2.5 LoRA Loader** accepts compatible local safetensors regardless of their download source or
+filename. Resident generation normalizes A/B, PEFT default/turbo A/B, down/up, and lowercase A/B
+pair names to the MLX loader layout without rewriting the file. Per-target alpha uses
+`alpha / pair rank`; consistent `lora_*`, `ss_network_*`, or `network_*` global alpha/rank metadata
+uses `alpha / declared rank`, or the pair rank when no global rank exists. Absent scaling metadata
+means unit baked scaling, matching the official loader. Common PEFT base-model prefixes and Comfy/Diffusers target
+names normalize to one target tree. Low-RAM streaming uses normalized block readers with the same
+supported pair schemas and alpha scaling. Unsupported targets and adapter formats fail explicitly;
+structural acceptance does not qualify every checkpoint combination visually.
+
+Task-specific LTX adapters are classified from explicit metadata and complete structural
+fingerprints rather than filenames. The released CrossView, Ingredients, Union, Motion Track,
+Pixel-Spatial, and MSR layouts remain recognizable after arbitrary file renaming. A partial or
+unknown reference adapter reports `unclassified_reference_conditioning` and cannot silently enter
+a task-specific pipeline.
 
 **LTX 2.5 Media Conditioning** provides one composable typed stack. Image keyframes execute through
 the current Generate node. Audio-driven input freezes the encoded audio during both visual stages
@@ -204,19 +501,64 @@ Depth preserves camera movement and scene geometry. Pose transfers human movemen
 group at a time as the default memory policy. IC-LoRA requires the distilled model. Combined video
 and audio reference input remains gated as an unvalidated LipDub topology.
 
+For camera-view synthesis, connect **LTX 2.5 CrossView Camera Orbit** to **LTX 2.5 CrossView Warp**,
+then use **LTX 2.5 CrossView Dual Reference Guide**. In **Mode: place camera**, drag the stock-Comfy
+sphere to set azimuth and elevation and use the wheel for distance. Switch to **Mode: rotate view**,
+or Shift/right-drag, to inspect the sphere from another axis without changing any camera pose.
+Drag horizontally/vertically for yaw and pitch; Option-drag adds view roll.
+The green path is sampled with the selected linear, ease, or smooth interpolation instead of
+drawing straight endpoint chords. Use the visible numeric widgets for exact or headless workflows.
+Green marks the best-tested adapter range. The warp node still works independently for
+older workflows. Connect the source movie and its MLX Video Depth Anything output to the warp node.
+For a moving camera path, choose a frame in the Orbit node, position the sphere, and click
+**Add / Update**. Repeat for additional frames. The node draws the ordered keyframes and the backend
+interpolates a camera pose for every source frame. The balanced workflow saves the complete moving
+magenta-hole warp guide as a video before final LTX regeneration.
+Connect **Get Video Components → audio** directly to **LTX 2.5 Generate → publication_audio**. This
+preserves the source soundtrack during final muxing; it does not audio-condition sampling and avoids
+replacing the soundtrack with generated audio. CrossView treats this connection as required and
+fails before model loading when it is absent, preventing a long render with generated gibberish.
+The guide preserves the checkpoint's required reference order: warped video first, source video
+second. Keep both reference strengths at `1.0`. Start with azimuth within `±45°`, elevation from
+`−20°` through `+30°`, and the exact prompt `crossview`. Use adapter strength `1.3` for people or
+`1.0` through `1.15` for rigid objects. The v2 checkpoint has weak distance control. The balanced
+workflow scales the source to 768×512 before preprocessing, streams normalized depth one frame at
+a time, reuses at most two small projection grids, and streams the complete warp batch into the
+native Comfy video writer. These policies bound memory without reducing the guide to a still image.
+
+The balanced CrossView workflow also stacks the Ingredients reference IC-LoRA after CrossView.
+**Get Image from Batch** selects one clear source frame, **Preview Image** shows the exact frame,
+and **Ingredients Reference Sheet** appends character and scene identity conditioning. Change the
+batch index when the default frame does not show every important subject clearly. The portable
+workflow contains no image or video path. CrossView plus Ingredients is the validated two-adapter
+limit; do not add a third task adapter.
+
+For speaking sources, paste the dialogue verbatim into the Ingredients guide's generated-video
+description. The workflow publishes the untouched source soundtrack, but publication audio does
+not condition sampling. The current LTX 2.5 adapter path intentionally rejects combined video
+reference plus audio-reference conditioning because a compatible LipDub topology has not been
+validated. The transcript gives the model a mouth-motion cue and usually improves alignment, but
+it is not sample-exact lip-sync.
+
 For separate character, object, clothing, and background images, attach **LTX 2.5 MSR Loader**
 and chain one to five **LTX 2.5 MSR Reference Stack** nodes. The stack preserves connection order,
 moves the optional background to the final learned slot, and emits `Image 1` through `Image 5`
 prompt guidance. MSR currently uses the full-resolution single-stage distilled path and cannot be
 combined with another IC-LoRA, video-reference stack, or audio-reference stack. Each reference is
 encoded independently; subject and object images are fitted without cropping, while the optional
-background is center-cropped. The default 33-frame quality policy matches the target canvas;
-balanced and speed are explicit lower-density experiments. Use 25 reference frames with Sol
-Attention when the resolved reference grid produces 64-row-aligned groups; the standard
-1,152-by-640 quality grid then produces 2,880 rows per subject and stays on the fused path. A
-33-frame reference at that grid produces 3,600 rows and safely falls back to dense attention. The
-loader validates the learned Fourier-slot tensors and all 480 rank-128 adapter pairs before
-execution, and reads the five BF16 slot tensors through MLX without evaluating the full adapter.
+background is center-cropped. `auto` selects 25 reference frames when Sol Attention is enabled and
+33 for dense attention. `sol_auto` starts from the quality canvas and, only when needed, chooses the
+largest no-upscale 32-pixel grid whose reference rows align to the fused 64-row key tile. Reports
+record requested and resolved frame counts, dimensions, row counts, alignment, and any layout
+adjustment. Automatic reference priority assigns full density to the first two non-background
+references, supporting density to the next two, and background density to the fifth reference. At
+1,152-by-640 with 25 frames, those tiers use 2,880, 1,152, and 576 rows. Explicit priority overrides
+the assignment. A 33-frame full-quality reference produces 3,600 rows and safely falls back to
+dense attention. Prefer one clean hero view per reference. Turnaround sheets containing repeated
+figures, detached studies, or inset portraits can be copied as scene content; crop or prepare a
+single-subject canvas before an expensive run. The loader validates the learned Fourier-slot
+tensors and all 480 rank-128 adapter pairs before execution, and reads the five BF16 slot tensors
+through MLX without evaluating the full adapter.
 
 The Union Control checkpoint covers Canny, Depth, and Pose and declares `ref0.5`, so its reference
 video is encoded at half of the active generation stage. The official two-stage workflow applies
@@ -231,8 +573,11 @@ and pose-model residency.
 
 Control preprocessors are independent from the H3 and LTX generation runtimes. A preprocessor
 loads only when its node executes and returns a normal ComfyUI IMAGE batch. This boundary lets one
-guide serve LTX 2.5 Union Control or another compatible graph without keeping a generation model
-resident.
+guide serve LTX 2.5 Union Control or H3 Fun ControlNet without keeping a generation model resident.
+For H3, connect the guide to **H3 Encode Fun Control Video (MLX)** after selecting the checkpoint
+with **H3 Fun ControlNet-Union Loader (MLX)**, then connect the encoded control to **H3 Sample**.
+The encoder holds/trims time, cover-crops to the generation canvas, and stages the H3 video VAE
+before the transformer branch is loaded.
 
 Implementation order follows control usefulness and available checkpoint terms:
 
@@ -242,7 +587,7 @@ Implementation order follows control usefulness and available checkpoint terms:
 | Depth | Video Depth Anything Small; Depth Anything V2 Small | Video depth for consistency; frame depth for speed | Both available |
 | Pose | whole-body pose; body-only pose | Whole-body for face and hand motion; body-only for speed | DWPose available |
 | Structure | depth-derived normals; realistic line art; segmentation | Normals and line art are available; segmentation remains gated | Partial |
-| Motion | colored trajectory guides; automated optical-flow extraction | Use the Motion Track guide with the dedicated adapter; tracker extraction remains future work | Guide available |
+| Motion | colored trajectory guides; automated optical-flow extraction | Use the optical-flow extractor or manual Motion Track guide with the dedicated adapter | Both available |
 
 The MLX Canny defaults match current ComfyUI normalized thresholds: low `0.4`, high `0.8`, a 5×5
 Gaussian kernel, sigma `1.0`, and hysteresis enabled. Lower thresholds retain more weak contours.
@@ -257,6 +602,12 @@ two spline tracks over 121 frames at 768×512 rendered in 0.30 seconds (400.8 fp
 peak. The full quality workflow then completed in 314.61 seconds with 15 real forwards, a 16.92 GB
 MLX peak, and an 18.90 GB complete-Comfy lifetime peak. The `ref0.5` adapter encoded the guide at
 384×256 while delivering the requested 768×512 output.
+
+**Optical Flow Motion Tracks** detects strong points in the first source frame, tracks them with
+pyramidal Lucas–Kanade flow, rejects inconsistent forward/backward observations, and renders the
+same training-color guide. Its normalized per-frame JSON remains editable and portable. Reports
+include held observations and the valid-observation ratio; flat clips use one explicit stationary
+center fallback instead of silently returning no control.
 
 **TEED Model Loader (MLX)** and **TEED Soft-Edge Preprocessor (MLX)** provide a learned contour
 option using the MIT-licensed 58K-parameter Tiny and Efficient Edge Detector. The 233 KB converted
@@ -405,6 +756,39 @@ The video-refine workflow also requires the
 [pixel-spatial upscaler IC-LoRA](https://huggingface.co/Lightricks/LTX-2.5-22b-IC-LoRA-Pixel-Spatial-Upscaler)
 under `models/loras/LTX-2.5/`.
 
+The shipped balance video-refine workflow selects the Q8-paged transformer and Gemma pack with
+`low_ram_streaming=true`. This avoids keeping both full BF16 weighted stages resident during the
+2× refinement pass. A previous workflow revision selected resident BF16 components and could push
+complete-process memory above 100 GB on a large input. The upscaler now also preserves Pixel
+Spatial full-video conditioning when endpoint anchors are enabled; the two controls are additive.
+
+The upscaler reuses exact Gemma prompt conditioning for repeated refinements with the same prompt,
+context policy, and checkpoints. The cache holds two entries in the ComfyUI process. Use the
+LTX 2.5 Unload node to clear it. Disable reuse when prompt outputs must not remain resident.
+
+For dimensions outside the LTX grid, the default input policy selects a nearby 32-pixel canvas and
+uses Lanczos resizing while keeping aspect error below 0.5 percent. The learned 2× output then lands
+on the Pixel-Spatial 64-pixel grid. A centered-crop policy and a strict-grid policy remain available.
+The node records output frame-megapixels and accepts an optional preflight limit. Treat that limit
+as a workload guard, not a memory prediction.
+
+Long Pixel-Spatial refinements can use the opt-in `auto scene-aware` temporal mode. The planner
+prefers detected scene cuts, enforces exact frame coverage, keeps every weighted window at or above
+49 frames, stores completed chunks for safe resume, and remuxes the untouched source audio once.
+Use a measured frame-megapixel budget for the Mac. Keep chunking disabled when the complete clip
+fits, because a forced boundary inside one continuous shot can remain visible. A matched 98-frame
+672×384 to 1344×768 Q8-paged test used two 49-frame windows, completed in 148.57 seconds, and
+reached a 10.90 GB MLX peak. The second window reused prompt conditioning and skipped 8.69 seconds
+of Gemma work. An earlier two-by-nine-frame test reached 9.31 GB but produced unacceptable visual
+quality; the node now rejects that configuration.
+
+Resume state uses the source-and-settings fingerprint, not the final movie filename. A forced
+republication under a new ComfyUI output name reused both weighted chunks and completed the node in
+1.52 seconds instead of 148.57 seconds.
+
+Pixel-Spatial refinement is a generative repaint. It can invent face details, logos, lettering, and
+small objects. Compare identity-sensitive output with the source before publication.
+
 Use `scripts/convert_ltx25_paged_q8.py` to create directly loadable Q8 pages. Keep the licensed BF16
 source files and checkpoint terms. Generated page directories are model artifacts and must not be
 committed.
@@ -486,6 +870,245 @@ bakes the rank-450 and Pixel-Spatial adapters together for stage two.
 Do not build stage two from the stage-one pages. Sequential requantization changes video output.
 Preflight verifies the stage-one adapter, stage-two adapter, and selected Pixel-Spatial adapter.
 
+## FastH3 production profile
+
+Use the [FastH3 compact indexed Metal workflow](workflows/performance/t2v/h3_fasth3_compact_vsa_performance.json)
+for the native FastH3 VSA student. FastH3's DiT is approximately 35.05B parameters; the 22B label
+seen in LTX 2.5 material does not describe H3. The workflow applies five schedule points and four
+real transformer evaluations, requires `weetodd-fasth3-vsa-datafree-q8-paged`, and rejects tasks
+other than T2VA before sampling.
+
+The **FastH3 Production Profile** node provides four explicit policies:
+
+- **Balanced** uses the measured compact preordered indexed-Metal VSA path and is recommended.
+- **Speed candidate** uses the same compact Metal path with 40 of 50 joint video/audio layers.
+  It is generatively approximate and remains pending sound-effect listening acceptance.
+- **Conservative** retains the grouped MLX VSA consumer as a compatibility fallback.
+- **Experimental** adds fused QKV preparation; its small measured gain did not pass promotion.
+
+**H3 Text Encode** can persist text-only conditioning in a bounded 1 GiB safetensors cache under
+ComfyUI's user directory. Its `persistent_cache` switch defaults on; turning it off bypasses
+disk reuse. Encoder/tokenizer/processor identity, prompt and task are part of the key, and media
+conditioning bypasses this cache. Encoder unloading remains independent of feature reuse.
+H3 sidecars now distinguish phase-local MLX allocation peaks and their aggregate from the
+process counter; cached work from another Comfy prompt does not count toward the current job.
+
+The existing **H3 Generation Config** appends `inference_optimization`: `off` (default),
+`transient_q8`, `compiled_adaln`, or `combined`. These are opt-in experiments, not new model
+precision settings or promoted speed presets. Transient Q8 uses temporary dense GEMM for eligible
+wide projections; generic QMM/dense kernels may differ in rounding. Small MLP chunks retain QMM.
+Compiled AdaLN targets only activation scale/add, not the full transformer.
+
+The node also exposes the six measured canvases as a resolution selector. Each entry shows its
+M3 Ultra complete time and MLX peak; **Keep Generation Config** preserves a custom canvas. Hardware
+checks are advisory only: the profile reports the detected Apple chip and unified memory, warns
+when the selected row lacks comfortable measured headroom, and never blocks a run solely because
+the current hardware differs from the 256 GB M3 Ultra reference. The shipped graph connects
+`profile_info` both to the sampler, so diagnostics persist in the publication sidecar, and to
+**FastH3 Profile and Hardware Advisories**, so the same formatted report is visible in ComfyUI.
+The ready-to-queue API graph is
+[`examples/h3_fasth3_compact_vsa_768x448_api.json`](examples/h3_fasth3_compact_vsa_768x448_api.json).
+
+The [40-layer candidate UI graph](workflows/speed/t2v/h3_fasth3_40layer_candidate.json) and
+[matching API graph](examples/h3_fasth3_40layer_768x448_api.json) connect the profile's appended
+`fastvideo` output to H3 Sample. Existing output indices are unchanged. The sampler checks the
+profile contract before loading weights: native pinned Q8 VSA checkpoint, T2VA, five Euler schedule
+points, matching attention/configuration, and no LoRA, cache, forecast, VDN, continuation, or token
+pairing. Before publication it requires actual evidence of four evaluations, 40 kept/10 skipped
+layers, and 160 compact-Metal calls without fallback. Layer indices and policy identity persist in
+the final sidecar. The resolution dropdown's times remain **50-layer Balanced reference values**;
+they are not 40-layer measurements. Keep Balanced for quality-sensitive sound synchronization until
+the candidate's listening gate is accepted.
+
+Fresh saved-workflow acceptance on M3 Ultra (768×448, 107 frames, 24 fps, staged unloading,
+cache disabled) measured the following complete server execution times, including text encoding
+and final audio/video publication:
+
+| Scene | Balanced, 50 layers | Speed, 40 layers | Time reduction |
+| --- | ---: | ---: | ---: |
+| Robot, warm repeat | 152.35 s | 126.08 s | 17.2% |
+| Dialogue and cup | 146.20 s | 125.05 s | 14.5% |
+| Dog, disc, and surf | 146.72 s | 124.92 s | 14.9% |
+
+All three candidates passed final-media technical checks and actual 160-call execution proof;
+the robot's repeated outputs were byte-identical within each profile. Both dialogue versions
+transcribed exactly as “Your coffee is ready.” This does **not** establish sound-effect quality
+or lip synchronization. Composition and event timing change with layer thinning. The matched
+dialogue/motion API fixtures live in `benchmarks/fasth3_acceptance/api/`; reproduce final-artifact
+checks with `scripts/verify_fasth3_speed_artifact.py`. These timings are not a high-resolution,
+long-duration, or lower-memory hardware qualification.
+
+For actual FastH3 bottleneck attribution, `scripts/profile_fasth3_server.py` launches a dedicated
+ComfyUI `--cache-none` server with `off`, `coarse`, or `detailed` normal-path tracing. Execute the
+same saved API with `scripts/benchmark_saved_h3_workflow.py`, then join traces, final latent parity,
+and MP4 parity with `scripts/summarize_fasth3_profile.py`. Detailed traces synchronize operations
+and perturb scheduling; they are not uninstrumented speed measurements. The older dense-only
+diagnostic path rejects VSA checkpoints rather than silently substituting different attention.
+Profiling does not change generation defaults and records actual paged-block chunk sizes.
+
+The standalone-engine milestone uses `scripts/export_h3_headless_recipe.py` for a one-time
+Comfy-side export of the pinned benchmark API, then `scripts/render_h3_headless.py` to render
+that resolved recipe without ComfyUI, its server, or the node catalog. The runner blocks Comfy
+imports and retains the existing MLX sampler, preview decoder/safety guard, staged unloading,
+and synchronized streaming A/V publication. It records raw latents, execution proof, phase
+memory, import isolation, and render timings. This is a narrow 40-layer T2VA benchmark with a
+warm conditioning cache, not a general graph converter, native rewrite, or packaged desktop app.
+
+The broader `scripts/render_headless.py` runner accepts explicit H3, LTX 2.3, and LTX 2.5
+component recipes and blocks ComfyUI imports. Candidate validation uses
+`scripts/build_headless_validation_matrix.py`, `scripts/validate_headless_matrix.py`, and
+`scripts/compare_headless_matrix.py`. Model files are reused by path; local bundle views link
+shared components instead of copying weights. A preflight pass is not a completed render or
+quality qualification. H3 recipes accept a separate generic LoRA stack; LTX 2.5 retains its
+existing generic/task-specific stacks. LTX 2.3 exposes resident and low-RAM streamed
+standard-LoRA stacks across T2V, FFLF, A2V, and extension; accepting a local path does not imply
+every trainer format or checkpoint is visually qualified.
+
+`scripts/inspect_model_library.py --root <existing-folder> --output <new-report.json>`
+provides read-only model-library discovery without MLX or ComfyUI imports. It recognizes
+symlink/hardlink aliases, avoids directory cycles, and reads bounded safetensors headers.
+Optional `--hash-duplicates` verifies identical content across distinct same-size files;
+equal sizes or filenames alone never establish duplication. It neither downloads nor deletes
+weights. This inventory is a foundation for shared model management, not yet a complete
+compatibility/conversion loader. Model variants and quantizations are not automatically merged.
+
+The advanced **advisory memory budget** defaults to `0`, which uses detected physical memory. A
+manual GiB value is useful for planning around other workloads or testing the warning policy. It
+does not constrain MLX, simulate a smaller Mac, or validate that a render completes there. The
+current policy marks headroom comfortable only when the budget is at least the larger of 1.35 times
+the measured MLX peak or the measured peak plus 4.0 decimal GB. Use
+`scripts/analyze_fasth3_memory_budgets.py` to reproduce the policy matrix.
+
+The matched M3 Ultra scaling matrix uses one prompt, seed `20260829`, 24 fps, four transformer
+evaluations, and direct synchronized publication. A 4.0-second request aligns to H3's `17n+5`
+contract and therefore delivers 107 frames, or 4.458 seconds. Times include sampling, streamed
+video/audio decode, and mux; shared text encoding is excluded. Peaks are MLX allocation peaks.
+
+| Resolution | Megapixels | Complete time | MLX peak |
+| --- | ---: | ---: | ---: |
+| 512×256 | 0.13 | 1m 00s | 5.79 GB |
+| 768×448 | 0.34 | 2m 22s | 7.18 GB |
+| 1024×576 | 0.59 | 4m 14s | 9.29 GB |
+| 1280×704 | 0.90 | 6m 43s | 11.96 GB |
+| 1536×832 | 1.28 | 9m 28s | 15.23 GB |
+| 1920×1088 | 2.09 | 17m 00s | 22.16 GB |
+
+## VDN-H3 experimental integration
+
+Use the [saved UI workflow](workflows/balance/t2v/h3_vdn_8_step_experimental.json) or its
+[matching API prompt](examples/h3_vdn_8_step_api.json). The graph preserves the standard
+component loader, preview override, preflight, text encoder, and joint sampler. **Direct Publish
+Latents** performs staged VAE decoding and synchronized publication without a persistent
+ComfyUI IMAGE tensor. **VDN Checkpoint** supplies the stage-specific config,
+hybrid-attention branch, and required LoRA stack; connect all three to **H3 Sample**.
+
+Download the chosen stage from [OpenVDN/vdn-minimax-h3](https://huggingface.co/OpenVDN/vdn-minimax-h3)
+under `ComfyUI/models/OpenVDN/vdn-minimax-h3` or a registered shared model root. Retain
+`model_spec.json`, `linear_branch/model.safetensors`, and `adapters/` together. The 8-step
+`stage-dmd-step-250` uses both `default` and `turbo` adapters; `stage-b-step-2000` uses the
+default adapter and 50 evaluations. These are nine and 51 schedule points in the MLX scheduler.
+Existing compatible MLX H3 base components can be reused; the full Diffusers base directory
+is not a drop-in MLX checkpoint and is not automatically downloaded by this node.
+
+Select a resident or paged H3 base transformer, not a trained FastH3 VSA student.
+The saved graph uses the same paged Q8 base as the standard H3 workflows.
+For an AdaLN-pruned base, supply its original `h3_silu_temb_grid.safetensors` using the optional
+`adaln_input_grid` field. The node also checks beside the Turbo adapter and transformer for
+that filename. An ordinary unpruned base does not require the grid.
+
+Status: experimental. Small-array numerical tests, resident/paged joint-DiT tests, and an
+end-to-end 8-step checkpoint smoke render pass. The saved graph produced 124 frames at 672×384,
+24 fps, with stereo 32 kHz audio and all 400 hybrid-attention calls. On an Apple M3 Ultra,
+grouped windows and an FP32 Metal Cholesky solver reduced the matched workflow from
+36.29 to 30.36 seconds per evaluation (16.3% less time), and from 5m33s to 4m45s end to end.
+All 800 solver calls used Metal, with no fallback. Each new matrix-batch geometry is checked
+against the CPU inverse on first use; a failed check or unsupported kernel latches a reported
+CPU fallback. The solver uses FP32 throughout, but the final render is not pixel-identical to
+the CPU reference. That solver-only measurement used the previous publication graph. No new
+dependencies are required; restart ComfyUI after updating. This is an improvement over the
+initial VDN port, not a demonstrated speed upgrade
+over ordinary H3. Original-runtime full-checkpoint parity remains untested. A separate 50-step short render
+completed and matched its saved ComfyUI control exactly; this does not qualify full-resolution quality. The 384p example is a wiring test, not a quality
+benchmark. Do not combine VDN with cache, forecast, sparse-attention,
+FastVideo, continuation, or Hi Res Fix controls. Base-only H3 memory estimates do not include the
+additional VDN branch and adapters. Review the model's Community License before use.
+
+The current paged graph uses `projection_backend=auto`, the fused five-tap temporal filter,
+and previews every two evaluations (plus the first/final safety checks). The Q8-extended
+checkpoint is mixed precision: 118 of its 200 block projections remain BF16. Verified MPP
+can accelerate those on supported hardware; its 82 Q8 projections remain unchanged. Fused
+temporal filtering preserves tap order and BF16 rounding, verifies the first geometry, and
+latches a reported reference fallback on failure. LoRA batching candidates are available in
+`scripts/benchmark_vdn_hotpaths.py` but are **not enabled**: they matched numerically yet
+measured slightly slower on the tested M3 Ultra.
+
+For repeated jobs on a high-memory Mac, use the explicit
+[resident/warm UI workflow](workflows/performance/t2v/h3_vdn_8_step_resident_experimental.json)
+or its [API prompt](examples/h3_vdn_8_step_resident_api.json).
+H3 Sample's `block_residency=resident` retains the
+same paged-checkpoint tensors in memory without conversion. `unload_after_sample=false`
+keeps that transformer warm between compatible jobs; set it back to `true` on the last job,
+or use **H3 Unload**. Text encoding and both VAEs still unload after use. The node defaults
+remain checkpoint paging and staged unloading. Resident mode rejects low-memory mode, and
+the base-only paged preflight estimate does **not** represent its larger memory footprint.
+
+`scripts/benchmark_saved_h3_workflow.py` executes a saved API prompt unchanged and records
+server-side timings and its SHA256. Use a dedicated ComfyUI server with `--cache-none` for
+repeated same-seed runs: ComfyUI node caching would otherwise skip the work being measured.
+Execution counters reset per sampling run; numerical verification verdicts remain warm.
+
+Measured on M3 Ultra / 256 GB at the same seed, 672×384, 124 frames and eight evaluations:
+
+| Execution | Seconds / evaluation | End-to-end | Complete process peak |
+| --- | ---: | ---: | ---: |
+| Previous optimized paged graph | 30.36 | 285.27 s | not recorded |
+| Current paged graph | 29.96 | 287.64 s | 20.60 GB |
+| Resident, initial run | 26.10 | 252.10 s | 52.17 GB |
+| Resident, repeated warm run | 26.08 | 249.34 s | 52.67 GB lifetime peak |
+| Optimized resident, initial run | 24.92 | 237.47 s | 60.75 GB MLX peak |
+| Optimized resident, repeated warm run | 24.78 | 231.11 s | 60.75 GB MLX peak |
+
+The current paged graph did not demonstrate an end-to-end gain; resident execution was
+about 12–13% faster than that graph. Keeping the already-resident transformer warm saved
+another 2.76 seconds. The two resident MP4s were byte-identical to the current paged MP4;
+its decoded video frames also matched the previous optimized render exactly. Audio remained
+32 kHz stereo with 8.3 ms A/V duration drift. These are individual controlled smoke runs,
+not a multi-prompt quality or performance guarantee. The base-only memory estimate excludes
+this measured resident footprint; leave ample room for macOS and other applications.
+
+The optimized resident row uses verified VDN scan/state gathering, selective resident Q8
+expansion, the native-layout BF16 video VAE, 272-pixel geometry-aware width tiles, and the compiled
+Core ML preview sibling. Against the prior warm row, it reduced sampling from 208.62 to 198.24
+seconds and video decoding from 31.24 to 22.83 seconds. Total wall time fell by 18.23 seconds
+(7.3%). The optimized video measured 0.9818 full-video SSIM against the byte-identical control;
+its extracted AAC stream was byte-identical. MLX peak allocation increased by about 17.5 GB.
+
+### Additional opt-in H3 optimization path
+
+The [optimized resident UI workflow](workflows/performance/t2v/h3_vdn_8_step_optimized_experimental.json)
+and [matching API prompt](examples/h3_vdn_8_step_optimized_api.json) add selective resident Q8
+expansion and geometry-aware final decoding. They require ample memory and a matching native-layout
+BF16 video VAE at `models/MiniMax-H3/vae/bf16/video_vae_mlx_native.safetensors`, or an explicitly
+selected existing copy. No weights are downloaded or rewritten automatically.
+
+- VDN `inference_backend=verified` enables compiled scan/state gathering and eligible auxiliary
+  MPP projections, with first-geometry numerical checks and reported reference fallback.
+  `reference` disables these additional inference optimizations for comparisons.
+- `mpp_resident_expanded_experimental` expands selected loaded Q8 projection values once in RAM;
+  it does not substitute original BF16 transformer weights or merge adapters. Packed fallback
+  weights remain available. It requires explicit resident blocks and normal memory mode.
+- Video decode and Direct Publish Latents expose `video_tile_mode=geometry_experimental`.
+  Fixed tiling remains the default. The bounded selector reduces redundant overlap but changes
+  decoder attention context, so it is not pixel-exact and needs visual review. Encoding of
+  references/keyframes is unchanged.
+- VDN `indexed_experimental` reads exact static windows directly without K/V gather buffers.
+  The attention mask is preserved, but floating-point accumulation differs. It remains opt-in
+  and is not selected by the optimized saved workflow.
+- Paged execution omits unused AdaLN tensors/adapters after modulation caching and shares adapter
+  file mappings within each window only. It does not keep every adapter resident between windows.
+- Preview path resolution accepts an existing `.mlmodelc` sibling of a missing `.mlpackage`
+  (and vice versa), while preserving an explicitly existing requested model.
+
 ## Live H3 previews
 
 Every shipped H3 workflow routes components through **H3 Model Preview Override** before sampling.
@@ -516,6 +1139,7 @@ work. Results apply to the stated workflow and hardware conditions.
 | H3 token and workspace budget | Preflight | Diagnostic | Reports target, conditioning, packed-token, attention-score, and bounded-workspace estimates before allocation. | Reporting only. |
 | LTX 2.5 Q8 paging | Memory and speed | Very high | 9.90 GB and 78.38 s versus 31.60 GB and 102.13 s for matched BF16 one-block streaming at 768×512. | Q8 changes the numerical trajectory. |
 | LTX 2.5 fused Sol attention | Long-sequence sampling speed | Experimental | In the matched compact Ingredients test, paged-speed Sol reduced sampling from 358.94 to 323.46 seconds (9.9%) and total time from 379.15 to 343.74 seconds (9.3%). At 17,472 rows, mask storage fell from 610,541,568 to 69,888 BF16 bytes. A matched two-subject MSR run used two exact 2,880-row groups, executed all 384 fused calls, reduced sampling from 411.19 to 390.29 seconds, and reduced MLX peak from 16.05 to 14.58 GB. | Requires at least 16,000 video tokens. It casts eligible FP32 Q/K/V projections to BF16 and uses approximate routing only for target rows, so composition and trajectory can change while reference rows remain exact. Every grouped suffix must align to 64 rows; incompatible grids safely fall back. Use `paged_speed` only with low-RAM Q8 streaming. |
+| LTX 2.5 MSR automatic layout | Multi-reference speed, memory, and fused-path reliability | High | Balanced automatic priority reduced a matched five-reference run from 777.90 to 533.98 seconds and complete ComfyUI peak from 21.12 to 17.37 GB. It retained all five identities and completed 384 fused calls without fallback. | `sol_auto` changes only reference density. It never changes target video size. The more aggressive one-primary layout reached 457.59 seconds but weakened one identity, so it remains opt-in. Use one clean hero view per reference. |
 | LTX 2.5 Ingredients reference sizing | Reference-conditioning speed | High | On the matched 1344×768 run, balanced 512×288 and speed 384×224 reference grids reduced sampling by 23.6% and 34.4% versus the 768×448 quality grid. | Does not change the source file. It changes encoded reference density and may change fine identity, framing, and motion. Effective rows are recorded in metadata. |
 | LTX 2.5 temporal VAE tiling | Decode memory | High for long clips | Activates from an explicit decode-memory budget and grows in value with duration. | Preserves the synchronized output contract. |
 | LTX 2.5 generated-keyframe slots | Motion allocation | Experimental | Adds evenly distributed learned interior slots during stage one without changing existing workflow schemas. | Changes the latent token sequence and output. |
@@ -534,9 +1158,8 @@ work. Results apply to the stated workflow and hardware conditions.
 | 1 | Exact reusable LTX 2.5 reference K/V state | High IC-LoRA speed potential beyond density reduction | Medium-low; projections and attention depend on every denoise-step hidden state |
 | 2 | H3-specific W4A8 projection kernel | Very high checkpoint and resident-memory reduction | Low |
 | 3 | Complete-process BF16 one-block paging validation | Very high BF16 peak-memory reduction | Medium; q8 remains faster with four-block windows |
-| 4 | Extend real LTX 2.5 MSR validation from two references to three through five | High reference feature value | Medium; real two-subject identity, BF16 loading, dense masks, and 384-call grouped Metal execution pass |
-| 5 | Ref2VA automatic-density quality validation | High Ref2VA speed and memory reduction | Medium; full density remains the default |
-| 6 | LTX 2.5 temporal image-conditioning and longer-chain parity | Medium feature completeness | Medium |
+| 4 | Ref2VA automatic-density quality validation | High Ref2VA speed and memory reduction | Medium; full density remains the default |
+| 5 | LTX 2.5 temporal image-conditioning and longer-chain parity | Medium feature completeness | Medium |
 
 ## Memory guidance
 
@@ -586,34 +1209,45 @@ This table is generated from the registered node contracts. Run
 | H3 Encode Timed Keyframes | Encode up to eight sparse FL2VA images at exact 24 fps timestamps, unloading Qwen3-VL before the video VAE stage. | H3 — Conditioning | Experimental |
 | H3 Encode References | Prepare ordered Ref2VA media, then stage Qwen3-VL, the video VAE, and the audio VAE. Each weighted component unloads before the next stage. | H3 — Conditioning | Experimental |
 | H3 Reference Strength | Adjust how strongly FL2VA or Ref2VA trusts visual and audio condition rows. Defaults preserve the released H3 behavior. | H3 — Conditioning | Experimental |
-| H3 Text Encode (Qwen3-VL) | Encode a text-only H3 prompt with Qwen3-VL. The vision tower stays unloaded. The encoder can unload after it produces conditioning. | H3 — Conditioning | Recommended |
+| H3 Text Encode (Qwen3-VL) | Encode a text-only H3 prompt with Qwen3-VL. The vision tower stays unloaded. A bounded persistent feature cache can skip repeat encodes without keeping weights loaded. | H3 — Conditioning | Recommended |
 | H3 Unload Qwen3-VL | Release the process-local Qwen3-VL conditioner and clear the MLX cache. | H3 — Conditioning | Supported |
 | H3 Motion Continuation Context | Copy a synchronized tail from H3 video and audio latents for motion continuation. The recommended 22-frame overlap is about 0.92 seconds at 24 fps. | H3 — Continuation | Experimental |
 | H3 Append Latent Chain Window | Append one synchronized latent window to a validated H3 chained timeline. | H3 — Continuation | Experimental |
-| H3 Sample Video + Audio Latents | Sample synchronized MiniMax H3 video and audio latents with MLX. This node does not load or run either VAE. | H3 — Sampling and acceleration | Recommended |
+| H3 Sample Video + Audio Latents | Sample synchronized MiniMax H3 video and audio latents with MLX. This node does not load or run either VAE. Optional resident block loading avoids repeated paging; staged unloading remains the default. | H3 — Sampling and acceleration | Recommended |
+| H3 Learned Latent Upscaler Loader (MLX) | Select an MLX-native learned 3D latent upscaler for H3 Hi-Res Fix. The checkpoint is validated now and loaded only when the graph executes. | H3 — Loaders | Supported |
 | H3 Latent Hi Res Fix | Enlarge an H3 video latent and run a second H3 visual refinement pass. The original synchronized audio latent is returned unchanged. | H3 — Sampling and acceleration | Experimental |
-| H3 LoRA Loader (MLX) | Build a lazy, ordered MiniMax H3 LoRA stack. Validate safetensors headers now and load adapter tensors only when the H3 transformer executes. | H3 — Loaders | Supported |
+| H3 LoRA Loader (MLX) | Build a lazy, ordered MiniMax H3 LoRA stack. Validate safetensors headers now and load adapter tensors only when the H3 transformer executes. Reject malformed A/B pairs and unsupported tensor fields before loading weights. | H3 — Loaders | Supported |
+| H3 VDN Checkpoint (MLX) | Select VDN stage, required adapters, and verified inference kernels; optional indexed attention is numerically approximate and experimental. | H3 — Sampling and acceleration | Experimental |
 | H3 Validated Sampling Preset | Apply a measured dense, trajectory-replay, or Turbo sampling policy. Connect all three typed outputs to the H3 sampler. | H3 — Sampling and acceleration | Recommended |
-| H3 Sol Attention (MLX Experimental) | Experimental fused MLX Metal sparse attention for long H3 sequences. It preserves the complete multimodal prefix exactly and falls back to dense MLX for unsupported calls. | H3 — Sampling and acceleration | Experimental |
+| H3 FastH3 Production Profile | Native FastH3 VSA profile with fail-closed schedule, attention, and checkpoint wiring. Balanced is recommended; the explicit 40-layer Speed candidate requires listening acceptance and proves 160 compact-Metal calls before publication. | H3 — Sampling and acceleration | Recommended |
+| H3 FastVideo Approximation (MLX Experimental) | Opt-in generative FastH3 approximations. Layer thinning is ranked once from the full AdaLN schedule; token pairing keeps a full-resolution residual bypass. | H3 — Sampling and acceleration | Supported |
+| H3 Sparse Attention (MLX Experimental) | Experimental H3 sparse attention. Sol profiles use the fused MLX Metal backend; the FastH3 profiles preserve trained 64-token routing and compression gates with either grouped SDPA or an indexed Metal consumer. Both preserve the complete multimodal prefix. | H3 — Sampling and acceleration | Experimental |
 | H3 EasyCache (MLX) | Configure joint MLX EasyCache residual reuse for H3 video and audio sampling. Choose quality-first, balanced, or speed-first bounded automatic reuse. | H3 — Sampling and acceleration | Experimental |
 | H3 Trajectory Forecast (MLX) | Experimentally forecast compact post-transformer H3 video and audio features. Current timestep output heads still run on every step. Turbo LoRA is supported. | H3 — Sampling and acceleration | Experimental |
 | H3 BlockCache (MLX) | Always run H3 block zero and the current output heads, then safely reuse the cached joint audio/video residual of later transformer blocks when both modality indicators agree. | H3 — Sampling and acceleration | Experimental |
 | H3 Hierarchical BlockCache (MLX) | Split the 50 H3 blocks into three contiguous segments. Always evaluate each segment's anchor block, accept video and audio together, and reuse eligible segment tails independently. | H3 — Sampling and acceleration | Experimental |
 | H3 Unload Transformer | Release the process-local H3 transformer and clear the MLX cache. | H3 — Sampling and acceleration | Supported |
-| H3 Decode Video VAE | Decode the video stream from synchronized H3 latents with the final video VAE. The audio latent stream remains available on the original latent output. | H3 — Decoding | Supported |
+| H3 Decode Video VAE | Decode final H3 video with fixed tiles or opt-in geometry-aware tiles; audio remains on the synchronized latent output. | H3 — Decoding | Supported |
 | H3 Unload Video VAE | Release the process-local H3 video VAE and clear the MLX cache. | H3 — Decoding | Supported |
 | H3 Decode Audio VAE | Decode the audio stream from synchronized H3 latents as 32 kHz stereo audio. The video latent stream remains available on the original latent output. | H3 — Decoding | Supported |
 | H3 Unload Audio VAE | Release the process-local H3 audio VAE and clear the MLX cache. | H3 — Decoding | Supported |
 | H3 Trim Continuation Overlap | Remove the repeated motion-continuation overlap from decoded video and audio, then normalize audio to the exact remaining video duration. | H3 — Continuation | Experimental |
 | H3 Publish Video + Audio | Validate and publish synchronized H3 images and 32 kHz stereo audio as MP4. The node writes an atomic JSON metadata sidecar. | H3 — Output | Supported |
-| H3 Direct Publish Latents (MLX) | Decode synchronized H3 latents directly to MP4 through staged MLX VAEs. The node avoids a persistent ComfyUI IMAGE tensor and unloads each VAE after use. | H3 — Output | Recommended |
+| H3 Direct Publish Latents (MLX) | Stream H3 video/audio to MP4 with staged VAE unloading; fixed decode tiles remain default, with experimental geometry-aware tiling available. | H3 — Output | Recommended |
 | H3 Direct Publish Chained Timeline (MLX) | Decode an H3 latent chain by VAE stage, remove duplicated joins, force exact 24 fps / 32 kHz duration, and atomically publish one MP4. | H3 — Output | Experimental |
 | H3 Model Loader (MLX) | Describe an MLX MiniMax H3 checkpoint. Weights load lazily at generation time. | H3 — Core and convenience | Legacy/convenience |
-| H3 Generation Config | Choose a clearly labeled aspect ratio and move the short-edge size slider, or use exact dimensions. The live canvas remains on H3's required 32-pixel grid. | H3 — Core and convenience | Recommended |
+| H3 Generation Config | Choose a clearly labeled aspect ratio and move the short-edge size slider, or use exact dimensions. The canvas stays on H3's 32-pixel grid. Optional hot-path experiments default off. | H3 — Core and convenience | Recommended |
 | H3 Low-Memory Tuning (MLX) | Apply optional MLX attention-head and feed-forward row chunking without invalidating older Generation Config workflows. | H3 — Sampling and acceleration | Supported |
 | H3 Generate Video + Audio | Generate synchronized video and audio with MiniMax H3 through MLX. | H3 — Core and convenience | Legacy/convenience |
 | H3 Unload MLX Runtime | Release state held by the monolithic H3 runtime. | H3 — Core and convenience | Legacy/convenience |
+| LTX 2.3 IC-LoRA Loader (MLX) | Experimental IC-LoRA with task-aware topology. Union and Motion use resident distilled mode; Ingredients uses Dev two_stage with a validated distilled helper. Declare the trained family; filenames are not used to infer it. | LTX 2.3 — Loaders | Experimental |
+| LTX 2.3 Timed Keyframe | Chain timed keyframes for resident Dev two_stage generation. No post-decode frame insertion. | LTX 2.3 — Conditioning | Experimental |
+| LTX 2.3 Control Video | Preprocessed local control video, matching output fps and covering every output frame. Does not extract edges/depth/pose/tracks. | LTX 2.3 — Conditioning | Experimental |
+| LTX 2.3 Video Extension | Extend one exact 8n+1-frame source before or after. Distilled mode is the qualified eight-evaluation speed path; Dev one-stage remains available for quality. Final publication preserves the source AV prefix and appends groups of eight new frames. | LTX 2.3 — Conditioning | Supported |
+| LTX 2.3 Control Frames | Bridge an IMAGE batch from the MLX Canny, depth, DWPose, or motion-track preprocessors into an exact LTX 2.3 IC-LoRA guide. | LTX 2.3 — Conditioning | Experimental |
+| LTX 2.3 Ingredients Reference Sheet | Prepare one black-background Ingredients sheet and its trained two-part prompt. Use Dev two_stage mode, 768x448, 121+ frames, 24 fps, and adapter strength 1.4 in the loader. | LTX 2.3 — Conditioning | Experimental |
 | LTX 2.3 Model Loader (MLX) | Select a local LTX 2.3 MLX bundle. No weights load in this node. | LTX 2.3 — Loaders | Supported |
+| LTX 2.3 LoRA Loader (MLX) | Attach a local standard LTX 2.3 LoRA; chain nodes for ordered stacks. Alpha -1 uses file metadata or rank. Runs on all stages with resident float/Q4/Q8 or low-RAM block-streamed transformers. Task/control adapters use separate loaders and cannot currently be combined with generic LoRAs. | LTX 2.3 — Loaders | Experimental |
 | LTX 2.3 Generation Config | Configure LTX 2.3 mode, canvas, duration, steps, guidance, and memory policy. | LTX 2.3 — Core | Supported |
 | LTX 2.3 Preflight | Validate the selected LTX 2.3 bundle and mode-specific components before allocation. | LTX 2.3 — Loaders | Recommended |
 | LTX 2.3 Generate Video + Audio | Generate synchronized LTX 2.3 video and 48 kHz stereo audio through MLX. | LTX 2.3 — Core | Experimental |
@@ -622,7 +1256,7 @@ This table is generated from the registered node contracts. Run
 | LTX 2.3 Unload MLX Runtime | Release the process-local LTX 2.3 pipeline. | LTX 2.3 — Core | Supported |
 | LTX 2.5 Component Loader (MLX) | Select LTX 2.5 split components without loading weights or downloading files. Self-describing paged transformers may contain one prebaked IC-LoRA. | LTX 2.5 — Loaders | Experimental |
 | LTX 2.5 LoRA Loader (MLX) | Attach a generic LTX 2.5 transformer LoRA, including block and non-block targets. Multiple loader nodes may be chained. Use the dedicated loader for IC-LoRA task adapters. | LTX 2.5 — Loaders | Supported |
-| LTX 2.5 IC-LoRA Loader (MLX) | Attach one LTX 2.5-compatible IC-LoRA for video/reference conditioning. Official LTX 2.3 22B adapters pass an additional shape check. The selected IC-LoRA Pipeline Mode determines whether the adapter runs for stage one or the full generation. Do not use this node with a transformer that already bakes the same IC-LoRA. | LTX 2.5 — Loaders | Experimental |
+| LTX 2.5 IC-LoRA Loader (MLX) | Select and attach an installed LTX 2.5-compatible IC-LoRA for video/reference conditioning. The dropdown scans every ComfyUI loras model root. Up to two distinct task families may be stacked when their reference scale factors match; this supports combinations such as CrossView plus Ingredients character/scene reference. Official LTX 2.3 22B adapters pass an additional shape check. The selected IC-LoRA Pipeline Mode determines whether the adapter runs for stage one or the full generation. Do not use this node with a transformer that already bakes the same IC-LoRA. | LTX 2.5 — Loaders | Experimental |
 | LTX 2.5 MSR Loader (MLX) | Attach one LTX 2.5 MSR adapter after validating all learned Fourier-slot tensors and 480 rank-128 transformer pairs. The slot tensors load only when references execute. | LTX 2.5 — Loaders | Supported |
 | LTX 2.5 Guided Model Loader (MLX) | Select the LTX 2.5 development transformer for guided stage one and the official rank-450 distilled LoRA for stage two. No weights load in this node. | LTX 2.5 — Loaders | Experimental |
 | LTX 2.5 Generation Config | Configure the official distilled 8+3-evaluation LTX 2.5 two-stage schedule. | LTX 2.5 — Core | Experimental |
@@ -638,12 +1272,13 @@ This table is generated from the registered node contracts. Run
 | LTX 2.5 Timed Keyframe | Append a first, middle, or last image at an exact zero-based pixel-frame index. The image is encoded as reference conditioning; generated keyframe slots are separate. | LTX 2.5 — Conditioning | Supported |
 | LTX 2.5 Media Conditioning | Build a shared LTX 2.5 image, video, audio, or mask conditioning stack. Image keyframes, IC-LoRA video references, and one frozen audio-driven source execute. Standalone inpaint masks remain gated. | LTX 2.5 — Conditioning | Experimental |
 | LTX 2.5 IC-LoRA Control Guide | Add one preprocessed Canny, depth, pose, Motion Track, or custom IC-LoRA guide. Use the LTX 2.5 distilled model and the matching task adapter. | LTX 2.5 — Conditioning | Experimental |
+| LTX 2.5 CrossView Dual Reference Guide | Add the two CrossView IC-LoRA references in the trained order: warp first, source second. Use the v2 CrossView adapter with a reference downscale factor of one. | LTX 2.5 — Conditioning | Experimental |
 | LTX 2.5 IC-LoRA Pipeline Mode | Select full or hybrid CFG++, the eight-forward single-stage shortcut, or the existing two-stage stage-one-control pipeline. | LTX 2.5 — Conditioning | Experimental |
 | LTX 2.5 Ingredients Reference Sheet | Condition LTX 2.5 from one Ingredients reference sheet. The image is repeated internally across the full clip and encoded as IC-LoRA reference context. Quality, balanced, and speed policies control the encoded reference grid independently of the output canvas. | LTX 2.5 — Conditioning | Experimental |
-| LTX 2.5 MSR Reference Stack | Build an ordered one-to-five-image LTX 2.5 MSR stack. Subject and object references stay in connection order; one optional background is always assigned the final slot. | LTX 2.5 — Conditioning | Supported |
-| LTX 2.5 Generate Video + Audio | Generate synchronized LTX 2.5 video and audio through the MLX adapter. | LTX 2.5 — Core | Experimental |
+| LTX 2.5 MSR Reference Stack | Build an ordered one-to-five-image LTX 2.5 MSR stack. Subject and object references stay in connection order; one optional background is always assigned the final slot. Automatic priority gives the first two subjects full density and later references aligned supporting or background density. | LTX 2.5 — Conditioning | Supported |
+| LTX 2.5 Generate Video + Audio | Generate synchronized LTX 2.5 video and audio through the MLX adapter. Connect publication_audio to preserve an original soundtrack without conditioning sampling. | LTX 2.5 — Core | Experimental |
 | LTX 2.5 Generate Chained Timeline | Generate two to four overlapping LTX 2.5 windows with timeline-aligned latent guides, causal-aware latent transitions, and one synchronized audio/video decode. Supports the two-stage path and full-resolution single-stage Sol configurations. | LTX 2.5 — Core | Experimental |
-| LTX 2.5 Video Upscale / Refine | Upscale decoded ComfyUI IMAGE+AUDIO from any movie through LTX 2.5 latent space, optionally adding video-only refinement while preserving the source audio. | LTX 2.5 — Core | Experimental |
+| LTX 2.5 Video Upscale / Refine | Upscale decoded ComfyUI IMAGE+AUDIO from any movie through LTX 2.5 latent space, optionally adding generative video-only refinement while preserving the source audio. Refinement can invent identity details, logos, and text. | LTX 2.5 — Core | Experimental |
 | LTX 2.5 Unload MLX Runtime | Release process-local LTX 2.5 state. | LTX 2.5 — Core | Supported |
 | Canny Preprocessor (MLX) | Create temporally aligned Canny control frames with MLX. The defaults match ComfyUI's current normalized-threshold Canny contract. | MLX preprocessors — Edges | Experimental |
 | Video Depth Model Loader (MLX) | Select a converted Apache-2.0 Video Depth Anything Small checkpoint. This node does not load weights. | MLX preprocessors — Depth | Experimental |
@@ -657,8 +1292,22 @@ This table is generated from the registered node contracts. Run
 | Depth to Normal Map (MLX) | Convert a relative-depth IMAGE batch into standard RGB +Z-blue surface normals on MLX. Strength compensates for the small slopes in normalized depth. The node is weightless and preserves the input frame count and dimensions. | MLX preprocessors — Normals | Experimental |
 | Line Art Model Loader (MLX) | Select a converted realistic fine or coarse line-art checkpoint without loading it. | MLX preprocessors — Line art | Experimental |
 | Realistic Line Art Preprocessor (MLX) | Extract realistic fine or coarse line art with a compact MLX residual generator. The default matches ComfyUI's conventional white-line guide on black. | MLX preprocessors — Line art | Experimental |
+| Optical Flow Motion Tracks | Extract reliable sparse trajectories from an IMAGE batch with forward/backward optical flow, then render the LTX Motion Track training-color guide. | MLX preprocessors — Motion | Supported |
 | Motion Track Guide (MLX) | Render sparse colored point trajectories into the guide-video representation expected by the LTX Motion Track IC-LoRA. This node uses MLX and does not require a checkpoint. | MLX preprocessors — Motion | Experimental |
+| LTX 2.5 CrossView Camera Orbit | Build a multi-point CrossView camera path with a stock-Comfy visual sphere and frame timeline. The path preview follows the selected interpolation, and the sphere view can rotate independently without changing camera poses. Numeric widgets and camera_keyframes remain authoritative for API workflows. | LTX 2.5 — Camera preprocessing | Experimental |
+| LTX 2.5 CrossView Warp | Build the full-resolution magenta-hole camera warp expected by the CrossView Warp IC-LoRA. Connect the result and the same source video to CrossView Dual Reference Guide. | LTX 2.5 — Camera preprocessing | Experimental |
 | Unload MLX Preprocessors | Release weighted MLX preprocessor state without changing H3 or LTX residency. | MLX preprocessors — Lifecycle | Experimental |
+| H3 Fun ControlNet-Union Loader (MLX) | Select the 5-block MiniMax-H3 Fun ControlNet-Union branch. Weights remain deferred until sampling. One checkpoint supports Canny, depth, HED, MLSD, and pose guides. | H3 — ControlNet | Experimental |
+| H3 Encode Fun Control Video (MLX) | Fit a preprocessed control video to the H3 canvas and encode it with the selected H3 video VAE. Short guides hold their final frame; long guides are trimmed. | H3 — ControlNet | Experimental |
+| CorridorKey Model Loader (MLX) | Select a separately installed CorridorKey MLX checkpoint and a measured speed, quality, or low-memory profile. Weights load only when the keyer executes. | CorridorKey — Keying | Experimental |
+| CorridorKey Auto Chroma Hint | Create a coarse green-screen alpha hint from border chromaticity. The default erosion and blur match the hint style that CorridorKey expects. | CorridorKey — Keying | Experimental |
+| CorridorKey Mask Refine | Shrink or grow, blur, fill, and clean any standard ComfyUI MASK before CorridorKey. Use this node with SAM, Florence-derived, Impact Pack, or manual masks. | CorridorKey — Keying | Experimental |
+| CorridorKey Keyer (MLX) | Run the optional CorridorKey MLX engine on an IMAGE batch and coarse MASK. Return straight foreground, alpha, premultiplied color, preview, and provenance metadata. | CorridorKey — Keying | Experimental |
+| CorridorKey Composite | Composite CorridorKey foreground and matte outputs over a matching ComfyUI IMAGE batch. | CorridorKey — Keying | Experimental |
+| CorridorKey Unload | Release the process-local CorridorKey MLX engine and allocator cache. | CorridorKey — Keying | Experimental |
+| Florence-2 Model Loader (MLX) | Select a local MLX Florence-2 bundle for text-guided auto masking. The node validates the bundle but does not load weights until detection executes. | MLX preprocessors — Segmentation | Experimental |
+| Florence-2 Text Auto Mask (MLX) | Ground a text description with Florence-2 on sparse video frames, interpolate its location, and emit either a guided subject silhouette or a fast rectangular mask. | MLX preprocessors — Segmentation | Experimental |
+| Unload Florence-2 (MLX) | Release Florence-2 MLX state without changing CorridorKey, H3, or LTX state. | MLX preprocessors — Segmentation | Experimental |
 <!-- END GENERATED NODE CATALOG -->
 
 ## Troubleshooting

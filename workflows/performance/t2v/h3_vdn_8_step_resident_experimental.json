@@ -1,0 +1,596 @@
+{
+  "last_node_id": 11,
+  "last_link_id": 20,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "WeeToddH3ComponentLoader",
+      "pos": [
+        0,
+        0
+      ],
+      "size": [
+        440,
+        416
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "title": "H3 Component Loader",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "components",
+          "type": "WEETODD_H3_COMPONENTS",
+          "links": [
+            1
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3ComponentLoader"
+      },
+      "widgets_values": [
+        "MiniMax-H3/FL2VA",
+        "t2va",
+        "MiniMax-H3/transformers/q8_extended_paged",
+        "MiniMax-H3/text_encoders/q8-paged",
+        "MiniMax-H3/FL2VA/processor",
+        "MiniMax-H3/FL2VA/tokenizer",
+        "MiniMax-H3/vae/q8/video_vae_affine_q8.safetensors",
+        "MiniMax-H3/FL2VA/audio_vae/audio_vae.safetensors",
+        false
+      ]
+    },
+    {
+      "id": 3,
+      "type": "WeeToddH3GenerationConfig",
+      "pos": [
+        500,
+        0
+      ],
+      "size": [
+        440,
+        586
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "title": "H3 Generation Config",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "config",
+          "type": "WEETODD_H3_CONFIG",
+          "links": [
+            3
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "resolved_resolution",
+          "type": "STRING",
+          "links": [],
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3GenerationConfig"
+      },
+      "widgets_values": [
+        5,
+        9,
+        0,
+        "ratio + size",
+        "384 px short edge — fast smoke",
+        "16:9 — widescreen landscape",
+        384,
+        640,
+        384,
+        true,
+        "normal",
+        "automatic",
+        "auto",
+        "euler",
+        "off"
+      ]
+    },
+    {
+      "id": 10,
+      "type": "WeeToddH3PreviewOverride",
+      "pos": [
+        0,
+        650
+      ],
+      "size": [
+        440,
+        370
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "title": "H3 Model Preview Override",
+      "inputs": [
+        {
+          "name": "components",
+          "type": "WEETODD_H3_COMPONENTS",
+          "link": 1
+        }
+      ],
+      "outputs": [
+        {
+          "name": "components",
+          "type": "WEETODD_H3_COMPONENTS",
+          "links": [
+            2
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3PreviewOverride"
+      },
+      "widgets_values": [
+        "taeh3.safetensors",
+        "auto",
+        "taeh3_coreml_256.mlpackage",
+        2,
+        6,
+        256,
+        "conservative collapse guard"
+      ]
+    },
+    {
+      "id": 9,
+      "type": "WeeToddH3VDNCheckpoint",
+      "pos": [
+        500,
+        650
+      ],
+      "size": [
+        440,
+        256
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "title": "VDN-H3 Checkpoint — Experimental",
+      "inputs": [
+        {
+          "name": "components",
+          "type": "WEETODD_H3_COMPONENTS",
+          "link": 2
+        },
+        {
+          "name": "config",
+          "type": "WEETODD_H3_CONFIG",
+          "link": 3
+        }
+      ],
+      "outputs": [
+        {
+          "name": "components",
+          "type": "WEETODD_H3_COMPONENTS",
+          "links": [
+            4
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "config",
+          "type": "WEETODD_H3_CONFIG",
+          "links": [
+            5,
+            9
+          ],
+          "slot_index": 1
+        },
+        {
+          "name": "vdn",
+          "type": "WEETODD_H3_VDN",
+          "links": [
+            10
+          ],
+          "slot_index": 2
+        },
+        {
+          "name": "loras",
+          "type": "WEETODD_H3_LORAS",
+          "links": [
+            11
+          ],
+          "slot_index": 3
+        },
+        {
+          "name": "vdn_info",
+          "type": "STRING",
+          "links": [],
+          "slot_index": 4
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3VDNCheckpoint"
+      },
+      "widgets_values": [
+        "OpenVDN/vdn-minimax-h3",
+        "VDN-H3 8-step (recommended)",
+        "h3_silu_temb_grid.safetensors",
+        "verified"
+      ]
+    },
+    {
+      "id": 2,
+      "type": "WeeToddH3Preflight",
+      "pos": [
+        1000,
+        0
+      ],
+      "size": [
+        440,
+        256
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "title": "H3 Component Preflight",
+      "inputs": [
+        {
+          "name": "components",
+          "type": "WEETODD_H3_COMPONENTS",
+          "link": 4
+        },
+        {
+          "name": "config",
+          "type": "WEETODD_H3_CONFIG",
+          "link": 5
+        }
+      ],
+      "outputs": [
+        {
+          "name": "components",
+          "type": "WEETODD_H3_COMPONENTS",
+          "links": [
+            6,
+            7,
+            18
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "preflight_report",
+          "type": "STRING",
+          "links": [],
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3Preflight"
+      },
+      "widgets_values": [
+        512,
+        0,
+        ""
+      ]
+    },
+    {
+      "id": 4,
+      "type": "WeeToddH3TextEncode",
+      "pos": [
+        1000,
+        650
+      ],
+      "size": [
+        440,
+        500
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "title": "H3 Text Encode",
+      "inputs": [
+        {
+          "name": "components",
+          "type": "WEETODD_H3_COMPONENTS",
+          "link": 6
+        }
+      ],
+      "outputs": [
+        {
+          "name": "conditioning",
+          "type": "WEETODD_H3_CONDITIONING",
+          "links": [
+            8
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "conditioning_info",
+          "type": "STRING",
+          "links": [],
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3TextEncode"
+      },
+      "widgets_values": [
+        "integrated_multimodal_description: [Shot 1] Live-action, cinematic, a medium-wide eye-level shot frames a small red wind-up robot standing on a worn wooden workbench in a warm, sunlit repair workshop. The robot begins walking from left to right with clear alternating steps as its silver key turns, its arms swing, and its head pivots toward the camera. The camera trucks right with small amplitude at slow speed to follow the robot. Near the edge of the workbench, the robot stops, plants both feet, raises its right hand, and gives one deliberate wave while holding a stable final pose.\n\noverall_soundscape: Quiet workshop room tone continues beneath the scene. Each metal footstep makes a light tap on the wood, the winding mechanism clicks steadily in sync with the turning key, and the robot’s raised arm ends with a soft mechanical stop.\n\nnon_diegetic_music: N/A",
+        true,
+        true
+      ]
+    },
+    {
+      "id": 5,
+      "type": "WeeToddH3Sample",
+      "pos": [
+        1500,
+        0
+      ],
+      "size": [
+        440,
+        254
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "title": "H3 Sample — Resident / Keep Warm",
+      "inputs": [
+        {
+          "name": "components",
+          "type": "WEETODD_H3_COMPONENTS",
+          "link": 7
+        },
+        {
+          "name": "conditioning",
+          "type": "WEETODD_H3_CONDITIONING",
+          "link": 8
+        },
+        {
+          "name": "config",
+          "type": "WEETODD_H3_CONFIG",
+          "link": 9
+        },
+        {
+          "name": "vdn",
+          "type": "WEETODD_H3_VDN",
+          "link": 10
+        },
+        {
+          "name": "loras",
+          "type": "WEETODD_H3_LORAS",
+          "link": 11
+        }
+      ],
+      "outputs": [
+        {
+          "name": "latents",
+          "type": "WEETODD_H3_LATENTS",
+          "links": [
+            13
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "sampling_info",
+          "type": "STRING",
+          "links": [
+            20
+          ],
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3Sample"
+      },
+      "widgets_values": [
+        false,
+        "resident"
+      ]
+    },
+    {
+      "id": 8,
+      "type": "WeeToddH3DirectPublishLatents",
+      "pos": [
+        2000,
+        0
+      ],
+      "size": [
+        440,
+        424
+      ],
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "title": "H3 Direct Publish Latents",
+      "inputs": [
+        {
+          "name": "components",
+          "type": "WEETODD_H3_COMPONENTS",
+          "link": 18
+        },
+        {
+          "name": "latents",
+          "type": "WEETODD_H3_LATENTS",
+          "link": 13
+        },
+        {
+          "name": "sampling_info",
+          "type": "STRING",
+          "link": 20
+        }
+      ],
+      "outputs": [
+        {
+          "name": "video_path",
+          "type": "STRING",
+          "links": [],
+          "slot_index": 0
+        },
+        {
+          "name": "generation_info",
+          "type": "STRING",
+          "links": [],
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddH3DirectPublishLatents"
+      },
+      "widgets_values": [
+        "WeeTodd/H3_VDN_Resident_Benchmark",
+        18,
+        0.025,
+        "{\"workflow\": \"vdn_8_step_resident_benchmark\", \"keep_transformer_warm\": true, \"quality_label\": \"experimental wiring test\", \"full_checkpoint_parity\": false}",
+        "",
+        "fixed"
+      ]
+    },
+    {
+      "id": 11,
+      "type": "MarkdownNote",
+      "pos": [
+        1500,
+        1000
+      ],
+      "size": [
+        900,
+        800
+      ],
+      "flags": {},
+      "order": 10,
+      "mode": 0,
+      "title": "Setup and model downloads",
+      "properties": {},
+      "widgets_values": [
+        "## h3 vdn 8 step experimental\n\n1. Install WeeTodd Nodes and restart ComfyUI.\n2. Install the MLX H3 base components using the README model layout.\n   Resident and paged Q8 bases are supported; trained FastH3 VSA students are not.\n3. Download the selected OpenVDN stage into ComfyUI/models/OpenVDN/vdn-minimax-h3.\n   Keep model_spec.json, linear_branch/, and adapters/ together.\n4. For an AdaLN-pruned base, provide its original h3_silu_temb_grid.safetensors\n   through VDN Checkpoint's adaln_input_grid field (normal ComfyUI LoRA paths).\n5. Queue the workflow after component and VDN validation succeeds.\n\n### Downloads\n\n- [VDN-H3 stages](https://huggingface.co/OpenVDN/vdn-minimax-h3)\n- [Original MiniMax H3 components](https://huggingface.co/MiniMaxAI/MiniMax-H3)\n- [Q8 paged transformer](https://huggingface.co/Vayden/MiniMax-H3-MLX-q8-extended-paged)\n- [Q8 paged text encoder](https://huggingface.co/Vayden/Qwen3-VL-32B-H3-MLX-q8-paged)\n- [MLX Q8 video VAE](https://huggingface.co/Vayden/MiniMax-H3-Video-VAE-MLX-Q8)\n- Reuse h3_silu_temb_grid.safetensors in ComfyUI/models/loras for the pruned Q8 base.\n\n### Experimental status\n\nThis is a 384p wiring graph, not a quality or speed benchmark. The 8-step stage\nuses nine schedule points and both the default and named Turbo adapters.\nThe FP32 Metal solve is checked against CPU and falls back on failure.\nSmall-array numerical tests pass; full-checkpoint render parity is not established.\nKeep config, vdn, and loras connected from VDN Checkpoint to H3 Sample.\nDo not add cache, forecast, sparse-attention, FastVideo, or Hi Res Fix modifiers.\nReview the model's Community License and territory restrictions before use.\n\n### Execution policy\n\nDirect Publish Latents decodes and unloads each VAE without a persistent IMAGE tensor.\nPreview and collapse-guard checks run every two evaluations.\nProjection backend auto uses verified MPP only on supported hardware; Q8 layers stay MLX.\nH3 Sample defaults to checkpoint paging and unloads after sampling. The optional resident\nblock control needs ample memory; keep-warm also requires disabling unload_after_sample.\n\n\n### Resident / warm variant — high-memory machines only\n\nThis variant explicitly selects block_residency=resident and unload_after_sample=false.\nIt retains the complete transformer between jobs, while text encoding and both VAEs\nstill unload after use. Set unload_after_sample=true for the final job, or use H3 Unload.\nThe base-only paged memory estimate is not a resident estimate. M3 Ultra testing used\n256 GB unified memory; inspect the measured footprint in the README before selecting it.\n"
+      ]
+    }
+  ],
+  "links": [
+    [
+      1,
+      1,
+      0,
+      10,
+      0,
+      "WEETODD_H3_COMPONENTS"
+    ],
+    [
+      2,
+      10,
+      0,
+      9,
+      0,
+      "WEETODD_H3_COMPONENTS"
+    ],
+    [
+      3,
+      3,
+      0,
+      9,
+      1,
+      "WEETODD_H3_CONFIG"
+    ],
+    [
+      4,
+      9,
+      0,
+      2,
+      0,
+      "WEETODD_H3_COMPONENTS"
+    ],
+    [
+      5,
+      9,
+      1,
+      2,
+      1,
+      "WEETODD_H3_CONFIG"
+    ],
+    [
+      6,
+      2,
+      0,
+      4,
+      0,
+      "WEETODD_H3_COMPONENTS"
+    ],
+    [
+      7,
+      2,
+      0,
+      5,
+      0,
+      "WEETODD_H3_COMPONENTS"
+    ],
+    [
+      8,
+      4,
+      0,
+      5,
+      1,
+      "WEETODD_H3_CONDITIONING"
+    ],
+    [
+      9,
+      9,
+      1,
+      5,
+      2,
+      "WEETODD_H3_CONFIG"
+    ],
+    [
+      10,
+      9,
+      2,
+      5,
+      3,
+      "WEETODD_H3_VDN"
+    ],
+    [
+      11,
+      9,
+      3,
+      5,
+      4,
+      "WEETODD_H3_LORAS"
+    ],
+    [
+      13,
+      5,
+      0,
+      8,
+      1,
+      "WEETODD_H3_LATENTS"
+    ],
+    [
+      18,
+      2,
+      0,
+      8,
+      0,
+      "WEETODD_H3_COMPONENTS"
+    ],
+    [
+      20,
+      5,
+      1,
+      8,
+      2,
+      "STRING"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {
+    "ds": {
+      "scale": 0.55,
+      "offset": [
+        120,
+        120
+      ]
+    }
+  },
+  "version": 0.4
+}

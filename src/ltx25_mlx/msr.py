@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import mlx.core as mx
+
+from wee_todd_mlx.numpy_import import adopt_numpy_array
 
 from .ic_lora import _host_video, _resize_center_crop, plan_ingredients_reference_grid
 
@@ -26,6 +29,10 @@ class LTX25MSRReferenceReport:
     strength: float
     attention_strength: float
     reference_size_policy: str
+    reference_priority: str
+    requested_reference_frames: str
+    layout_adjusted: bool
+    sol_tile_aligned: bool
 
     def as_dict(self) -> dict[str, object]:
         return self.__dict__.copy()
@@ -109,6 +116,84 @@ def plan_ltx25_msr_reference_grid(
         target_width=target_width,
         policy=policy,
     )
+
+
+def plan_ltx25_msr_reference_layout(
+    *,
+    source_height: int,
+    source_width: int,
+    target_height: int,
+    target_width: int,
+    policy: str,
+    reference_frames: str | int,
+    sol_enabled: bool,
+    reference_priority: str = "primary",
+) -> tuple[int, int, int, int, bool]:
+    """Resolve the reference canvas, temporal length, rows, and Sol alignment."""
+
+    requested_frames = str(reference_frames)
+    if requested_frames not in {"auto", "25", "33"}:
+        raise ValueError("LTX 2.5 MSR reference_frames must be auto, 25, or 33.")
+    if policy not in {"sol_auto", "quality", "balanced", "speed"}:
+        raise ValueError(
+            "LTX 2.5 MSR sizing must be sol_auto, quality, balanced, or speed."
+        )
+    if reference_priority not in {"primary", "supporting", "background"}:
+        raise ValueError(
+            "LTX 2.5 MSR reference_priority must be primary, supporting, or background."
+        )
+    frames = 25 if requested_frames == "auto" and sol_enabled else 33
+    if requested_frames != "auto":
+        frames = int(requested_frames)
+    base_policy = "quality" if policy == "sol_auto" else policy
+    height, width = plan_ltx25_msr_reference_grid(
+        source_height=source_height,
+        source_width=source_width,
+        target_height=target_height,
+        target_width=target_width,
+        policy=base_policy,
+    )
+    original_height, original_width = height, width
+    if reference_priority != "primary":
+        if reference_priority == "supporting":
+            short_limit, long_limit = 384, 768
+        else:
+            short_limit, long_limit = 288, 512
+        if height < width:
+            height_limit, width_limit = short_limit, long_limit
+        elif height > width:
+            height_limit, width_limit = long_limit, short_limit
+        else:
+            height_limit = width_limit = short_limit
+        height = max(32, min(height, height_limit) // 32 * 32)
+        width = max(32, min(width, width_limit) // 32 * 32)
+
+    def token_rows(candidate_height: int, candidate_width: int) -> int:
+        latent_frames = (frames - 1) // 8 + 1
+        return latent_frames * (candidate_height // 32) * (candidate_width // 32)
+
+    rows = token_rows(height, width)
+    adjusted = (height, width) != (original_height, original_width)
+    if policy == "sol_auto" and sol_enabled and rows % 64:
+        ratio = width / height
+        candidates = [
+            (candidate_height, candidate_width)
+            for candidate_height in range(32, height + 1, 32)
+            for candidate_width in range(32, width + 1, 32)
+            if token_rows(candidate_height, candidate_width) % 64 == 0
+        ]
+        if not candidates:
+            raise ValueError("No 64-row-aligned LTX 2.5 MSR reference grid is available.")
+        height, width = max(
+            candidates,
+            key=lambda item: (
+                item[0] * item[1],
+                -abs(math.log((item[1] / item[0]) / ratio)),
+            ),
+        )
+        rows = token_rows(height, width)
+        adjusted = True
+    return height, width, frames, rows, adjusted
 
 
 class LTX25MSRConditioning:
@@ -222,13 +307,20 @@ def encode_ltx25_msr_references(
         image = _host_video(reference["image"])
         if int(image.shape[0]) != 1:
             raise ValueError("Each LTX 2.5 MSR reference must contain exactly one image.")
-        policy = str(reference.get("reference_size_policy", "quality"))
-        height, width = plan_ltx25_msr_reference_grid(
-            source_height=int(image.shape[1]),
-            source_width=int(image.shape[2]),
-            target_height=target_height,
-            target_width=target_width,
-            policy=policy,
+        policy = str(reference.get("reference_size_policy", "sol_auto"))
+        reference_priority = str(reference.get("reference_priority", "primary"))
+        requested_reference_frames = str(reference.get("reference_frames", "auto"))
+        height, width, reference_frames, planned_rows, layout_adjusted = (
+            plan_ltx25_msr_reference_layout(
+                source_height=int(image.shape[1]),
+                source_width=int(image.shape[2]),
+                target_height=target_height,
+                target_width=target_width,
+                policy=policy,
+                reference_frames=requested_reference_frames,
+                sol_enabled=compact_attention_mask,
+                reference_priority=reference_priority,
+            )
         )
         role = str(reference.get("role", "subject"))
         resized = (
@@ -236,10 +328,7 @@ def encode_ltx25_msr_references(
             if role == "background"
             else _resize_fit_white(image, height, width)
         )
-        reference_frames = int(reference.get("reference_frames", 33))
-        if reference_frames not in {25, 33}:
-            raise ValueError("LTX 2.5 MSR reference_frames must be 25 or 33.")
-        pixels = mx.array(resized.transpose(3, 0, 1, 2)[None])
+        pixels = adopt_numpy_array(resized.transpose(3, 0, 1, 2)[None])
         pixels = mx.broadcast_to(
             pixels,
             (1, pixels.shape[1], reference_frames, pixels.shape[3], pixels.shape[4]),
@@ -251,6 +340,10 @@ def encode_ltx25_msr_references(
         mx.eval(encoded)
         latent_f, latent_h, latent_w = map(int, encoded.shape[2:])
         tokens = encoded.transpose(0, 2, 3, 4, 1).reshape(1, -1, 128)
+        if int(tokens.shape[1]) != planned_rows:
+            raise RuntimeError(
+                "LTX 2.5 MSR reference layout prediction did not match the VAE output."
+            )
         positions = compute_video_positions(
             latent_f,
             latent_h,
@@ -285,6 +378,10 @@ def encode_ltx25_msr_references(
                 strength=float(reference.get("strength", 1.0)),
                 attention_strength=float(reference.get("attention_strength", 1.0)),
                 reference_size_policy=policy,
+                reference_priority=reference_priority,
+                requested_reference_frames=requested_reference_frames,
+                layout_adjusted=layout_adjusted,
+                sol_tile_aligned=int(tokens.shape[1]) % 64 == 0,
             )
         )
     slot_state.clear()
@@ -301,4 +398,5 @@ __all__ = [
     "load_ltx25_msr_slot_state",
     "ltx25_msr_slot_embedding",
     "plan_ltx25_msr_reference_grid",
+    "plan_ltx25_msr_reference_layout",
 ]

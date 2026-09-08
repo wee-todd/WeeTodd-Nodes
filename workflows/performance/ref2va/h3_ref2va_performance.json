@@ -81,8 +81,8 @@
         20,
         20260812,
         "ratio + size",
-        "512 px short edge \u2014 balanced preview",
-        "16:9 \u2014 widescreen landscape",
+        "512 px short edge — balanced preview",
+        "16:9 — widescreen landscape",
         512,
         896,
         512,
@@ -90,7 +90,8 @@
         "normal",
         "automatic",
         "mlx",
-        "euler"
+        "euler",
+        "off"
       ]
     },
     {
@@ -150,7 +151,7 @@
         "Node name for S&R": "WeeToddH3ValidatedSamplingPreset"
       },
       "widgets_values": [
-        "Dense baseline \u2014 20 points / 19 evaluations"
+        "Dense baseline — 20 points / 19 evaluations"
       ]
     },
     {
@@ -810,7 +811,8 @@
         "Node name for S&R": "WeeToddH3Sample"
       },
       "widgets_values": [
-        true
+        true,
+        "checkpoint_default"
       ]
     },
     {
@@ -866,7 +868,8 @@
         18,
         0.025,
         "{\"workflow\":\"h3_ref2va_performance\",\"profile\":\"performance\",\"task\":\"ref2va\",\"seed\":20260812,\"real_transformer_evaluations\":19,\"cache\":\"disabled\",\"preview\":\"enabled\",\"reference_sizing\":\"output-matched pixel area\"}",
-        ""
+        "",
+        "fixed"
       ]
     },
     {
@@ -1098,7 +1101,7 @@
   ],
   "groups": [
     {
-      "title": "H3 Ref2VA \u2014 performance profile",
+      "title": "H3 Ref2VA — performance profile",
       "bounding": [
         20,
         20,

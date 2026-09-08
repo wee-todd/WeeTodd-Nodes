@@ -173,6 +173,8 @@ def test_mpp_linear_failure_returns_one_standard_mlx_projection(monkeypatch) -> 
         "verified_signatures": 0,
         "fallback_signatures": 1,
         "fallback_reasons": ["RuntimeError"],
+        "expanded_q8_verified_signatures": 0,
+        "expanded_q8_fallback_signatures": 0,
     }
 
 
@@ -217,4 +219,6 @@ def test_mpp_linear_verifies_once_and_returns_exact_output() -> None:
         "verified_signatures": 1,
         "fallback_signatures": 0,
         "fallback_reasons": [],
+        "expanded_q8_verified_signatures": 0,
+        "expanded_q8_fallback_signatures": 0,
     }

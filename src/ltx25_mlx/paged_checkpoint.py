@@ -292,7 +292,7 @@ def fuse_paged_transformer_loras(
 
     from .transformer import (
         _fuse_non_block_loras,
-        _remap_comfy_lora_weights,
+        _load_normalized_ltx25_lora,
         inspect_ltx25_lora,
         remap_comfy_transformer_key,
         remap_comfy_transformer_weights,
@@ -320,8 +320,16 @@ def fuse_paged_transformer_loras(
         report = inspect_ltx25_lora(adapter)
         if strength <= 0:
             raise ValueError("LTX 2.5 LoRA fusion strength must be positive.")
+        if (
+            report["adapter_role"] == "ic_lora"
+            and report["adapter_family"] == "unclassified_reference_conditioning"
+        ):
+            raise ValueError(
+                "Cannot bake an LTX 2.5 task adapter whose family is not identified by "
+                "checkpoint metadata or a complete structural fingerprint."
+            )
         loaded_loras.append(
-            (_remap_comfy_lora_weights(dict(mx.load(str(adapter)))), float(strength))
+            (_load_normalized_ltx25_lora(adapter)[0], float(strength))
         )
         baked_loras.append(
             {

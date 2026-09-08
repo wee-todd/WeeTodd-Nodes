@@ -62,6 +62,15 @@ def test_readme_runtime_requirements_match_project_metadata():
     assert f"MLX {mlx_minimum} or later" in README
 
 
+def test_ltx_extra_uses_buildable_upstream_pin():
+    optional = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"][
+        "optional-dependencies"
+    ]["ltx"]
+    assert len(optional) == 2
+    assert all("91e6f6c9bd621ff2ae31adfee643e113d67d6ae8" in item for item in optional)
+    assert all("e1838a" not in item for item in optional)
+
+
 def test_readme_contains_current_portable_h3_component_paths():
     expected = {
         "MiniMax-H3/FL2VA",

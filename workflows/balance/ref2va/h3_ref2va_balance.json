@@ -81,8 +81,8 @@
         7,
         20260812,
         "ratio + size",
-        "512 px short edge \u2014 balanced preview",
-        "16:9 \u2014 widescreen landscape",
+        "512 px short edge — balanced preview",
+        "16:9 — widescreen landscape",
         512,
         896,
         512,
@@ -90,7 +90,8 @@
         "normal",
         "automatic",
         "mlx",
-        "euler"
+        "euler",
+        "off"
       ]
     },
     {
@@ -150,7 +151,7 @@
         "Node name for S&R": "WeeToddH3ValidatedSamplingPreset"
       },
       "widgets_values": [
-        "Staged Turbo \u2014 drbaph v4 step-600 \u2014 2 base + 4 Turbo evaluations"
+        "Staged Turbo — drbaph v4 step-600 — 2 base + 4 Turbo evaluations"
       ]
     },
     {
@@ -810,7 +811,8 @@
         "Node name for S&R": "WeeToddH3Sample"
       },
       "widgets_values": [
-        true
+        true,
+        "checkpoint_default"
       ]
     },
     {
@@ -866,7 +868,8 @@
         18,
         0.025,
         "{\"workflow\":\"h3_ref2va_balance\",\"profile\":\"balance\",\"task\":\"ref2va\",\"seed\":20260812,\"real_transformer_evaluations\":6,\"cache\":\"disabled\",\"preview\":\"enabled\",\"reference_sizing\":\"output-matched pixel area\"}",
-        ""
+        "",
+        "fixed"
       ]
     },
     {
@@ -1098,7 +1101,7 @@
   ],
   "groups": [
     {
-      "title": "H3 Ref2VA \u2014 balance profile",
+      "title": "H3 Ref2VA — balance profile",
       "bounding": [
         20,
         20,

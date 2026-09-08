@@ -8,6 +8,8 @@ from typing import Any
 
 import mlx.core as mx
 
+from wee_todd_mlx.numpy_import import adopt_numpy_array
+
 
 @dataclass(frozen=True)
 class LTX25ICReferenceReport:
@@ -25,6 +27,7 @@ class LTX25ICReferenceReport:
     strength: float
     attention_strength: float
     control_type: str
+    reference_role: str
     conditioning_mode: str
     reference_size_policy: str
     reference_token_count: int
@@ -236,6 +239,7 @@ def encode_reference_video_conditioning(
     reference_downscale_factor: int = 1,
     reference_temporal_scale_factor: int = 1,
     control_type: str = "custom_preprocessed",
+    reference_role: str = "",
     reference_size_policy: str = "quality",
     compact_attention_mask: bool = False,
 ):
@@ -299,7 +303,7 @@ def encode_reference_video_conditioning(
             "The IC-LoRA reference dimensions must remain positive multiples of 32."
         )
     fitted = _resize_center_crop(fitted, ref_height, ref_width)
-    pixels = mx.array(fitted.transpose(3, 0, 1, 2)[None])
+    pixels = adopt_numpy_array(fitted.transpose(3, 0, 1, 2)[None])
     if static_reference_sheet:
         pixels = mx.broadcast_to(
             pixels,
@@ -373,6 +377,7 @@ def encode_reference_video_conditioning(
         strength=strength,
         attention_strength=attention_strength,
         control_type=control_type,
+        reference_role=reference_role,
         conditioning_mode=(
             "static_reference_sheet_repeated_to_target"
             if static_reference_sheet

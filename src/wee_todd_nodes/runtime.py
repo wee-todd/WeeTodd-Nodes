@@ -39,8 +39,15 @@ class H3GenerationConfig:
     ffn_row_chunk_size: str = "automatic"
     projection_backend: str = "auto"
     sampling_method: str = "euler"
+    inference_optimization: str = "off"
 
     def validate(self) -> None:
+        if self.inference_optimization not in {
+            "off", "transient_q8", "compiled_adaln", "combined",
+        }:
+            raise ValueError("Unknown H3 inference optimization")
+        if self.inference_optimization != "off" and self.projection_backend not in {"auto", "mlx"}:
+            raise ValueError("H3 inference experiments require the auto or mlx projection backend")
         if not 2.5 <= self.duration_seconds <= 15.0:
             raise ValueError(
                 "MiniMax H3 duration must be between 2.5 and 15 seconds; "
@@ -62,8 +69,17 @@ class H3GenerationConfig:
             raise ValueError("attention_head_chunk_size must be automatic, 2, 4, 8, or disabled")
         if self.ffn_row_chunk_size not in {"automatic", "128", "256", "512", "disabled"}:
             raise ValueError("ffn_row_chunk_size must be automatic, 128, 256, 512, or disabled")
-        if self.projection_backend not in {"auto", "mlx", "mpp_experimental"}:
-            raise ValueError("projection_backend must be auto, mlx, or mpp_experimental")
+        if self.projection_backend not in {
+            "auto",
+            "mlx",
+            "mpp_experimental",
+            "m5_low_bit_experimental",
+            "mpp_resident_expanded_experimental",
+        }:
+            raise ValueError(
+                "projection_backend must be auto, mlx, mpp_experimental, or "
+                "m5_low_bit_experimental"
+            )
         if self.sampling_method not in {"euler", "res_multistep"}:
             raise ValueError("sampling_method must be euler or res_multistep")
 

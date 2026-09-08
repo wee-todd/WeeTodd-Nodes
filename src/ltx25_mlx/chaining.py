@@ -12,6 +12,8 @@ from typing import Any
 import mlx.core as mx
 import numpy as np
 
+from wee_todd_mlx.media_serialization import write_all_contiguous
+
 LTX25_CHAIN_CONTINUATION_STRENGTH = 0.5
 LTX25_CHAIN_VIDEO_BLEND_FRAMES = 4
 LTX25_CHAIN_AUDIO_CROSSFADE_SECONDS = 0.05
@@ -472,7 +474,8 @@ class _RawVideoEncoder:
     def write(self, frames: np.ndarray) -> None:
         if self._process.stdin is None:
             raise RuntimeError("The LTX 2.5 video encoder has no input stream.")
-        self._process.stdin.write(np.ascontiguousarray(frames).tobytes())
+        contiguous = np.ascontiguousarray(frames)
+        write_all_contiguous(contiguous, self._process.stdin)
         self.frames += int(frames.shape[0])
 
     def close(self) -> None:
@@ -495,12 +498,16 @@ class _RawVideoEncoder:
 
 def _save_waveform(path: Path, waveform: np.ndarray, sample_rate: int) -> None:
     clipped = np.clip(waveform.T, -1.0, 1.0)
-    pcm = (clipped * 32767.0).astype(np.int16)
+    pcm = np.ascontiguousarray((clipped * 32767.0).astype(np.int16))
     with wave.open(str(path), "w") as handle:
         handle.setnchannels(int(waveform.shape[0]))
         handle.setsampwidth(2)
         handle.setframerate(int(sample_rate))
-        handle.writeframes(pcm.tobytes())
+        view = memoryview(pcm).cast("B")
+        try:
+            handle.writeframes(view)
+        finally:
+            view.release()
 
 
 def mlx_audio_to_numpy(waveform: mx.array) -> np.ndarray:

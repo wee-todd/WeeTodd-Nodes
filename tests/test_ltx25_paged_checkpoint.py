@@ -164,8 +164,9 @@ def test_paged_ic_lora_fusion_preserves_reference_contract(tmp_path):
         },
         metadata={
             "model_version": "2.5.0",
-            "reference_downscale_factor": "2",
-            "reference_temporal_scale_factor": "3",
+            "adapter_family": "ingredients_reference_sheet",
+            "reference_downscale_factor": "1",
+            "reference_temporal_scale_factor": "1",
         },
     )
 
@@ -177,9 +178,41 @@ def test_paged_ic_lora_fusion_preserves_reference_contract(tmp_path):
     assert baked["adapter_role"] == "ic_lora"
     assert baked["adapter_family"] == "ingredients_reference_sheet"
     assert baked["ic_lora_task"] == "reference_conditioning"
-    assert baked["reference_downscale_factor"] == 2
-    assert baked["reference_temporal_scale_factor"] == 3
+    assert baked["reference_downscale_factor"] == 1
+    assert baked["reference_temporal_scale_factor"] == 1
     assert baked["strength"] == pytest.approx(1.2)
+
+
+def test_paged_ic_lora_fusion_rejects_unclassified_task_adapter(tmp_path):
+    source = tmp_path / "source.safetensors"
+    mx.save_safetensors(
+        str(source),
+        {
+            "model.diffusion_model.transformer_blocks.0.attn1.to_q.weight": mx.zeros(
+                (64, 64), dtype=mx.bfloat16
+            )
+        },
+        metadata={"model_version": "2.5.0", "config": json.dumps({"transformer": {}})},
+    )
+    paged = convert_to_paged_q8(source, tmp_path / "paged", kind="transformer")
+    adapter = tmp_path / "unknown-task.safetensors"
+    mx.save_safetensors(
+        str(adapter),
+        {
+            "transformer_blocks.0.attn1.to_q.lora_A.weight": mx.ones(
+                (2, 64), dtype=mx.bfloat16
+            ),
+            "transformer_blocks.0.attn1.to_q.lora_B.weight": mx.ones(
+                (64, 2), dtype=mx.bfloat16
+            ),
+        },
+        metadata={"model_version": "2.5", "reference_downscale_factor": "1"},
+    )
+
+    with pytest.raises(ValueError, match="family is not identified"):
+        fuse_paged_transformer_loras(
+            paged.root, tmp_path / "fused", ((adapter, 1.0),)
+        )
 
 
 def test_dfr_prebaked_pair_validates_adapter_provenance(tmp_path):
@@ -210,7 +243,11 @@ def test_dfr_prebaked_pair_validates_adapter_provenance(tmp_path):
     mx.save_safetensors(
         str(detail),
         adapter_values,
-        metadata={"model_version": "2.5.0", "reference_downscale_factor": "2"},
+        metadata={
+            "model_version": "2.5.0",
+            "reference_downscale_factor": "2",
+            "reference_spatial_scale_factor": "2",
+        },
     )
     combined = fuse_paged_transformer_loras(
         paged.root, tmp_path / "combined", ((base, 1.0), (detail, 1.0))

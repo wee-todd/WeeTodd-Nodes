@@ -81,8 +81,8 @@
         5,
         0,
         "ratio + size",
-        "384 px short edge \u2014 fast smoke",
-        "16:9 \u2014 widescreen landscape",
+        "384 px short edge — fast smoke",
+        "16:9 — widescreen landscape",
         384,
         640,
         384,
@@ -90,7 +90,8 @@
         "low_memory_bf16",
         "automatic",
         "mlx",
-        "euler"
+        "euler",
+        "off"
       ]
     },
     {
@@ -150,7 +151,7 @@
         "Node name for S&R": "WeeToddH3ValidatedSamplingPreset"
       },
       "widgets_values": [
-        "Turbo \u2014 drbaph v4 step-600 \u2014 384p low-memory \u2014 5 points / 4 evaluations"
+        "Turbo — drbaph v4 step-600 — 384p low-memory — 5 points / 4 evaluations"
       ]
     },
     {
@@ -253,6 +254,7 @@
       },
       "widgets_values": [
         "integrated_multimodal_description: [Shot 1] Photorealistic single continuous shot in a\nsunlit craft studio. An adult ceramic artist centers a wet clay bowl on a spinning wheel,\nshapes the rim with both hands, pauses to inspect the curve, then looks toward the camera\nwith a satisfied restrained smile. The camera makes one slow shoulder-height push-in.\nPreserve natural hand contact, stable tools, consistent daylight, and realistic wet clay\ntexture.\n\noverall_soundscape: Quiet studio room tone, steady wheel motor, wet clay rubbing under the\nartist's fingers, a small tool placed on the wooden table, natural breathing, and clothing\nmovement. No dialogue.\n\nnon_diegetic_music: N/A",
+        true,
         true
       ]
     },
@@ -314,7 +316,8 @@
         "Node name for S&R": "WeeToddH3Sample"
       },
       "widgets_values": [
-        true
+        true,
+        "checkpoint_default"
       ]
     },
     {
@@ -370,7 +373,8 @@
         18,
         0.025,
         "{\"workflow\":\"h3_t2v_speed\",\"profile\":\"speed\",\"task\":\"t2v\",\"seed\":0,\"real_transformer_evaluations\":4,\"cache\":\"disabled\",\"preview\":\"enabled\",\"reference_sizing\":\"not applicable\"}",
-        ""
+        "",
+        "fixed"
       ]
     },
     {
@@ -550,7 +554,7 @@
   ],
   "groups": [
     {
-      "title": "H3 T2V + audio \u2014 speed profile",
+      "title": "H3 T2V + audio — speed profile",
       "bounding": [
         20,
         20,

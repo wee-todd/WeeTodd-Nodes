@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -143,6 +144,48 @@ class MLXFastDepthModelSpec:
 class MLXLineArtModelSpec:
     checkpoint_name: str
     checkpoint_path: Path
+
+
+@dataclass(frozen=True)
+class LTX25CrossViewCameraConfig:
+    """Serializable camera controls shared by the UI and headless workflows."""
+
+    azimuth: float
+    elevation: float
+    distance: float
+    horizontal_fov: float
+    vertical_shift: float
+    depth_ratio: float
+    invert_depth: bool
+    keep_source_aim: bool
+    camera_keyframes: str
+    interpolation: str
+    pivot_x: float
+    pivot_y: float
+    pivot_z: float
+    splat_radius: int
+    path_id: str
+
+    def warp_kwargs(self) -> dict[str, object]:
+        return {
+            field: getattr(self, field)
+            for field in (
+                "azimuth",
+                "elevation",
+                "distance",
+                "horizontal_fov",
+                "vertical_shift",
+                "depth_ratio",
+                "invert_depth",
+                "keep_source_aim",
+                "camera_keyframes",
+                "interpolation",
+                "pivot_x",
+                "pivot_y",
+                "pivot_z",
+                "splat_radius",
+            )
+        }
 
 
 class _VideoDepthRuntime:
@@ -1081,6 +1124,116 @@ class WeeToddMLXLineArtPreprocessor:
                 LINEART_RUNTIME.unload()
 
 
+class WeeToddOpticalFlowMotionTracks:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "images": ("IMAGE",),
+                "max_tracks": ("INT", {"default": 8, "min": 1, "max": 16, "step": 1}),
+                "quality_level": (
+                    "FLOAT",
+                    {"default": 0.02, "min": 0.001, "max": 0.5, "step": 0.001},
+                ),
+                "minimum_distance": (
+                    "INT",
+                    {"default": 32, "min": 2, "max": 512, "step": 1},
+                ),
+                "window_size": ([15, 21, 31, 41, 51, 61], {"default": 21}),
+                "pyramid_levels": ([1, 2, 3, 4, 5, 6], {"default": 3}),
+                "forward_backward_limit": (
+                    "FLOAT",
+                    {"default": 1.5, "min": 0.1, "max": 20.0, "step": 0.1},
+                ),
+                "trail_frames": (
+                    "INT",
+                    {"default": 50, "min": 1, "max": 200, "step": 1},
+                ),
+            }
+        }
+
+    RETURN_TYPES = ("IMAGE", "STRING", "STRING")
+    RETURN_NAMES = ("motion_guide", "tracks_json", "tracking_info")
+    FUNCTION = "track"
+    CATEGORY = "WeeTodd/MLX preprocessors/motion"
+    DESCRIPTION = (
+        "Extract reliable sparse trajectories from an IMAGE batch with forward/backward "
+        "optical flow, then render the LTX Motion Track training-color guide."
+    )
+
+    def track(
+        self,
+        images,
+        max_tracks,
+        quality_level,
+        minimum_distance,
+        window_size,
+        pyramid_levels,
+        forward_backward_limit,
+        trail_frames,
+    ):
+        from mlx_preprocessors.motion_tracks import MotionTrackConfig, render_motion_tracks
+        from mlx_preprocessors.optical_flow_tracks import (
+            OpticalFlowTrackConfig,
+            extract_optical_flow_tracks,
+        )
+
+        def interruption_callback():
+            try:
+                import comfy.model_management as model_management
+
+                model_management.throw_exception_if_processing_interrupted()
+            except ImportError:
+                return
+
+        progress = None
+        try:
+            from comfy.utils import ProgressBar
+
+            progress = ProgressBar(max(1, int(images.shape[0]) - 1))
+        except ImportError:
+            pass
+        tracks_json, tracking = extract_optical_flow_tracks(
+            images,
+            OpticalFlowTrackConfig(
+                max_tracks=int(max_tracks),
+                quality_level=float(quality_level),
+                minimum_distance=int(minimum_distance),
+                window_size=int(window_size),
+                pyramid_levels=int(pyramid_levels),
+                forward_backward_limit=float(forward_backward_limit),
+            ),
+            progress_callback=(
+                (lambda current, total: progress.update_absolute(current, total))
+                if progress is not None
+                else None
+            ),
+            interruption_callback=interruption_callback,
+        )
+        guide, rendering = render_motion_tracks(
+            tracks_json,
+            MotionTrackConfig(
+                width=int(images.shape[2]),
+                height=int(images.shape[1]),
+                num_frames=int(images.shape[0]),
+                coordinate_space="normalized",
+                track_format="per-frame coordinates",
+                trail_frames=int(trail_frames),
+            ),
+            interruption_callback=interruption_callback,
+        )
+        try:
+            import torch
+
+            if isinstance(images, torch.Tensor):
+                guide = torch.from_numpy(guide).to(device=images.device, dtype=images.dtype)
+        except ImportError:
+            pass
+        return guide, tracks_json, json.dumps(
+            {"tracking": tracking, "rendering": rendering}, indent=2, sort_keys=True
+        )
+
+
 class WeeToddMLXMotionTrackGuide:
     @classmethod
     def INPUT_TYPES(cls):
@@ -1090,8 +1243,7 @@ class WeeToddMLXMotionTrackGuide:
                     "STRING",
                     {
                         "default": (
-                            '[[{"x":0.30,"y":0.55},{"x":0.50,"y":0.45},'
-                            '{"x":0.70,"y":0.55}]]'
+                            '[[{"x":0.30,"y":0.55},{"x":0.50,"y":0.45},{"x":0.70,"y":0.55}]]'
                         ),
                         "multiline": True,
                         "tooltip": (
@@ -1184,6 +1336,354 @@ class WeeToddMLXMotionTrackGuide:
         return output, json.dumps(report, indent=2, sort_keys=True)
 
 
+class WeeToddLTX25CrossViewCameraOrbit:
+    MATURITY = "Experimental"
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "azimuth": (
+                    "FLOAT",
+                    {"default": -30.0, "min": -180.0, "max": 180.0, "step": 1.0},
+                ),
+                "elevation": (
+                    "FLOAT",
+                    {"default": 15.0, "min": -90.0, "max": 90.0, "step": 1.0},
+                ),
+                "distance": (
+                    "FLOAT",
+                    {"default": 1.0, "min": 0.1, "max": 3.0, "step": 0.05},
+                ),
+                "horizontal_fov": (
+                    "FLOAT",
+                    {"default": 50.0, "min": 20.0, "max": 120.0, "step": 1.0},
+                ),
+                "vertical_shift": (
+                    "FLOAT",
+                    {"default": 0.0, "min": -1.0, "max": 1.0, "step": 0.02},
+                ),
+                "depth_ratio": (
+                    "FLOAT",
+                    {"default": 6.0, "min": 1.5, "max": 100.0, "step": 0.5},
+                ),
+                "invert_depth": ("BOOLEAN", {"default": False}),
+                "keep_source_aim": ("BOOLEAN", {"default": True}),
+                "camera_keyframes": (
+                    "STRING",
+                    {
+                        "default": "",
+                        "multiline": True,
+                        "tooltip": (
+                            "Optional 1-based JSON camera path. Use the visual timeline to select "
+                            "a frame, position the sphere, and add or update its camera pose."
+                        ),
+                    },
+                ),
+                "interpolation": (
+                    ["linear", "ease_in", "ease_out", "ease_in_out", "smooth"],
+                    {"default": "smooth"},
+                ),
+            },
+            "optional": {
+                "pivot_x": ("FLOAT", {"default": 0.0, "step": 0.01}),
+                "pivot_y": ("FLOAT", {"default": 0.0, "step": 0.01}),
+                "pivot_z": ("FLOAT", {"default": 1.05, "min": 0.01, "step": 0.01}),
+                "splat_radius": ("INT", {"default": 2, "min": 0, "max": 3, "step": 1}),
+            },
+        }
+
+    RETURN_TYPES = ("WEETODD_LTX25_CROSSVIEW_CAMERA", "STRING")
+    RETURN_NAMES = ("camera", "camera_info")
+    FUNCTION = "configure"
+    CATEGORY = "WeeTodd/LTX 2.5/preprocessors/camera"
+    DESCRIPTION = (
+        "Build a multi-point CrossView camera path with a stock-Comfy visual sphere and frame "
+        "timeline. The path preview follows the selected interpolation, and the sphere view can "
+        "rotate independently without changing camera poses. Numeric widgets and camera_keyframes "
+        "remain authoritative for API workflows."
+    )
+
+    @staticmethod
+    def _validate_keyframes(raw: str) -> str:
+        text = str(raw).strip()
+        if not text:
+            return ""
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise ValueError("CrossView camera keyframes must be valid JSON.") from exc
+        if not isinstance(payload, list):
+            raise ValueError("CrossView camera keyframes must be a JSON list.")
+        for index, item in enumerate(payload, start=1):
+            if not isinstance(item, dict):
+                raise ValueError(f"CrossView keyframe {index} must be a JSON object.")
+            frame = item.get("frame", item.get("f"))
+            if frame is None or isinstance(frame, bool):
+                raise ValueError(f"CrossView keyframe {index} needs a positive frame number.")
+            try:
+                if int(frame) < 1 or float(frame) != int(frame):
+                    raise ValueError
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"CrossView keyframe {index} needs a positive integer frame number."
+                ) from exc
+        return json.dumps(payload, separators=(",", ":"), sort_keys=True)
+
+    def configure(
+        self,
+        azimuth,
+        elevation,
+        distance,
+        horizontal_fov,
+        vertical_shift,
+        depth_ratio,
+        invert_depth,
+        keep_source_aim,
+        camera_keyframes,
+        interpolation,
+        pivot_x=0.0,
+        pivot_y=0.0,
+        pivot_z=1.05,
+        splat_radius=2,
+    ):
+        normalized_keyframes = self._validate_keyframes(camera_keyframes)
+        values = {
+            "azimuth": float(azimuth),
+            "elevation": float(elevation),
+            "distance": float(distance),
+            "horizontal_fov": float(horizontal_fov),
+            "vertical_shift": float(vertical_shift),
+            "depth_ratio": float(depth_ratio),
+            "invert_depth": bool(invert_depth),
+            "keep_source_aim": bool(keep_source_aim),
+            "camera_keyframes": normalized_keyframes,
+            "interpolation": str(interpolation),
+            "pivot_x": float(pivot_x),
+            "pivot_y": float(pivot_y),
+            "pivot_z": float(pivot_z),
+            "splat_radius": int(splat_radius),
+        }
+        identity = hashlib.sha256(
+            json.dumps(values, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        ).hexdigest()[:16]
+        camera = LTX25CrossViewCameraConfig(**values, path_id=identity)
+        in_reliable_range = (
+            -45.0 <= camera.azimuth <= 45.0
+            and -20.0 <= camera.elevation <= 30.0
+            and abs(camera.distance - 1.0) <= 0.05
+        )
+        report = {
+            **values,
+            "camera_contract": "weetodd-ltx25-crossview-camera-v1",
+            "path_id": identity,
+            "reliable_adapter_range": in_reliable_range,
+            "warning": (
+                None
+                if in_reliable_range
+                else "Pose is outside the adapter's best-observed training range."
+            ),
+        }
+        return camera, json.dumps(report, indent=2, sort_keys=True)
+
+
+class WeeToddLTX25CrossViewWarp:
+    MATURITY = "Experimental"
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "source_video": ("IMAGE",),
+                "depth_video": ("IMAGE",),
+                "azimuth": (
+                    "FLOAT",
+                    {
+                        "default": -30.0,
+                        "min": -180.0,
+                        "max": 180.0,
+                        "step": 1.0,
+                        "tooltip": (
+                            "Use -45 to +45 degrees first. The adapter has weaker support "
+                            "outside this range."
+                        ),
+                    },
+                ),
+                "elevation": (
+                    "FLOAT",
+                    {
+                        "default": 15.0,
+                        "min": -90.0,
+                        "max": 90.0,
+                        "step": 1.0,
+                        "tooltip": (
+                            "Use -20 to +30 degrees first. Low upward views have limited "
+                            "training coverage."
+                        ),
+                    },
+                ),
+                "distance": (
+                    "FLOAT",
+                    {
+                        "default": 1.0,
+                        "min": 0.1,
+                        "max": 3.0,
+                        "step": 0.05,
+                        "tooltip": (
+                            "Keep 1.0 for reliable control. Distance control is weak in "
+                            "the current adapter."
+                        ),
+                    },
+                ),
+                "horizontal_fov": (
+                    "FLOAT",
+                    {"default": 50.0, "min": 20.0, "max": 120.0, "step": 1.0},
+                ),
+                "vertical_shift": (
+                    "FLOAT",
+                    {"default": 0.0, "min": -1.0, "max": 1.0, "step": 0.02},
+                ),
+                "depth_ratio": (
+                    "FLOAT",
+                    {"default": 6.0, "min": 1.5, "max": 100.0, "step": 0.5},
+                ),
+                "invert_depth": ("BOOLEAN", {"default": False}),
+                "keep_source_aim": (
+                    "BOOLEAN",
+                    {
+                        "default": True,
+                        "tooltip": (
+                            "Keep the original optical-axis aim. This matches the adapter "
+                            "training warp."
+                        ),
+                    },
+                ),
+                "camera_keyframes": (
+                    "STRING",
+                    {
+                        "default": "",
+                        "multiline": True,
+                        "tooltip": (
+                            "Optional 1-based JSON camera path. Example: "
+                            '[{"f":1,"az":-30,"el":10,"dist":1.0},'
+                            '{"f":121,"az":30,"el":10,"dist":1.0}]'
+                        ),
+                    },
+                ),
+                "interpolation": (
+                    ["linear", "ease_in", "ease_out", "ease_in_out", "smooth"],
+                    {"default": "smooth"},
+                ),
+            },
+            "optional": {
+                "camera": ("WEETODD_LTX25_CROSSVIEW_CAMERA",),
+                "pivot_x": ("FLOAT", {"default": 0.0, "step": 0.01}),
+                "pivot_y": ("FLOAT", {"default": 0.0, "step": 0.01}),
+                "pivot_z": ("FLOAT", {"default": 1.05, "min": 0.01, "step": 0.01}),
+                "splat_radius": ("INT", {"default": 2, "min": 0, "max": 3, "step": 1}),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE", "STRING")
+    RETURN_NAMES = ("warp_video", "warp_info")
+    FUNCTION = "warp"
+    CATEGORY = "WeeTodd/LTX 2.5/preprocessors/camera"
+    DESCRIPTION = (
+        "Build the full-resolution magenta-hole camera warp expected by the CrossView Warp "
+        "IC-LoRA. Connect the result and the same source video to CrossView Dual Reference Guide."
+    )
+
+    def warp(
+        self,
+        source_video,
+        depth_video,
+        azimuth,
+        elevation,
+        distance,
+        horizontal_fov,
+        vertical_shift,
+        depth_ratio,
+        invert_depth,
+        keep_source_aim,
+        camera_keyframes,
+        interpolation,
+        pivot_x=0.0,
+        pivot_y=0.0,
+        pivot_z=1.05,
+        splat_radius=2,
+        camera=None,
+    ):
+        from ltx25_mlx.crossview import build_crossview_warp
+
+        if camera is not None:
+            if not isinstance(camera, LTX25CrossViewCameraConfig):
+                raise TypeError("CrossView Warp received an incompatible camera contract.")
+            controls = camera.warp_kwargs()
+            azimuth = controls["azimuth"]
+            elevation = controls["elevation"]
+            distance = controls["distance"]
+            horizontal_fov = controls["horizontal_fov"]
+            vertical_shift = controls["vertical_shift"]
+            depth_ratio = controls["depth_ratio"]
+            invert_depth = controls["invert_depth"]
+            keep_source_aim = controls["keep_source_aim"]
+            camera_keyframes = controls["camera_keyframes"]
+            interpolation = controls["interpolation"]
+            pivot_x = controls["pivot_x"]
+            pivot_y = controls["pivot_y"]
+            pivot_z = controls["pivot_z"]
+            splat_radius = controls["splat_radius"]
+
+        def interruption_callback():
+            try:
+                import comfy.model_management as model_management
+
+                model_management.throw_exception_if_processing_interrupted()
+            except ImportError:
+                return
+
+        progress = None
+        try:
+            from comfy.utils import ProgressBar
+
+            progress = ProgressBar(int(source_video.shape[0]))
+        except ImportError:
+            pass
+        output, report = build_crossview_warp(
+            source_video,
+            depth_video,
+            azimuth=float(azimuth),
+            elevation=float(elevation),
+            distance=float(distance),
+            horizontal_fov=float(horizontal_fov),
+            vertical_shift=float(vertical_shift),
+            depth_ratio=float(depth_ratio),
+            invert_depth=bool(invert_depth),
+            pivot_x=float(pivot_x),
+            pivot_y=float(pivot_y),
+            pivot_z=float(pivot_z),
+            keep_source_aim=bool(keep_source_aim),
+            keyframes=str(camera_keyframes),
+            interpolation=str(interpolation),
+            splat_radius=int(splat_radius),
+            progress_callback=(
+                (lambda current, total: progress.update_absolute(current, total))
+                if progress is not None
+                else None
+            ),
+            interruption_callback=interruption_callback,
+        )
+        try:
+            import torch
+
+            output = torch.from_numpy(output)
+        except ImportError:
+            pass
+        report["camera_path_id"] = camera.path_id if camera is not None else None
+        report["camera_source"] = "orbit node" if camera is not None else "warp widgets"
+        return output, json.dumps(report, indent=2, sort_keys=True)
+
+
 class WeeToddMLXPreprocessorUnload:
     @classmethod
     def INPUT_TYPES(cls):
@@ -1196,12 +1696,18 @@ class WeeToddMLXPreprocessorUnload:
 
     def release(self, unload):
         if unload:
+            from ltx25_mlx.crossview import clear_crossview_geometry_cache
+
             VIDEO_DEPTH_RUNTIME.unload()
             DWPOSE_RUNTIME.unload()
             TEED_RUNTIME.unload()
             FAST_DEPTH_RUNTIME.unload()
             LINEART_RUNTIME.unload()
-            return ("MLX preprocessor models unloaded",)
+            geometry_entries = clear_crossview_geometry_cache()
+            return (
+                "MLX preprocessor models unloaded; "
+                f"cleared {geometry_entries} cached CrossView projection grid(s)",
+            )
         return ("MLX preprocessor models kept warm",)
 
 
@@ -1218,7 +1724,10 @@ NODE_CLASS_MAPPINGS = {
     "WeeToddMLXNormalMapPreprocessor": WeeToddMLXNormalMapPreprocessor,
     "WeeToddMLXLineArtLoader": WeeToddMLXLineArtLoader,
     "WeeToddMLXLineArtPreprocessor": WeeToddMLXLineArtPreprocessor,
+    "WeeToddOpticalFlowMotionTracks": WeeToddOpticalFlowMotionTracks,
     "WeeToddMLXMotionTrackGuide": WeeToddMLXMotionTrackGuide,
+    "WeeToddLTX25CrossViewCameraOrbit": WeeToddLTX25CrossViewCameraOrbit,
+    "WeeToddLTX25CrossViewWarp": WeeToddLTX25CrossViewWarp,
     "WeeToddMLXPreprocessorUnload": WeeToddMLXPreprocessorUnload,
 }
 
@@ -1235,6 +1744,9 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "WeeToddMLXNormalMapPreprocessor": "WeeTodd Depth to Normal Map (MLX)",
     "WeeToddMLXLineArtLoader": "WeeTodd Line Art Model Loader (MLX)",
     "WeeToddMLXLineArtPreprocessor": "WeeTodd Realistic Line Art Preprocessor (MLX)",
+    "WeeToddOpticalFlowMotionTracks": "WeeTodd Optical Flow Motion Tracks",
     "WeeToddMLXMotionTrackGuide": "WeeTodd Motion Track Guide (MLX)",
+    "WeeToddLTX25CrossViewCameraOrbit": "WeeTodd LTX 2.5 CrossView Camera Orbit",
+    "WeeToddLTX25CrossViewWarp": "WeeTodd LTX 2.5 CrossView Warp",
     "WeeToddMLXPreprocessorUnload": "WeeTodd Unload MLX Preprocessors",
 }

@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 import gc
+import hashlib
 import json
 import math
 import os
 import shutil
 import subprocess
 import time
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from wee_todd_mlx.numpy_import import adopt_numpy_array
 
 from .components import (
     LTX25AudioConditioner,
@@ -39,8 +43,65 @@ class LTX25UpscaleResult:
     metadata: dict[str, Any]
 
 
+_PROMPT_CACHE_LIMIT = 2
+_PROMPT_CONDITIONING_CACHE: OrderedDict[tuple[Any, ...], tuple[Any, Any, int]] = OrderedDict()
+
+
+def _checkpoint_identity(path: str | Path) -> tuple[str, int, int]:
+    """Return a cheap process-local identity for a file or paged checkpoint directory."""
+    source = Path(path).expanduser().resolve()
+    identity_source = source / "paged_manifest.json" if source.is_dir() else source
+    stat = identity_source.stat()
+    return str(source), int(stat.st_size), int(stat.st_mtime_ns)
+
+
+def _prompt_cache_key(
+    spec: LTX25ComponentSpec,
+    prompt: str,
+    prompt_context: str,
+) -> tuple[Any, ...]:
+    return (
+        _checkpoint_identity(spec.text_encoder_path),
+        _checkpoint_identity(spec.transformer_path),
+        prompt,
+        prompt_context,
+    )
+
+
+def _cached_prompt_conditioning(key: tuple[Any, ...]):
+    value = _PROMPT_CONDITIONING_CACHE.get(key)
+    if value is not None:
+        _PROMPT_CONDITIONING_CACHE.move_to_end(key)
+    return value
+
+
+def _remember_prompt_conditioning(key: tuple[Any, ...], value: tuple[Any, Any, int]) -> None:
+    _PROMPT_CONDITIONING_CACHE[key] = value
+    _PROMPT_CONDITIONING_CACHE.move_to_end(key)
+    while len(_PROMPT_CONDITIONING_CACHE) > _PROMPT_CACHE_LIMIT:
+        _PROMPT_CONDITIONING_CACHE.popitem(last=False)
+
+
+def clear_upscale_prompt_cache() -> int:
+    """Release reusable prompt outputs retained by the any-video refinement path."""
+    count = len(_PROMPT_CONDITIONING_CACHE)
+    _PROMPT_CONDITIONING_CACHE.clear()
+    _release()
+    return count
+
+
 def _requires_refinement(mode: str) -> bool:
     return mode != LTX25_UPSCALE_MODES[0]
+
+
+def _merge_refinement_conditionings(*groups: Any) -> list[Any]:
+    """Preserve every independent conditioning group in deterministic order."""
+    return [conditioning for group in groups for conditioning in group]
+
+
+def _upscale_sol_exact_suffix_rows(video_state: Any, target_token_count: int) -> int:
+    """Count appended Pixel Spatial and endpoint rows that Sol must keep exact."""
+    return max(0, int(video_state.latent.shape[1]) - int(target_token_count))
 
 
 def _release(*objects: Any) -> None:
@@ -92,11 +153,43 @@ def _prepare_video_size(video: Any, policy: str):
             "processed": {"width": width, "height": height},
             "crop": {"left": 0, "top": 0, "right": 0, "bottom": 0},
         }
-    if policy == LTX25_INPUT_SIZE_POLICIES[1]:
+    if policy == LTX25_INPUT_SIZE_POLICIES[2]:
         raise ValueError(
             "LTX 2.5 VAE input width and height must be divisible by 32; "
             "select the center-crop policy for arbitrary movie dimensions."
         )
+    if policy == LTX25_INPUT_SIZE_POLICIES[0]:
+        fitted = _nearest_aspect_grid_size(width, height, grid=32)
+        if fitted is not None and fitted != (width, height):
+            from PIL import Image
+
+            fitted_width, fitted_height = fitted
+            resized = np.empty(
+                (frames, fitted_height, fitted_width, 3),
+                dtype=np.float32,
+            )
+            for index, frame in enumerate(video):
+                # Pillow does not support three-channel float resize consistently. Use RGB8
+                # Lanczos and retain only one bounded float output buffer.
+                source = Image.fromarray((np.clip(frame, 0.0, 1.0) * 255).astype(np.uint8), "RGB")
+                resized[index] = (
+                    np.asarray(
+                        source.resize((fitted_width, fitted_height), Image.Resampling.LANCZOS),
+                        dtype=np.float32,
+                    )
+                    / 255.0
+                )
+            return resized, {
+                "policy": policy,
+                "source": {"width": width, "height": height},
+                "processed": {"width": fitted_width, "height": fitted_height},
+                "operation": "lanczos_resize",
+                "aspect_error_fraction": abs(
+                    (fitted_width / fitted_height) / (width / height) - 1.0
+                ),
+                "crop": {"left": 0, "top": 0, "right": 0, "bottom": 0},
+                "frames": frames,
+            }
     top = (height - target_height) // 2
     left = (width - target_width) // 2
     bottom = height - target_height - top
@@ -109,6 +202,64 @@ def _prepare_video_size(video: Any, policy: str):
         "crop": {"left": left, "top": top, "right": right, "bottom": bottom},
         "frames": frames,
     }
+
+
+def _nearest_aspect_grid_size(
+    width: int,
+    height: int,
+    *,
+    grid: int,
+    max_scale_delta: float = 0.35,
+    max_aspect_error: float = 0.005,
+) -> tuple[int, int] | None:
+    """Find a nearby grid-aligned size without visibly stretching the source."""
+    if width % grid == 0 and height % grid == 0:
+        return width, height
+    aspect = width / height
+    lower = max(grid, math.floor(height * (1.0 - max_scale_delta) / grid) * grid)
+    upper = max(grid, math.ceil(height * (1.0 + max_scale_delta) / grid) * grid)
+    candidates = []
+    for candidate_height in range(lower, upper + grid, grid):
+        candidate_width = max(grid, round(candidate_height * aspect / grid) * grid)
+        aspect_error = abs((candidate_width / candidate_height) / aspect - 1.0)
+        if aspect_error > max_aspect_error:
+            continue
+        scale = candidate_height / height
+        candidates.append(
+            (
+                abs(math.log(scale)),
+                0 if scale >= 1.0 else 1,
+                aspect_error,
+                candidate_width,
+                candidate_height,
+            )
+        )
+    if not candidates:
+        return None
+    best = min(candidates)
+    return best[3], best[4]
+
+
+def _output_frame_megapixels(frames: int, width: int, height: int) -> float:
+    """Return model-output frame megapixels, a hardware-neutral workload measure."""
+    return float(frames) * float(width * 2) * float(height * 2) / 1_000_000.0
+
+
+def _validate_output_workload(
+    frames: int,
+    width: int,
+    height: int,
+    limit: float,
+) -> float:
+    workload = _output_frame_megapixels(frames, width, height)
+    if limit > 0.0 and workload > limit:
+        raise ValueError(
+            "LTX 2.5 upscale output workload is "
+            f"{workload:.1f} frame-megapixels, above the configured {limit:.1f} limit. "
+            "Shorten the clip, reduce its source dimensions, or raise the limit deliberately. "
+            "This metric is a workload guard, not a cross-hardware memory prediction."
+        )
+    return workload
 
 
 def _host_audio(audio: Any):
@@ -200,7 +351,7 @@ def _mux_command(ffmpeg: Path, silent: Path, audio: Path, partial: Path, frames:
     ]
 
 
-def upscale_video_to_file(
+def _upscale_video_to_file_single(
     spec: LTX25ComponentSpec,
     images: Any,
     audio: Any,
@@ -218,9 +369,13 @@ def upscale_video_to_file(
     reference_strength: float = 0.7,
     max_av_drift_seconds: float = 0.05,
     low_ram_streaming: bool = False,
+    sol_attention_profile: str = "disabled",
     prompt_context: str = "official_1024",
+    reuse_prompt_conditioning: bool = True,
+    max_output_frame_megapixels: float = 0.0,
     pixel_spatial_lora_path: str | None = None,
     pixel_spatial_lora_strength: float = 1.0,
+    ffmpeg_path: str | Path | None = None,
     generation_metadata: dict[str, Any] | None = None,
     check_interrupted=None,
     step_callback=None,
@@ -238,6 +393,10 @@ def upscale_video_to_file(
         raise ValueError("LTX 2.5 cross-model refinement_strength must be between 0.05 and 0.85.")
     if not 0.0 <= reference_strength <= 1.0:
         raise ValueError("LTX 2.5 reference_strength must be between 0 and 1.")
+    if sol_attention_profile not in {"disabled", "paged_speed"}:
+        raise ValueError("LTX 2.5 upscale Sol Attention must be disabled or paged_speed.")
+    if sol_attention_profile == "paged_speed" and not low_ram_streaming:
+        raise ValueError("The paged_speed upscale Sol profile requires low_ram_streaming=true.")
     if source_frame_anchors not in LTX25_SOURCE_FRAME_ANCHORS:
         raise ValueError(f"Unsupported LTX 2.5 source_frame_anchors: {source_frame_anchors!r}.")
     lora_report = None
@@ -253,6 +412,12 @@ def upscale_video_to_file(
     video = _host_video(images)
     video, size_report = _prepare_video_size(video, input_size_policy)
     frames, height, width, _channels = video.shape
+    output_frame_megapixels = _validate_output_workload(
+        frames,
+        width,
+        height,
+        max_output_frame_megapixels,
+    )
     video_seconds = frames / fps
     waveform, sample_rate, source_audio_supplied = _host_audio_or_silence(audio, video_seconds)
     audio_seconds = waveform.shape[1] / sample_rate
@@ -312,18 +477,21 @@ def upscale_video_to_file(
                 Image.fromarray((video[-1] * 255).astype(np.uint8)).save(source_last)
                 source_reference_paths.append(source_last)
                 effective_last_reference = str(source_last)
-        if padded_frames != frames:
-            tail = np.repeat(video[-1:, ...], padded_frames - frames, axis=0)
-            video = np.concatenate((video, tail), axis=0)
-
         encode_started = time.perf_counter()
-        pixels = mx.array(video * 2.0 - 1.0).transpose(3, 0, 1, 2)[None].astype(mx.bfloat16)
+        pixels = adopt_numpy_array(video).transpose(3, 0, 1, 2)[None].astype(mx.bfloat16)
+        if padded_frames != frames:
+            pixels = mx.concatenate(
+                (pixels, mx.repeat(pixels[:, :, -1:, ...], padded_frames - frames, axis=2)),
+                axis=2,
+            )
+        pixels = pixels * 2.0 - 1.0
+        del video
         image_block = LTX25ImageConditioner(spec.video_vae_path)
         encoder = image_block.load()
         latent = encoder.encode(pixels)
         mx.eval(latent)
         timings["video_encode_seconds"] = time.perf_counter() - encode_started
-        del pixels, video
+        del pixels
 
         upscale_started = time.perf_counter()
         normalizer = LTX25LatentNormalizer(spec.video_vae_path)
@@ -377,13 +545,16 @@ def upscale_video_to_file(
                 reference_inputs.append(
                     ImageConditioningInput(effective_last_reference, frames - 1, reference_strength)
                 )
-            refinement_conditionings = combined_image_conditionings(
-                reference_inputs,
-                enc_h=height * 2,
-                enc_w=width * 2,
-                spatial_dims=tuple(int(value) for value in upscaled.shape[2:]),
-                video_encoder=encoder,
-                frame_rate=fps,
+            refinement_conditionings = _merge_refinement_conditionings(
+                refinement_conditionings,
+                combined_image_conditionings(
+                    reference_inputs,
+                    enc_h=height * 2,
+                    enc_w=width * 2,
+                    spatial_dims=tuple(int(value) for value in upscaled.shape[2:]),
+                    video_encoder=encoder,
+                    frame_rate=fps,
+                ),
             )
             reference_latents = []
             for conditioning in refinement_conditionings:
@@ -402,21 +573,40 @@ def upscale_video_to_file(
             if check_interrupted is not None:
                 check_interrupted()
             prompt_started = time.perf_counter()
-            prompt_encoder = LTX25Gemma4Conditioner(
-                spec.text_encoder_path, connector_path=spec.transformer_path
+            prompt_key = _prompt_cache_key(spec, prompt, prompt_context)
+            cached_prompt = (
+                _cached_prompt_conditioning(prompt_key) if reuse_prompt_conditioning else None
             )
-            prompt_encoder.load()
-            resolved_context = resolve_prompt_context_length(
-                prompt_encoder.tokenizer, prompt, prompt_context
-            )
-            video_embeds, audio_embeds, _mask = prompt_encoder.encode(
-                prompt, max_length=resolved_context
-            )
-            mx.eval(video_embeds, audio_embeds)
+            if cached_prompt is None:
+                prompt_encoder = LTX25Gemma4Conditioner(
+                    spec.text_encoder_path, connector_path=spec.transformer_path
+                )
+                prompt_encoder.load()
+                resolved_context = resolve_prompt_context_length(
+                    prompt_encoder.tokenizer, prompt, prompt_context
+                )
+                video_embeds, audio_embeds, _mask = prompt_encoder.encode(
+                    prompt, max_length=resolved_context
+                )
+                mx.eval(video_embeds, audio_embeds)
+                if reuse_prompt_conditioning:
+                    _remember_prompt_conditioning(
+                        prompt_key,
+                        (video_embeds, audio_embeds, resolved_context),
+                    )
+                prompt_encoder.free()
+                prompt_encoder = None
+                _release()
+            else:
+                video_embeds, audio_embeds, resolved_context = cached_prompt
             timings["prompt_encode_seconds"] = time.perf_counter() - prompt_started
-            prompt_encoder.free()
-            prompt_encoder = None
-            _release()
+            timings["prompt_conditioning_cache"] = {
+                "enabled": bool(reuse_prompt_conditioning),
+                "hit": cached_prompt is not None,
+                "scope": "process_local",
+                "entries": len(_PROMPT_CONDITIONING_CACHE),
+                "resolved_context": int(resolved_context),
+            }
 
             save_wav(audio_path, waveform, sample_rate)
             audio_started = time.perf_counter()
@@ -487,10 +677,39 @@ def upscale_video_to_file(
                     else ()
                 ),
             )
+            sol_policy = {"enabled": False, "patched_video_self_attention": 0}
+            if sol_attention_profile == "paged_speed":
+                from wee_todd_mlx.sol_attention import SolAttentionConfig
+
+                from .sol_attention import configure_ltx25_sol_attention
+
+                sol_policy = configure_ltx25_sol_attention(
+                    transformer,
+                    SolAttentionConfig(
+                        enabled=True,
+                        tau=1.25,
+                        min_tokens=16000,
+                        start_percent=0.0,
+                        dense_blocks=0,
+                    ),
+                )
             timings["transformer_load_seconds"] = time.perf_counter() - transformer_load_started
             refine_started = time.perf_counter()
+            model = X0Model(transformer)
+            if sol_attention_profile == "paged_speed":
+                from .sol_attention import set_ltx25_sol_context
+
+                set_ltx25_sol_context(
+                    model,
+                    step_index=0,
+                    total_steps=len(stage2_sigmas) - 1,
+                    exact_suffix_rows=_upscale_sol_exact_suffix_rows(
+                        video_state,
+                        latent_f * full_h * full_w,
+                    ),
+                )
             output = euler_ancestral_denoise_loop(
-                X0Model(transformer),
+                model,
                 video_state,
                 audio_state,
                 video_embeds,
@@ -507,6 +726,10 @@ def upscale_video_to_file(
             )
             mx.eval(output.video_latent)
             timings["stage2_refine_seconds"] = time.perf_counter() - refine_started
+            if sol_attention_profile == "paged_speed":
+                from .sol_attention import ltx25_sol_attention_report
+
+                timings["sol_attention"] = ltx25_sol_attention_report(transformer, sol_policy)
             upscaled = video_patchifier.unpatchify(
                 output.video_latent[:, : latent_f * full_h * full_w, :],
                 (latent_f, full_h, full_w),
@@ -530,7 +753,7 @@ def upscale_video_to_file(
 
         if check_interrupted is not None:
             check_interrupted()
-        ffmpeg = resolve_ffmpeg()
+        ffmpeg = resolve_ffmpeg(ffmpeg_path)
         mux_started = time.perf_counter()
         completed = subprocess.run(
             _mux_command(ffmpeg.path, silent, audio_path, partial, frames), capture_output=True
@@ -604,6 +827,12 @@ def upscale_video_to_file(
             "av_drift_seconds": drift,
             "vae_padded_frames": padded_frames - frames,
             "refinement_strength": refinement_strength if refinement_enabled else None,
+            "refinement_contract": (
+                "generative_repaint_not_identity_safe_restoration"
+                if refinement_enabled
+                else "latent_resize_without_transformer_refinement"
+            ),
+            "sol_attention_profile": sol_attention_profile,
             "stage2_sigmas": list(stage2_sigmas) if refinement_enabled else [],
             "timings": timings,
             "mlx_peak_bytes": int(mx.get_peak_memory()),
@@ -611,6 +840,8 @@ def upscale_video_to_file(
             "publication_probe": probe,
             "frame_policy": "causal_tail_pad_then_crop_to_input_frame_count",
             "input_size": size_report,
+            "output_frame_megapixels": output_frame_megapixels,
+            "output_frame_megapixel_limit": max_output_frame_megapixels,
         }
         partial_metadata.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n")
         os.replace(partial, target)
@@ -630,6 +861,368 @@ def upscale_video_to_file(
             path.unlink(missing_ok=True)
 
 
+def _redetail_source_fingerprint(
+    video: Any,
+    waveform: Any,
+    *,
+    sample_rate: int,
+    settings: dict[str, Any],
+) -> str:
+    """Identify resumable chunk output without retaining a second media copy."""
+    digest = hashlib.sha256()
+    digest.update(memoryview(video).cast("B"))
+    digest.update(memoryview(waveform).cast("B"))
+    digest.update(str(sample_rate).encode())
+    digest.update(json.dumps(settings, sort_keys=True, separators=(",", ":")).encode())
+    return digest.hexdigest()
+
+
+def _chunk_file_is_valid(
+    path: Path,
+    *,
+    ffmpeg: Path,
+    frames: int,
+    width: int,
+    height: int,
+) -> bool:
+    if not path.is_file() or path.stat().st_size == 0:
+        return False
+    try:
+        report = _probe(path, ffmpeg)
+    except (OSError, RuntimeError, ValueError):
+        return False
+    if report is None:
+        return False
+    videos = [stream for stream in report.get("streams", []) if stream.get("codec_type") == "video"]
+    if len(videos) != 1:
+        return False
+    stream = videos[0]
+    return (
+        int(stream.get("nb_read_frames", -1)) == frames
+        and int(stream.get("width", -1)) == width
+        and int(stream.get("height", -1)) == height
+    )
+
+
+def _upscale_video_to_file_chunked(
+    spec: LTX25ComponentSpec,
+    images: Any,
+    audio: Any,
+    target: str | Path,
+    *,
+    chunk_frame_megapixels: float,
+    keep_chunks: bool,
+    progress_callback_factory=None,
+    **kwargs,
+) -> LTX25UpscaleResult:
+    """Run independently resumable visual chunks and remux the untouched full audio once."""
+    from minimax_h3_mlx.media import resolve_ffmpeg, save_wav
+
+    from .redetail import (
+        audio_sample_bounds,
+        detect_scene_cut_scores,
+        plan_redetail_chunks,
+        scene_cut_candidates,
+    )
+    fps = float(kwargs.get("fps", 24.0))
+    if fps <= 0:
+        raise ValueError("Video fps must be positive.")
+    policy = str(kwargs.get("input_size_policy", LTX25_INPUT_SIZE_POLICIES[0]))
+    video = _host_video(images)
+    video, size_report = _prepare_video_size(video, policy)
+    frames, height, width, _channels = video.shape
+    video_seconds = frames / fps
+    waveform, sample_rate, source_audio_supplied = _host_audio_or_silence(audio, video_seconds)
+    drift = abs(video_seconds - waveform.shape[1] / sample_rate)
+    allowed_drift = float(kwargs.get("max_av_drift_seconds", 0.05))
+    if drift > allowed_drift + 1e-9:
+        raise ValueError(
+            f"Input audio and video differ by {drift:.6f} seconds, above the allowed "
+            f"{allowed_drift:.6f} seconds."
+        )
+    total_workload = _validate_output_workload(
+        frames,
+        width,
+        height,
+        float(kwargs.get("max_output_frame_megapixels", 0.0)),
+    )
+    scores = detect_scene_cut_scores(video)
+    chunks = plan_redetail_chunks(
+        frames,
+        fps=fps,
+        output_width=width * 2,
+        output_height=height * 2,
+        frame_megapixel_budget=chunk_frame_megapixels,
+        cut_frames=scene_cut_candidates(scores),
+    )
+    target = Path(target)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    ffmpeg = resolve_ffmpeg(kwargs.get("ffmpeg_path"))
+    settings = {
+        "mode": kwargs.get("mode"),
+        "prompt": kwargs.get("prompt", ""),
+        "seed": int(kwargs.get("seed", 0)),
+        "fps": fps,
+        "width": width,
+        "height": height,
+        "chunk_frame_megapixels": chunk_frame_megapixels,
+        "refinement_strength": kwargs.get("refinement_strength", 0.35),
+        "source_frame_anchors": kwargs.get("source_frame_anchors", "first frame"),
+        "prompt_context": kwargs.get("prompt_context", "official_1024"),
+        "text_encoder": list(_checkpoint_identity(spec.text_encoder_path)),
+        "transformer": list(_checkpoint_identity(spec.transformer_path)),
+    }
+    fingerprint = _redetail_source_fingerprint(
+        video,
+        waveform,
+        sample_rate=sample_rate,
+        settings=settings,
+    )
+    # ComfyUI publication chooses a fresh target name instead of overwriting an existing output.
+    # Keep resumable weighted work independent from that presentation-only suffix.
+    work = target.parent / f".weetodd-ltx25-redetail-{fingerprint[:16]}"
+    work.mkdir(parents=True, exist_ok=True)
+    manifest_path = work / "manifest.json"
+    manifest = {
+        "format": "weetodd-ltx25-redetail-chunks-v1",
+        "fingerprint": fingerprint,
+        "source": {
+            "frames": frames,
+            "width": width,
+            "height": height,
+            "fps": fps,
+            "sample_rate": sample_rate,
+        },
+        "output": {"width": width * 2, "height": height * 2},
+        "chunks": [chunk.as_dict() for chunk in chunks],
+        "settings": settings,
+    }
+    if manifest_path.is_file():
+        prior = json.loads(manifest_path.read_text())
+        if prior != manifest:
+            raise RuntimeError(
+                "Existing LTX 2.5 chunk manifest does not match this request. "
+                "Change the filename prefix or remove the stale internal chunk directory."
+            )
+    else:
+        temporary_manifest = work / ".manifest.partial.json"
+        temporary_manifest.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+        os.replace(temporary_manifest, manifest_path)
+
+    global_step_callback = kwargs.pop("step_callback", None)
+    if progress_callback_factory is not None:
+        global_step_callback = progress_callback_factory(len(chunks) * 3)
+    completed_paths: list[Path] = []
+    chunk_reports: list[dict[str, Any]] = []
+    reused_chunks = 0
+    started = time.perf_counter()
+    for chunk in chunks:
+        if kwargs.get("check_interrupted") is not None:
+            kwargs["check_interrupted"]()
+        chunk_target = work / f"chunk-{chunk.index:04d}.mp4"
+        if _chunk_file_is_valid(
+            chunk_target,
+            ffmpeg=ffmpeg.path,
+            frames=chunk.input_frames,
+            width=width * 2,
+            height=height * 2,
+        ):
+            reused_chunks += 1
+            completed_paths.append(chunk_target)
+            metadata_file = chunk_target.with_suffix(".json")
+            chunk_reports.append(
+                json.loads(metadata_file.read_text()) if metadata_file.is_file() else {}
+            )
+            if global_step_callback is not None:
+                global_step_callback((chunk.index + 1) * 3, len(chunks) * 3)
+            continue
+        sample_start, sample_end = audio_sample_bounds(
+            chunk.start_frame,
+            chunk.end_frame,
+            fps=fps,
+            sample_rate=sample_rate,
+            total_samples=waveform.shape[1],
+        )
+        chunk_audio = {
+            "waveform": waveform[None, :, sample_start:sample_end],
+            "sample_rate": sample_rate,
+        }
+        local_kwargs = dict(kwargs)
+        local_kwargs["input_size_policy"] = LTX25_INPUT_SIZE_POLICIES[2]
+        local_kwargs["max_output_frame_megapixels"] = 0.0
+        local_kwargs["first_reference_path"] = (
+            kwargs.get("first_reference_path") if chunk.index == 0 else None
+        )
+        local_kwargs["last_reference_path"] = (
+            kwargs.get("last_reference_path") if chunk.index == len(chunks) - 1 else None
+        )
+        local_kwargs["generation_metadata"] = {
+            **(kwargs.get("generation_metadata") or {}),
+            "redetail_chunk": chunk.as_dict(),
+            "redetail_fingerprint": fingerprint,
+        }
+        if global_step_callback is not None:
+            offset = chunk.index * 3
+            total_steps = len(chunks) * 3
+
+            def local_step(completed, _reported_total, *, offset=offset, total=total_steps):
+                global_step_callback(offset + completed, total)
+
+            local_kwargs["step_callback"] = local_step
+        result = _upscale_video_to_file_single(
+            spec,
+            video[chunk.start_frame : chunk.end_frame],
+            chunk_audio,
+            chunk_target,
+            **local_kwargs,
+        )
+        completed_paths.append(result.video_path)
+        chunk_reports.append(result.metadata)
+
+    full_audio = work / "source-audio.wav"
+    joined_silent = work / "joined-video.mp4"
+    concat_list = work / "concat.txt"
+    partial = target.with_name(f".{target.stem}.partial{target.suffix}")
+    metadata_path = target.with_suffix(".json")
+    partial_metadata = target.with_name(f".{target.stem}.metadata.partial.json")
+
+    def discard_partial_publication() -> None:
+        partial.unlink(missing_ok=True)
+        partial_metadata.unlink(missing_ok=True)
+
+    save_wav(full_audio, waveform, sample_rate)
+    lines = []
+    for path in completed_paths:
+        escaped = str(path.resolve()).replace("'", "'\\''")
+        lines.append(f"file '{escaped}'")
+    concat_list.write_text("\n".join(lines) + "\n")
+    joined = subprocess.run(
+        [
+            str(ffmpeg.path),
+            "-y",
+            "-loglevel",
+            "error",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            str(concat_list),
+            "-map",
+            "0:v:0",
+            "-an",
+            "-c:v",
+            "copy",
+            str(joined_silent),
+        ],
+        capture_output=True,
+    )
+    if joined.returncode:
+        discard_partial_publication()
+        raise RuntimeError(f"LTX 2.5 chunk join failed: {joined.stderr.decode()[:500]}")
+    published = subprocess.run(
+        _mux_command(ffmpeg.path, joined_silent, full_audio, partial, frames),
+        capture_output=True,
+    )
+    if published.returncode:
+        discard_partial_publication()
+        raise RuntimeError(f"LTX 2.5 chunk audio mux failed: {published.stderr.decode()[:500]}")
+    try:
+        probe = _probe(partial, ffmpeg.path)
+    except Exception:
+        discard_partial_publication()
+        raise
+    videos = [
+        stream
+        for stream in (probe or {}).get("streams", [])
+        if stream.get("codec_type") == "video"
+    ]
+    audios = [
+        stream
+        for stream in (probe or {}).get("streams", [])
+        if stream.get("codec_type") == "audio"
+    ]
+    if len(videos) != 1 or len(audios) != 1:
+        discard_partial_publication()
+        raise RuntimeError("Chunked LTX 2.5 output must contain one video and one audio stream.")
+    actual = {
+        "frames": int(videos[0]["nb_read_frames"]),
+        "width": int(videos[0]["width"]),
+        "height": int(videos[0]["height"]),
+    }
+    expected = {"frames": frames, "width": width * 2, "height": height * 2}
+    if actual != expected:
+        discard_partial_publication()
+        raise RuntimeError(f"Chunked LTX 2.5 output frame contract failed: {actual} != {expected}.")
+    metadata = {
+        **(kwargs.get("generation_metadata") or {}),
+        "pipeline": "ltx2.5_video_upscale_chunked",
+        "mode": kwargs.get("mode"),
+        "prompt": kwargs.get("prompt", ""),
+        "seed": int(kwargs.get("seed", 0)),
+        "refinement_contract": "generative_repaint_not_identity_safe_restoration",
+        "input": {"frames": frames, "width": width, "height": height, "fps": fps},
+        "output": {"frames": frames, "width": width * 2, "height": height * 2, "fps": fps},
+        "input_size": size_report,
+        "original_audio_preserved": source_audio_supplied,
+        "audio_policy": "preserve source" if source_audio_supplied else "synthesize silence",
+        "av_drift_seconds": drift,
+        "temporal_chunking": {
+            "enabled": True,
+            "frame_megapixel_budget": chunk_frame_megapixels,
+            "total_frame_megapixels": total_workload,
+            "fingerprint": fingerprint,
+            "chunks": [chunk.as_dict() for chunk in chunks],
+            "reused_chunks": reused_chunks,
+            "kept": keep_chunks,
+        },
+        "chunk_reports": chunk_reports,
+        "mlx_peak_bytes": max(
+            (int(report.get("mlx_peak_bytes", 0)) for report in chunk_reports),
+            default=0,
+        ),
+        "total_seconds": time.perf_counter() - started,
+        "publication_probe": probe,
+    }
+    partial_metadata.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n")
+    os.replace(partial, target)
+    os.replace(partial_metadata, metadata_path)
+    if not keep_chunks:
+        shutil.rmtree(work)
+    return LTX25UpscaleResult(target, metadata_path, metadata)
+
+
+def upscale_video_to_file(
+    spec: LTX25ComponentSpec,
+    images: Any,
+    audio: Any,
+    target: str | Path,
+    *,
+    temporal_chunking: str = "disabled",
+    chunk_frame_megapixels: float = 260.0,
+    keep_chunks: bool = False,
+    progress_callback_factory=None,
+    **kwargs,
+) -> LTX25UpscaleResult:
+    """Upscale one clip, or partition a long clip into resumable scene-aware chunks."""
+    if temporal_chunking not in {"disabled", "auto scene-aware"}:
+        raise ValueError("Temporal chunking must be disabled or auto scene-aware.")
+    if temporal_chunking == "auto scene-aware":
+        return _upscale_video_to_file_chunked(
+            spec,
+            images,
+            audio,
+            target,
+            chunk_frame_megapixels=chunk_frame_megapixels,
+            keep_chunks=keep_chunks,
+            progress_callback_factory=progress_callback_factory,
+            **kwargs,
+        )
+    if progress_callback_factory is not None and kwargs.get("step_callback") is None:
+        kwargs["step_callback"] = progress_callback_factory(3)
+    return _upscale_video_to_file_single(spec, images, audio, target, **kwargs)
+
+
 upscale_h3_video_to_file = upscale_video_to_file
 
 
@@ -639,6 +1232,7 @@ __all__ = [
     "LTX25_PIXEL_SPATIAL_MODE",
     "LTX25_SOURCE_FRAME_ANCHORS",
     "LTX25UpscaleResult",
+    "clear_upscale_prompt_cache",
     "upscale_video_to_file",
     "upscale_h3_video_to_file",
 ]

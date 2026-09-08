@@ -1,0 +1,646 @@
+{
+  "last_node_id": 12,
+  "last_link_id": 11,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "WeeToddLTX25ComponentLoader",
+      "pos": [
+        40,
+        80
+      ],
+      "size": [
+        500,
+        220
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "model",
+          "type": "WEETODD_LTX25_MODEL",
+          "links": [
+            1
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddLTX25ComponentLoader"
+      },
+      "widgets_values": [
+        "ltx-2.5-22b-distilled-transformer-q8-paged",
+        "gemma4-12b-with-proj-ltx-2.5-q8-paged",
+        "ltx-2.5-video-vae-conv-bf16.safetensors",
+        "ltx-2.5-audio-vae-bf16.safetensors",
+        "",
+        ""
+      ]
+    },
+    {
+      "id": 2,
+      "type": "WeeToddLTX25MSRLoader",
+      "pos": [
+        580,
+        80
+      ],
+      "size": [
+        470,
+        150
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "WEETODD_LTX25_MODEL",
+          "link": 1
+        }
+      ],
+      "outputs": [
+        {
+          "name": "model",
+          "type": "WEETODD_LTX25_MODEL",
+          "links": [
+            4
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "msr_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddLTX25MSRLoader"
+      },
+      "widgets_values": [
+        "LTX-2.5/LTX-2.5-Licon-MSR-V1.safetensors",
+        1
+      ]
+    },
+    {
+      "id": 3,
+      "type": "WeeToddLTX25GenerationConfig",
+      "pos": [
+        40,
+        340
+      ],
+      "size": [
+        500,
+        300
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "config",
+          "type": "WEETODD_LTX25_CONFIG",
+          "links": [
+            2
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "resolved_settings",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddLTX25GenerationConfig"
+      },
+      "widgets_values": [
+        "Custom",
+        1152,
+        640,
+        5,
+        24,
+        20260816,
+        true,
+        true,
+        "official_1024",
+        "reference_fp32"
+      ]
+    },
+    {
+      "id": 4,
+      "type": "WeeToddLTX25ICLoRAPipelineMode",
+      "pos": [
+        580,
+        300
+      ],
+      "size": [
+        470,
+        150
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "config",
+          "type": "WEETODD_LTX25_CONFIG",
+          "link": 2
+        }
+      ],
+      "outputs": [
+        {
+          "name": "config",
+          "type": "WEETODD_LTX25_CONFIG",
+          "links": [
+            3
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "mode_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddLTX25ICLoRAPipelineMode"
+      },
+      "widgets_values": [
+        "Fast single stage — 8 ancestral steps / 8 real forwards",
+        "automatic",
+        "full"
+      ]
+    },
+    {
+      "id": 5,
+      "type": "WeeToddLTX25SolAttention",
+      "pos": [
+        580,
+        490
+      ],
+      "size": [
+        470,
+        130
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "config",
+          "type": "WEETODD_LTX25_CONFIG",
+          "link": 3
+        }
+      ],
+      "outputs": [
+        {
+          "name": "config",
+          "type": "WEETODD_LTX25_CONFIG",
+          "links": [
+            5,
+            6
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "sol_attention_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddLTX25SolAttention"
+      },
+      "widgets_values": [
+        "paged_speed"
+      ]
+    },
+    {
+      "id": 6,
+      "type": "LoadImage",
+      "pos": [
+        40,
+        700
+      ],
+      "size": [
+        360,
+        320
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            8
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "MASK",
+          "type": "MASK",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoadImage"
+      },
+      "widgets_values": [
+        ""
+      ]
+    },
+    {
+      "id": 7,
+      "type": "WeeToddLTX25MSRReferenceStack",
+      "pos": [
+        440,
+        700
+      ],
+      "size": [
+        520,
+        300
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "reference",
+          "type": "IMAGE",
+          "link": 8
+        }
+      ],
+      "outputs": [
+        {
+          "name": "references",
+          "type": "WEETODD_LTX25_MSR_REFERENCES",
+          "links": [
+            10
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "prompt_guide",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        },
+        {
+          "name": "reference_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 2
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddLTX25MSRReferenceStack"
+      },
+      "widgets_values": [
+        "subject",
+        "Describe the first distinct subject.",
+        1,
+        1,
+        "auto",
+        "sol_auto",
+        "auto"
+      ]
+    },
+    {
+      "id": 8,
+      "type": "LoadImage",
+      "pos": [
+        40,
+        1060
+      ],
+      "size": [
+        360,
+        320
+      ],
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            9
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "MASK",
+          "type": "MASK",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoadImage"
+      },
+      "widgets_values": [
+        ""
+      ]
+    },
+    {
+      "id": 9,
+      "type": "WeeToddLTX25MSRReferenceStack",
+      "pos": [
+        440,
+        1060
+      ],
+      "size": [
+        520,
+        300
+      ],
+      "flags": {},
+      "order": 8,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "reference",
+          "type": "IMAGE",
+          "link": 9
+        },
+        {
+          "name": "previous_references",
+          "type": "WEETODD_LTX25_MSR_REFERENCES",
+          "link": 10
+        }
+      ],
+      "outputs": [
+        {
+          "name": "references",
+          "type": "WEETODD_LTX25_MSR_REFERENCES",
+          "links": [
+            11
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "prompt_guide",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        },
+        {
+          "name": "reference_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 2
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddLTX25MSRReferenceStack"
+      },
+      "widgets_values": [
+        "subject",
+        "Describe the second distinct subject.",
+        1,
+        1,
+        "auto",
+        "sol_auto",
+        "auto"
+      ]
+    },
+    {
+      "id": 10,
+      "type": "WeeToddLTX25Preflight",
+      "pos": [
+        1100,
+        180
+      ],
+      "size": [
+        420,
+        150
+      ],
+      "flags": {},
+      "order": 9,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "WEETODD_LTX25_MODEL",
+          "link": 4
+        },
+        {
+          "name": "config",
+          "type": "WEETODD_LTX25_CONFIG",
+          "link": 5
+        }
+      ],
+      "outputs": [
+        {
+          "name": "model",
+          "type": "WEETODD_LTX25_MODEL",
+          "links": [
+            7
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "preflight_report",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddLTX25Preflight"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 11,
+      "type": "WeeToddLTX25Generate",
+      "pos": [
+        1580,
+        180
+      ],
+      "size": [
+        620,
+        500
+      ],
+      "flags": {},
+      "order": 10,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "WEETODD_LTX25_MODEL",
+          "link": 7
+        },
+        {
+          "name": "config",
+          "type": "WEETODD_LTX25_CONFIG",
+          "link": 6
+        },
+        {
+          "name": "msr_references",
+          "type": "WEETODD_LTX25_MSR_REFERENCES",
+          "link": 11
+        }
+      ],
+      "outputs": [
+        {
+          "name": "video_path",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 0
+        },
+        {
+          "name": "generation_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddLTX25Generate"
+      },
+      "widgets_values": [
+        "Image 1 provides the first distinct subject. Image 2 provides the second distinct subject. Preserve their separate faces, body proportions, clothing, colors, and scale. A photorealistic continuous medium-wide shot shows both subjects performing one simple shared action in a clearly described location. Keep both subjects visible, physically grounded, and correctly scaled without duplication or identity merging. Use restrained camera movement, clean synchronized dialogue if requested, natural ambience, specific sound effects, no music unless described, no cuts, and no subtitles.",
+        "WeeTodd/LTX25_MSR_speed",
+        true
+      ]
+    },
+    {
+      "id": 12,
+      "type": "MarkdownNote",
+      "pos": [
+        1100,
+        740
+      ],
+      "size": [
+        1100,
+        600
+      ],
+      "flags": {},
+      "order": 11,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "title": "Setup and model downloads",
+      "properties": {},
+      "widgets_values": [
+        "## LTX 2.5 MSR speed\n\n1. Accept the LTX 2.5 license and install the split model components.\n2. Download [Licon MSR V1](https://huggingface.co/LiconStudio/LTX-2.5-Multiple-Subject-Reference) to `ComfyUI/models/loras/LTX-2.5/`.\n3. Select two clean single-identity reference sheets. Public workflow image selectors are intentionally empty.\n4. Describe each image separately at the start of the prompt.\n5. Duplicate one Load Image + MSR Reference Stack pair for each additional reference, up to five. Keep priority on auto unless a reference needs more detail.\n6. Queue the workflow only after LTX 2.5 Preflight succeeds.\n\nSpeed uses Q8 paging, eight real forwards, automatic 25-frame tile-aligned references, adaptive priority density, and paged-speed Sol Attention. Confirm sparse_kernel_calls is nonzero in generation metadata."
+      ],
+      "color": "#243447",
+      "bgcolor": "#15202b"
+    }
+  ],
+  "links": [
+    [
+      1,
+      1,
+      0,
+      2,
+      0,
+      "WEETODD_LTX25_MODEL"
+    ],
+    [
+      2,
+      3,
+      0,
+      4,
+      0,
+      "WEETODD_LTX25_CONFIG"
+    ],
+    [
+      3,
+      4,
+      0,
+      5,
+      0,
+      "WEETODD_LTX25_CONFIG"
+    ],
+    [
+      4,
+      2,
+      0,
+      10,
+      0,
+      "WEETODD_LTX25_MODEL"
+    ],
+    [
+      5,
+      5,
+      0,
+      10,
+      1,
+      "WEETODD_LTX25_CONFIG"
+    ],
+    [
+      6,
+      5,
+      0,
+      11,
+      1,
+      "WEETODD_LTX25_CONFIG"
+    ],
+    [
+      7,
+      10,
+      0,
+      11,
+      0,
+      "WEETODD_LTX25_MODEL"
+    ],
+    [
+      8,
+      6,
+      0,
+      7,
+      0,
+      "IMAGE"
+    ],
+    [
+      9,
+      8,
+      0,
+      9,
+      0,
+      "IMAGE"
+    ],
+    [
+      10,
+      7,
+      0,
+      9,
+      1,
+      "WEETODD_LTX25_MSR_REFERENCES"
+    ],
+    [
+      11,
+      9,
+      0,
+      11,
+      2,
+      "WEETODD_LTX25_MSR_REFERENCES"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {
+    "ds": {
+      "scale": 0.72,
+      "offset": [
+        100,
+        80
+      ]
+    }
+  },
+  "version": 0.4
+}

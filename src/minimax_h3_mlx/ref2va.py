@@ -9,6 +9,8 @@ from typing import Any, Literal
 import mlx.core as mx
 import numpy as np
 
+from wee_todd_mlx.numpy_import import adopt_numpy_array
+
 from .config import TAG_AUDIO, TAG_VIDEO
 from .packing import (
     _ROPE_FRAME_RESCALE,
@@ -301,7 +303,9 @@ def encode_reference_audio_rows(
     for reference in references:
         if not reference.has_audio:
             continue
-        waveform = mx.array(np.asarray(reference.waveform, dtype=np.float32))[:, None, :]
+        waveform = adopt_numpy_array(
+            np.asarray(reference.waveform, dtype=np.float32)
+        )[:, None, :]
         mean, _ = audio_vae.encode(waveform)
         latents = mean.astype(mx.float32).transpose(0, 2, 1)
         reference.num_audio_latents = int(latents.shape[1])
@@ -531,7 +535,9 @@ def build_ref2va_packed_sequence(
 
     target_video_index = np.arange(target_video_start, sequence_length, dtype=np.int64)
     target_audio_index = np.arange(target_audio_start, target_video_start, dtype=np.int64)
-    reference_video_index = np.concatenate(video_indices)
+    reference_video_index = (
+        np.concatenate(video_indices) if video_indices else np.empty(0, np.int64)
+    )
     reference_audio_index = (
         np.concatenate(audio_indices) if audio_indices else np.empty(0, np.int64)
     )
@@ -555,11 +561,11 @@ def build_ref2va_packed_sequence(
 
     return PackedSequence(
         sequence_length=sequence_length,
-        position_ids=mx.array(position_ids.astype(np.float32)),
-        token_tags=mx.array(token_tags.astype(np.int32)),
-        video_indices=mx.array(video_index.astype(np.int32)),
-        audio_indices=mx.array(audio_index.astype(np.int32)),
-        text_indices=mx.array(text_index.astype(np.int32)),
+        position_ids=adopt_numpy_array(position_ids, dtype=np.float32),
+        token_tags=adopt_numpy_array(token_tags, dtype=np.int32),
+        video_indices=adopt_numpy_array(video_index, dtype=np.int32),
+        audio_indices=adopt_numpy_array(audio_index, dtype=np.int32),
+        text_indices=adopt_numpy_array(text_index, dtype=np.int32),
         num_condition_video_rows=reference_video_rows + continuation_video_rows,
         num_condition_audio_rows=reference_audio_rows + continuation_audio_rows,
         num_continuation_video_rows=continuation_video_rows,

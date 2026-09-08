@@ -9,13 +9,18 @@ from wee_todd_nodes.nodes import NODE_CLASS_MAPPINGS
 ROOT = Path(__file__).parents[1]
 CORE_NODES = {
     "Canny",
+    "CreateVideo",
     "GetVideoComponents",
+    "ImageFromBatch",
+    "ImageScale",
     "LoadImage",
     "LoadAudio",
     "LoadVideo",
     "MarkdownNote",
     "Note",
     "PreviewImage",
+    "PreviewAny",
+    "SaveVideo",
     "Video Slice",
 }
 PROFILE_POLICIES = {
@@ -73,6 +78,17 @@ PRIMITIVE_WIDGET_TYPES = {"BOOLEAN", "FLOAT", "INT", "STRING"}
 NOTE_NODE_TYPES = {"MarkdownNote", "Note"}
 
 
+def test_public_catalog_audit_accepts_all_registered_task_folders():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "workflow_catalog_audit", ROOT / "scripts" / "audit_workflow_catalog.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.audit(ROOT) == []
+
+
 def _execution_node_map(workflow):
     return {
         node["id"]: node for node in workflow["nodes"] if node.get("type") not in NOTE_NODE_TYPES
@@ -110,10 +126,27 @@ def _widget_schema(node):
     for name, specification in _input_schema(node["type"]):
         input_type = specification[0]
         options = specification[1] if len(specification) > 1 else {}
-        if name in connected or options.get("forceInput"):
+        # ComfyUI keeps the Generate prompt widget in widgets_values after that widget is
+        # converted to a linked input. Omitting its saved placeholder shifts the filename
+        # prefix into prompt and the boolean unload flag into filename_prefix ("True_42.mp4").
+        linked_ltx25_generate_prompt = (
+            node["type"] == "WeeToddLTX25Generate" and name == "prompt"
+        )
+        if (name in connected and not linked_ltx25_generate_prompt) or options.get("forceInput"):
             continue
         if isinstance(input_type, list) or input_type in PRIMITIVE_WIDGET_TYPES:
             widgets.append((name, input_type))
+
+            # Current ComfyUI serializes this dynamic widget immediately after a seed INT.
+            # Omitting it shifts every later saved value into the preceding field.
+            if (
+                node["type"] == "WeeToddLTX25VideoUpscale"
+                and name == "seed"
+                and input_type == "INT"
+            ):
+                widgets.append(
+                    ("control_after_generate", ["fixed", "increment", "decrement", "randomize"])
+                )
 
     # The H3 resolution extension deliberately renders the optional size slider beside
     # the aspect-ratio selector, rather than after every required widget.
@@ -175,7 +208,10 @@ def test_shipped_ui_workflows_match_current_node_contracts(path):
     for link_id, origin_id, origin_slot, target_id, target_slot, link_type in workflow["links"]:
         origin = nodes[origin_id]["outputs"][origin_slot]
         target = nodes[target_id]["inputs"][target_slot]
-        assert origin["type"] == target["type"] == link_type
+        if target["type"] == "*":
+            assert link_type == "*"
+        else:
+            assert origin["type"] == target["type"] == link_type
         assert link_id in origin["links"]
         assert target["link"] == link_id
 
@@ -233,10 +269,11 @@ def test_ltx23_standalone_ui_workflow_links_are_consistent():
         0,
         0,
         3.0,
-        1.0,
-        True,
-        False,
-    ]
+            1.0,
+            True,
+            False,
+            "auto",
+        ]
     for link_id, origin_id, origin_slot, target_id, target_slot, link_type in workflow["links"]:
         assert link_id in nodes[origin_id]["outputs"][origin_slot]["links"]
         target_input = nodes[target_id]["inputs"][target_slot]
@@ -343,8 +380,51 @@ def test_ltx25_any_video_upscale_workflow_uses_native_movie_components():
     assert nodes[4]["inputs"][2] == {"name": "fps", "type": "FLOAT", "link": 4}
     assert nodes[4]["inputs"][5] == {"name": "audio", "type": "AUDIO", "link": 3}
     assert nodes[4]["widgets_values"][0] == "pixel spatial IC-LoRA 2x (recommended)"
-    assert nodes[4]["widgets_values"][3] == "center crop to 32px grid (recommended)"
-    assert nodes[4]["widgets_values"][4] == 0.35
+    assert nodes[4]["widgets_values"][3] == "fixed"
+    assert nodes[4]["widgets_values"][4] == "fit nearest 32px grid (preserve aspect)"
+    assert nodes[4]["widgets_values"][5] == 0.35
+    assert nodes[4]["widgets_values"][10] is True
+    assert nodes[4]["widgets_values"][11] == "disabled"
+    assert nodes[4]["widgets_values"][17] is True
+    assert nodes[4]["widgets_values"][18] == 0.0
+    assert nodes[4]["widgets_values"][19] == "disabled"
+    assert nodes[4]["widgets_values"][20] == 260.0
+    assert nodes[4]["widgets_values"][21] is False
+
+
+def test_ltx25_crossview_workflow_stacks_reference_and_preserves_source_audio():
+    workflow = json.loads(
+        (ROOT / "workflows/balance/ref2va/ltx25_crossview_warp_balanced.json").read_text()
+    )
+    nodes = _execution_node_map(workflow)
+
+    audio_output = next(output for output in nodes[5]["outputs"] if output["name"] == "audio")
+    publication_input = next(
+        input_ for input_ in nodes[9]["inputs"] if input_["name"] == "publication_audio"
+    )
+    assert audio_output["links"] == [25, 26]
+    assert publication_input == {"name": "publication_audio", "type": "AUDIO", "link": 25}
+    assert [25, 5, 1, 9, 7, "AUDIO"] in workflow["links"]
+    assert nodes[18]["type"] == "WeeToddLTX25ICLoRALoader"
+    assert nodes[18]["widgets_values"] == [
+        "ltx-2.3-22b-ic-lora-ingredients-0.9.safetensors",
+        1.2,
+    ]
+    assert nodes[19]["type"] == "ImageFromBatch"
+    assert nodes[19]["widgets_values"] == [47, 1]
+    assert nodes[20]["type"] == "PreviewImage"
+    assert nodes[21]["type"] == "WeeToddLTX25ReferenceSheetGuide"
+    assert [32, 7, 0, 21, 2, "WEETODD_LTX25_MEDIA_CONDITIONING"] in workflow["links"]
+    assert [33, 21, 0, 9, 5, "WEETODD_LTX25_MEDIA_CONDITIONING"] in workflow["links"]
+    assert [34, 21, 1, 9, 2, "STRING"] in workflow["links"]
+    assert nodes[16]["type"] == "CreateVideo"
+    assert nodes[16]["inputs"] == [
+        {"name": "images", "type": "IMAGE", "link": 23},
+        {"name": "fps", "type": "FLOAT", "link": 27},
+        {"name": "audio", "type": "AUDIO", "link": 26},
+    ]
+    assert nodes[14]["type"] == "SaveVideo"
+    assert nodes[14]["inputs"] == [{"name": "video", "type": "VIDEO", "link": 20}]
 
 
 @pytest.mark.parametrize(
@@ -581,6 +661,103 @@ def test_h3_15_second_one_shot_workflow_is_the_portable_quality_control():
     )
 
 
+def test_fasth3_performance_workflow_uses_native_compact_profile_and_exact_canvas():
+    workflow = json.loads(
+        (ROOT / "workflows/performance/t2v/h3_fasth3_compact_vsa_performance.json").read_text()
+    )
+    nodes = list(_execution_node_map(workflow).values())
+    component = next(node for node in nodes if node["type"] == "WeeToddH3ComponentLoader")
+    config = next(node for node in nodes if node["type"] == "WeeToddH3GenerationConfig")
+    profile = next(
+        node for node in nodes if node["type"] == "WeeToddH3FastH3ProductionProfile"
+    )
+    sampler = next(node for node in nodes if node["type"] == "WeeToddH3Sample")
+    diagnostics = next(node for node in nodes if node["type"] == "PreviewAny")
+
+    assert component["widgets_values"][2].endswith(
+        "/weetodd-fasth3-vsa-datafree-q8-paged"
+    )
+    assert config["widgets_values"][0:4] == [4.0, 5, 20260829, "exact dimensions"]
+    assert config["widgets_values"][7:9] == [768, 448]
+    assert profile["widgets_values"] == [
+        "Balanced — compact indexed Metal (recommended)",
+        "768×448 — 2m 22s / 7.18 GB MLX",
+        4096,
+        0.0,
+    ]
+    assert [item["name"] for item in sampler["inputs"]] == [
+        "components",
+        "conditioning",
+        "config",
+        "sol_attention",
+        "production_profile_info",
+    ]
+    assert [11, profile["id"], 2, sampler["id"], 3, "WEETODD_H3_SOL_ATTENTION"] in workflow[
+        "links"
+    ]
+    assert [15, profile["id"], 3, sampler["id"], 4, "STRING"] in workflow["links"]
+    assert diagnostics["title"] == "FastH3 Profile and Hardware Advisories"
+    assert [16, profile["id"], 3, diagnostics["id"], 0, "*"] in workflow["links"]
+
+
+def test_fasth3_768_api_workflow_persists_profile_diagnostics():
+    prompt = json.loads(
+        (ROOT / "examples/h3_fasth3_compact_vsa_768x448_api.json").read_text()
+    )
+
+    assert prompt["4"]["inputs"]["resolution_preset"] == (
+        "768×448 — 2m 22s / 7.18 GB MLX"
+    )
+    assert prompt["4"]["inputs"]["advisory_memory_budget_gb"] == 0.0
+    assert prompt["7"]["inputs"]["production_profile_info"] == ["4", 3]
+    assert prompt["8"]["inputs"]["sampling_info"] == ["7", 1]
+    assert prompt["9"] == {
+        "class_type": "PreviewAny",
+        "inputs": {"source": ["4", 3]},
+        "_meta": {"title": "FastH3 Profile and Hardware Advisories"},
+    }
+
+
+def test_fasth3_40layer_candidate_connects_thinning_and_keeps_staged_publication():
+    workflow = json.loads(
+        (ROOT / "workflows/speed/t2v/h3_fasth3_40layer_candidate.json").read_text()
+    )
+    nodes = list(_execution_node_map(workflow).values())
+    profile = next(node for node in nodes if node["type"] == "WeeToddH3FastH3ProductionProfile")
+    sampler = next(node for node in nodes if node["type"] == "WeeToddH3Sample")
+    publisher = next(node for node in nodes if node["type"] == "WeeToddH3DirectPublishLatents")
+    assert profile["widgets_values"][0] == "Speed candidate — compact Metal + 40 layers"
+    assert profile["outputs"][4]["name"] == "fastvideo"
+    assert sampler["inputs"][5]["name"] == "fastvideo"
+    assert [17, profile["id"], 4, sampler["id"], 5, "WEETODD_H3_FASTVIDEO"] in workflow["links"]
+    assert sampler["widgets_values"] == [True, "checkpoint_default"]
+    metadata = json.loads(publisher["widgets_values"][3])
+    assert metadata["layers_per_evaluation"] == 40
+    assert metadata["expected_attention_calls"] == 160
+    assert metadata["promotion"] == "human_sound_effect_acceptance_pending"
+
+    prompt = json.loads((ROOT / "examples/h3_fasth3_40layer_768x448_api.json").read_text())
+    assert prompt["4"]["inputs"]["profile"] == profile["widgets_values"][0]
+    assert prompt["7"]["inputs"]["fastvideo"] == ["4", 4]
+    assert prompt["7"]["inputs"]["production_profile_info"] == ["4", 3]
+    assert prompt["7"]["inputs"]["unload_after_sample"] is True
+    assert prompt["8"]["inputs"]["sampling_info"] == ["7", 1]
+
+
+@pytest.mark.parametrize("scenario,seed", [("dialogue", 20260830), ("fast_motion", 20260831)])
+def test_fasth3_speed_acceptance_pairs_hold_generation_and_components_constant(scenario, seed):
+    root = ROOT / "benchmarks/fasth3_acceptance/api"
+    baseline = json.loads((root / f"{scenario}_balanced_api.json").read_text())
+    candidate = json.loads((root / f"{scenario}_layer40_api.json").read_text())
+    for node_id in ("1", "2", "3", "5", "6"):
+        assert baseline[node_id] == candidate[node_id]
+    assert baseline["3"]["inputs"]["seed"] == seed
+    assert baseline["3"]["inputs"]["duration_seconds"] == 4.0
+    assert baseline["4"]["inputs"]["profile"] == "Balanced — compact indexed Metal (recommended)"
+    assert candidate["4"]["inputs"]["profile"] == "Speed candidate — compact Metal + 40 layers"
+    assert candidate["7"]["inputs"]["fastvideo"] == ["4", 4]
+
+
 def test_h3_15_second_chain_uses_four_windows_and_direct_join_repair():
     prompt = json.loads(
         (ROOT / "examples" / "h3_768p_15s_four_window_join_repair_api.json").read_text()
@@ -735,6 +912,26 @@ def test_t2va_api_prompt_uses_registered_nodes_and_staged_unloading():
     assert prompt["8"]["inputs"]["audio"] == ["7", 0]
     assert prompt["8"]["inputs"]["sampling_info"] == ["5", 1]
     assert prompt["1"]["inputs"] == PORTABLE_T2VA_INPUTS
+
+
+def test_vdn_optimized_workflow_keeps_recipe_and_staged_direct_publication():
+    prompt = json.loads((ROOT / "examples/h3_vdn_8_step_api.json").read_text())
+    assert prompt["3"]["inputs"]["steps"] == 9
+    assert prompt["3"]["inputs"]["projection_backend"] == "auto"
+    assert prompt["10"]["inputs"]["preview_every"] == 2
+    assert prompt["5"]["inputs"]["unload_after_sample"] is True
+    assert prompt["5"]["inputs"]["block_residency"] == "checkpoint_default"
+    assert prompt["8"]["class_type"] == "WeeToddH3DirectPublishLatents"
+    assert prompt["8"]["inputs"]["latents"] == ["5", 0]
+    assert not any(n["class_type"] in {"WeeToddH3VideoVAEDecode", "WeeToddH3AudioVAEDecode"}
+                   for n in prompt.values())
+    warm = json.loads((ROOT / "examples/h3_vdn_8_step_resident_api.json").read_text())
+    assert warm["5"]["inputs"]["block_residency"] == "resident"
+    assert warm["5"]["inputs"]["unload_after_sample"] is False
+    ui = json.loads((ROOT / "workflows/performance/t2v/"
+                    "h3_vdn_8_step_resident_experimental.json").read_text())
+    sampler = next(node for node in ui["nodes"] if node["type"] == "WeeToddH3Sample")
+    assert sampler["widgets_values"] == [False, "resident"]
 
 
 def test_low_memory_paged_api_uses_dual_paging_and_direct_publication():

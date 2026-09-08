@@ -7,6 +7,8 @@ from mlx.utils import tree_flatten
 from ltx25_mlx.transformer import (
     LTX25Model,
     LTX25TransformerConfig,
+    _NormalizedLTX25BlockLoraSource,
+    _OfficialComfyBlockStreamer,
     _PrefetchedBlockStreamer,
     _streaming_window_from_environment,
     _StreamingEvalWindow,
@@ -126,8 +128,6 @@ def test_official_streaming_key_map_matches_shared_block(tmp_path):
     import numpy as np
     from safetensors.numpy import save_file
 
-    from ltx25_mlx.transformer import _OfficialComfyBlockStreamer
-
     path = tmp_path / "transformer.safetensors"
     save_file(
         {
@@ -143,6 +143,111 @@ def test_official_streaming_key_map_matches_shared_block(tmp_path):
     streamer = _OfficialComfyBlockStreamer(path)
     assert set(streamer.block_keys(0)) == {"attn1.to_out.weight", "ff.proj_in.weight"}
     streamer.close()
+
+
+def test_normalized_streaming_lora_source_binds_down_up_with_alpha_once(tmp_path):
+    from safetensors.numpy import save_file
+
+    class TinyAttention(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.to_q = nn.Linear(4, 4, bias=False)
+
+    class TinyBlock(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.attn1 = TinyAttention()
+
+    transformer = tmp_path / "transformer.safetensors"
+    save_file(
+        {
+            "model.diffusion_model.transformer_blocks.0.attn1.to_q.weight": np.zeros(
+                (4, 4), dtype=np.float32
+            )
+        },
+        transformer,
+    )
+    adapter = tmp_path / "community.safetensors"
+    save_file(
+        {
+            "base_model.model.transformer.transformer_blocks.0.attn1.to_q."
+            "lora_down.weight": np.ones(
+                (2, 4), dtype=np.float32
+            ),
+            "base_model.model.transformer.transformer_blocks.0.attn1.to_q.lora_up.weight": np.ones(
+                (4, 2), dtype=np.float32
+            ),
+            "base_model.model.transformer.transformer_blocks.0.attn1.to_q.alpha": np.array(
+                1.0, dtype=np.float32
+            ),
+        },
+        adapter,
+        metadata={"model_version": "2.5.0"},
+    )
+
+    streamer = _OfficialComfyBlockStreamer(transformer)
+    source = _NormalizedLTX25BlockLoraSource(adapter, strength=0.25)
+    source.validate_targets(streamer, {})
+    assert source.has_block(0)
+    assert not source.has_block(1)
+    assert set(source.get_block_lora_dict(0)) == {
+        "attn1.to_q.lora_A.weight",
+        "attn1.to_q.lora_B.weight",
+    }
+
+    block = TinyBlock()
+    streamer.bind(block, 0, lora_sources=[source])
+    mx.eval(block.parameters())
+    assert mx.allclose(block.attn1.to_q.weight, mx.full((4, 4), 0.25))
+    assert set(tmp_path.glob("*.safetensors")) == {transformer, adapter}
+    source.close()
+    streamer.close()
+
+
+def test_normalized_streaming_lora_source_selects_non_block_pairs(tmp_path):
+    from safetensors.numpy import save_file
+
+    adapter = tmp_path / "mixed.safetensors"
+    save_file(
+        {
+            "diffusion_model.transformer_blocks.0.attn1.to_q.lora_A.default.weight": np.ones(
+                (2, 4), dtype=np.float32
+            ),
+            "diffusion_model.transformer_blocks.0.attn1.to_q.lora_B.default.weight": np.ones(
+                (4, 2), dtype=np.float32
+            ),
+            "diffusion_model.adaln_single.emb.timestep_embedder.linear_1."
+            "lora_A.default.weight": np.ones(
+                (2, 4), dtype=np.float32
+            ),
+            "diffusion_model.adaln_single.emb.timestep_embedder.linear_1."
+            "lora_B.default.weight": np.ones(
+                (4, 2), dtype=np.float32
+            ),
+        },
+        adapter,
+        metadata={"model_version": "2.5.0", "lora_rank": "4", "lora_alpha": "2"},
+    )
+
+    source = _NormalizedLTX25BlockLoraSource(adapter, strength=1.0)
+    block = source.get_block_lora_dict(0)
+    fixed = source.get_non_block_lora_dict()
+    assert set(block) == {
+        "attn1.to_q.lora_A.weight",
+        "attn1.to_q.lora_B.weight",
+    }
+    assert set(fixed) == {
+        "adaln_single.emb.timestep_embedder.linear1.lora_A.weight",
+        "adaln_single.emb.timestep_embedder.linear1.lora_B.weight",
+    }
+    assert mx.array_equal(
+        block["attn1.to_q.lora_B.weight"], mx.full((4, 2), 0.5)
+    )
+    assert mx.array_equal(
+        fixed["adaln_single.emb.timestep_embedder.linear1.lora_B.weight"],
+        mx.full((4, 2), 0.5),
+    )
+    source.close()
 
 
 def test_prefetched_streamer_schedules_next_page_and_wraps(monkeypatch, tmp_path):

@@ -146,9 +146,7 @@ def mpp_bf16_linear(
     input_dim = source.shape[-1]
     output_dim, weight_input_dim = weight.shape
     if input_dim != weight_input_dim:
-        raise ValueError(
-            "MPP projection input width does not match the stored weight input width"
-        )
+        raise ValueError("MPP projection input width does not match the stored weight input width")
 
     rows = math.prod(source.shape[:-1])
     thread_count = 32 * tile.simdgroups
@@ -250,6 +248,51 @@ class MPPLinear(nn.Module):
         return _VERIFICATION.project(source, self.base, self.tile)
 
 
+_EXPANDED_VERDICTS = {}
+
+
+class ExpandedQ8Linear(nn.Module):
+    """Resident-only expansion of the *loaded quantized* weights, with exact fallback.
+
+    Retain the packed base so mismatched kernels never require reloading a checkpoint.
+    No adapter is merged and no original unquantized checkpoint is substituted.
+    """
+
+    def __init__(self, base):
+        super().__init__()
+        self.base = base
+        dense = nn.Linear(1, 1, bias=False)
+        dense.weight = mx.dequantize(
+            base.weight, base.scales, base.biases, group_size=base.group_size, bits=base.bits
+        ).astype(mx.bfloat16)
+        mx.eval(dense.weight)
+        self.expanded = MPPLinear(dense)
+        self.input_dims = dense.weight.shape[1]
+        self.output_dims = dense.weight.shape[0]
+
+    def __call__(self, source):
+        if source.dtype != mx.bfloat16:
+            return self.base(source)
+        key = (
+            math.prod(source.shape[:-1]),
+            self.input_dims,
+            self.output_dims,
+            self.base.bits,
+            self.base.group_size,
+        )
+        verdict = _EXPANDED_VERDICTS.get(key)
+        if verdict is False:
+            return self.base(source)
+        candidate = self.expanded(source)
+        if verdict is None:
+            reference = self.base(source)
+            exact = mx.array_equal(candidate, reference) & mx.all(mx.isfinite(candidate))
+            mx.eval(exact)
+            _EXPANDED_VERDICTS[key] = bool(exact.item())
+            return reference
+        return candidate
+
+
 def _eligible_linear(layer) -> bool:
     return (
         isinstance(layer, nn.Linear)
@@ -260,7 +303,7 @@ def _eligible_linear(layer) -> bool:
     )
 
 
-def configure_block_projection_backend(block) -> tuple[int, int]:
+def configure_block_projection_backend(block, *, expand_q8=False, block_index=0) -> tuple[int, int]:
     """Wrap one resident H3 block, including blocks materialized from paged weights."""
     wrapped = 0
     skipped = 0
@@ -271,7 +314,17 @@ def configure_block_projection_backend(block) -> tuple[int, int]:
         (block.mlp, "fc2"),
     ):
         layer = getattr(owner, name)
-        if _eligible_linear(layer):
+        if (
+            expand_q8
+            and isinstance(layer, nn.QuantizedLinear)
+            and layer.bits == 8
+            and "bias" not in layer
+            and (name != "fc2" or block_index < 38)
+            and layer.scales.dtype == mx.bfloat16
+        ):
+            setattr(owner, name, ExpandedQ8Linear(layer))
+            wrapped += 1
+        elif _eligible_linear(layer):
             setattr(owner, name, MPPLinear(layer))
             wrapped += 1
         else:
@@ -287,10 +340,76 @@ def configure_projection_backend(dit, requested: str) -> ProjectionBackendReport
     use. Unsupported dtypes, quantized layers, biases, kernel failures, and numerical mismatches
     retain the standard MLX implementation.
     """
-    if requested not in {"auto", "mlx", "mpp_experimental"}:
-        raise ValueError("projection backend must be auto, mlx, or mpp_experimental")
+    if requested not in {
+        "auto",
+        "mlx",
+        "mpp_experimental",
+        "m5_low_bit_experimental",
+        "mpp_resident_expanded_experimental",
+    }:
+        raise ValueError(
+            "projection backend must be auto, mlx, mpp_experimental, or m5_low_bit_experimental"
+        )
     if requested == "mlx":
         return ProjectionBackendReport("mlx", "mlx", 0, 0)
+    if (
+        requested == "mpp_resident_expanded_experimental"
+        and getattr(dit, "paged_blocks", None) is not None
+    ):
+        raise ValueError("Expanded Q8 projections require explicit resident block loading.")
+    if requested == "m5_low_bit_experimental":
+        from .fasth3_low_bit import low_bit_tensorops_capability
+
+        supported, reason = low_bit_tensorops_capability()
+        if not supported:
+            return ProjectionBackendReport(requested, "mlx", 0, 0, reason)
+        paged = getattr(dit, "paged_blocks", None)
+        blocks = getattr(dit, "blocks", ()) or ()
+        if paged is not None:
+            if paged.quant_config is None:
+                return ProjectionBackendReport(
+                    requested,
+                    "mlx",
+                    0,
+                    0,
+                    "M5 low-bit projection dispatch requires a quantized paged checkpoint",
+                )
+            paged.projection_backend = "m5_low_bit_experimental"
+            return ProjectionBackendReport(
+                requested,
+                "mlx_m5_nax_quantized",
+                0,
+                0,
+                "quantized QKV, output, and MLP projections dispatch through MLX NAX",
+            )
+        eligible = 0
+        skipped = 0
+        for block in blocks:
+            for owner, name in (
+                (block.attn, "qkv_proj"),
+                (block.attn, "out_proj"),
+                (block.mlp, "fc1"),
+                (block.mlp, "fc2"),
+            ):
+                if isinstance(getattr(owner, name), nn.QuantizedLinear):
+                    eligible += 1
+                else:
+                    skipped += 1
+        if not eligible:
+            return ProjectionBackendReport(
+                requested,
+                "mlx",
+                0,
+                skipped,
+                "M5 low-bit projection dispatch requires quantized core projections",
+            )
+        return ProjectionBackendReport(
+            requested,
+            "mlx_m5_nax_quantized",
+            eligible,
+            skipped,
+            "quantized QKV, output, and MLP projections dispatch through MLX NAX",
+        )
     supported, reason = mpp_capability()
     if not supported:
         return ProjectionBackendReport(requested, "mlx", 0, 0, reason)
@@ -312,8 +431,10 @@ def configure_projection_backend(dit, requested: str) -> ProjectionBackendReport
 
     wrapped = 0
     skipped = 0
-    for block in blocks or ():
-        block_wrapped, block_skipped = configure_block_projection_backend(block)
+    for index, block in enumerate(blocks or ()):
+        block_wrapped, block_skipped = configure_block_projection_backend(
+            block, expand_q8=requested == "mpp_resident_expanded_experimental", block_index=index
+        )
         wrapped += block_wrapped
         skipped += block_skipped
     if paged is not None:
@@ -332,9 +453,14 @@ def configure_projection_backend(dit, requested: str) -> ProjectionBackendReport
 
 def mpp_runtime_status() -> dict[str, object]:
     """Return process-local verification and fallback counts for generation metadata."""
-    return _VERIFICATION.status()
+    return {
+        **_VERIFICATION.status(),
+        "expanded_q8_verified_signatures": sum(_EXPANDED_VERDICTS.values()),
+        "expanded_q8_fallback_signatures": sum(not v for v in _EXPANDED_VERDICTS.values()),
+    }
 
 
 def reset_mpp_runtime_status() -> None:
     """Clear verification state for focused tests and explicit runtime teardown."""
     _VERIFICATION.reset()
+    _EXPANDED_VERDICTS.clear()

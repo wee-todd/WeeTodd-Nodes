@@ -383,7 +383,7 @@ def _sparse_body() -> str:
 
     pv_loop = """        STEEL_PRAGMA_UNROLL
         for (short ik = 0; ik < TK; ik++) {
-          if constexpr (BD == 128) {
+          if constexpr (BD >= 128) {
             simdgroup_barrier(mem_flags::mem_none);
           }
 
@@ -393,7 +393,7 @@ def _sparse_body() -> str:
           Vtile.template load<T, 1, 1, LDV_tgp, 1>(
               &Vs[Vs_offset + kk * LDV_tgp + dd]);
 
-          if constexpr (BD == 128) {
+          if constexpr (BD >= 128) {
             simdgroup_barrier(mem_flags::mem_none);
           }
 
@@ -406,14 +406,14 @@ def _sparse_body() -> str:
 """
     routed_pv = r"""        const short ik_limit = route_exact ? TK : 1;
         for (short ik = 0; ik < ik_limit; ik++) {
-          if constexpr (BD == 128) {
+          if constexpr (BD >= 128) {
             simdgroup_barrier(mem_flags::mem_none);
           }
           const short kk = ik * kFragSize;
           const short dd = id * kFragSize;
           Vtile.template load<T, 1, 1, LDV_tgp, 1>(
               &Vs[Vs_offset + kk * LDV_tgp + dd]);
-          if constexpr (BD == 128) {
+          if constexpr (BD >= 128) {
             simdgroup_barrier(mem_flags::mem_none);
           }
           MMAFrag_acc_t::mma(

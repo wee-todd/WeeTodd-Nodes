@@ -142,6 +142,17 @@ class PagedTensorStore:
             raise IndexError(f"H3 block window start {start} is outside 0..{upper}.")
         return self._load_many(self.manifest.blocks[start:stop])
 
+    def load_blocks(self, indices: tuple[int, ...]) -> dict[str, mx.array]:
+        """Load an explicit ordered set of block pages for layer-thinned execution."""
+        if not indices:
+            raise ValueError("Paged H3 selected block window cannot be empty.")
+        if tuple(sorted(set(indices))) != indices:
+            raise ValueError("Paged H3 selected block indices must be unique and increasing.")
+        if indices[0] < 0 or indices[-1] >= self.manifest.num_blocks:
+            upper = self.manifest.num_blocks - 1
+            raise IndexError(f"Paged H3 selected block indices must remain inside 0..{upper}.")
+        return self._load_many(tuple(self.manifest.blocks[index] for index in indices))
+
     def _load(self, record: PageRecord) -> dict[str, mx.array]:
         return self._load_many((record,))
 
@@ -205,6 +216,8 @@ class PagedBlockExecutor:
         self.window_size = int(window_size)
         self.query_chunk_size: int | None = None
         self.sol_config = None
+        self.vsa_h3_config = None
+        self.vdn_runtime = None
         self.sol_evidence = None
         self.sol_route_records = None
         self.sol_step_index = 0
@@ -226,7 +239,12 @@ class PagedBlockExecutor:
         self.lora_requests: list[tuple[Any, mx.array | None]] = []
         self.lora_timesteps: mx.array | None = None
         self.projection_backend = "mlx"
+        self.inference_optimization = "off"
         self.projection_wrapped_by_block: dict[int, tuple[int, int]] = {}
+        self.pages_avoided = 0
+        self.skip_adaln = False
+        self.adaln_bytes_avoided = 0
+        self.adapter_file_opens = 0
 
     @property
     def num_blocks(self) -> int:
@@ -235,17 +253,31 @@ class PagedBlockExecutor:
     @contextmanager
     def window(self, start: int):
         """Yield materialized blocks and guarantee their release after the caller completes x."""
+        stop = min(start + self.window_size, self.num_blocks)
+        indices = tuple(range(start, stop))
+        self.prefetch.wait(start, len(indices))
+        with self._selected_window(indices, prefetch_after=stop) as blocks:
+            yield blocks
+
+    @contextmanager
+    def selected_window(self, indices: tuple[int, ...]):
+        """Yield only selected block pages; gaps are neither read nor materialized."""
+        with self._selected_window(indices, prefetch_after=None) as blocks:
+            yield blocks
+
+    @contextmanager
+    def _selected_window(self, indices: tuple[int, ...], prefetch_after: int | None):
         from .dit import TransformerBlock
         from .quantize import apply_block_quantization_structure
 
-        stop = min(start + self.window_size, self.num_blocks)
-        size = stop - start
-        self.prefetch.wait(start, size)
+        if not indices:
+            raise ValueError("Paged H3 cannot materialize an empty selected block window.")
         setup_started = time.perf_counter()
-        values = self.store.load_block_window(start, self.window_size)
+        values = self.store.load_blocks(indices)
         blocks = []
+        adapter_cache = {}
         try:
-            for index in range(start, stop):
+            for index in indices:
                 block = TransformerBlock(self.config)
                 if self.quant_config is not None:
                     apply_block_quantization_structure(block, index, self.quant_config)
@@ -264,9 +296,25 @@ class PagedBlockExecutor:
                         f"(e.g. {missing[:4]}), {len(unexpected)} unexpected "
                         f"(e.g. {unexpected[:4]})."
                     )
+                if self.skip_adaln:
+                    from .adaln import CachedOnlyModulation
+
+                    self.adaln_bytes_avoided += sum(
+                        value.nbytes
+                        for name, value in local.items()
+                        if name.startswith("adaln_proj.")
+                    )
+                    local = {
+                        name: value
+                        for name, value in local.items()
+                        if not name.startswith("adaln_proj.")
+                    }
+                    block.adaln_proj = CachedOnlyModulation()
                 block.update(tree_unflatten(list(local.items())))
                 block.attn.query_chunk_size = self.query_chunk_size
                 block.attn.sol_config = self.sol_config
+                block.attn.vsa_h3_config = self.vsa_h3_config
+                block.attn.vdn_runtime = self.vdn_runtime
                 block.attn.sol_evidence = self.sol_evidence
                 block.attn.sol_route_records = self.sol_route_records
                 block.attn.sol_step_index = self.sol_step_index
@@ -274,8 +322,8 @@ class PagedBlockExecutor:
                 if self.projection_backend == "mpp_experimental":
                     from .projection import configure_block_projection_backend
 
-                    self.projection_wrapped_by_block[index] = (
-                        configure_block_projection_backend(block)
+                    self.projection_wrapped_by_block[index] = configure_block_projection_backend(
+                        block
                     )
                 if self.lora_requests:
                     from .lora import apply_paged_loras_to_block
@@ -285,19 +333,28 @@ class PagedBlockExecutor:
                         index,
                         self.lora_requests,
                         self.lora_timesteps,
+                        tensor_cache=adapter_cache,
+                        skip_adaln=self.skip_adaln,
                     )
+                if self.inference_optimization != "off":
+                    from .inference_optimizations import configure_block
+
+                    configure_block(block, self.inference_optimization)
                 blocks.append(block)
             mx.eval(tuple(block.parameters() for block in blocks))
             self.windows_materialized += 1
             self.window_setup_seconds += time.perf_counter() - setup_started
-            if stop < self.num_blocks:
+            if prefetch_after is not None and prefetch_after < self.num_blocks:
                 self.prefetch.start(
-                    stop, min(self.window_size, self.num_blocks - stop)
+                    prefetch_after,
+                    min(self.window_size, self.num_blocks - prefetch_after),
                 )
             compute_started = time.perf_counter()
             yield blocks
             self.window_compute_seconds += time.perf_counter() - compute_started
         finally:
+            self.adapter_file_opens += len(adapter_cache)
+            adapter_cache.clear()
             blocks.clear()
             values.clear()
             self.store.release()
@@ -310,6 +367,7 @@ class PagedBlockExecutor:
             "format": PAGED_FORMAT,
             "window_size": self.window_size,
             "pages_loaded": self.store.pages_loaded,
+            "pages_avoided": self.pages_avoided,
             "peak_window_bytes": self.store.peak_page_bytes,
             "lora_count": len(self.lora_requests),
             "windows_materialized": self.windows_materialized,
@@ -322,8 +380,43 @@ class PagedBlockExecutor:
             ),
             "window_setup_seconds": self.window_setup_seconds,
             "window_compute_seconds": self.window_compute_seconds,
+            "skip_cached_adaln": self.skip_adaln,
+            "adaln_bytes_avoided": self.adaln_bytes_avoided,
+            "adapter_file_opens": self.adapter_file_opens,
             **self.prefetch.report(),
         }
+
+
+def materialize_paged_blocks(dit) -> dict[str, int | float | str]:
+    """Explicitly retain a paged checkpoint's blocks without converting any weights.
+
+    Call before installing adapters/backends or preparing a sampling schedule. The
+    model is changed only after every block has loaded successfully.
+    """
+    pager = getattr(dit, "paged_blocks", None)
+    if pager is None:
+        return {"mode": "resident", "materialized_blocks": 0, "load_seconds": 0.0}
+    if pager.lora_requests or pager.vdn_runtime is not None or pager.projection_backend != "mlx":
+        raise ValueError("Select resident H3 blocks before configuring adapters or backends.")
+    started = time.perf_counter()
+    resident = []
+    try:
+        for start in range(0, pager.num_blocks, pager.window_size):
+            with pager.window(start) as blocks:
+                resident.extend(blocks)
+    except BaseException:
+        resident.clear()
+        pager.close()
+        raise
+    pager.close()
+    dit.blocks = resident
+    dit.paged_blocks = None
+    return {
+        "mode": "resident",
+        "materialized_blocks": len(resident),
+        "load_seconds": time.perf_counter() - started,
+        "weight_bytes": sum(v.nbytes for _, v in tree_flatten(dit.parameters())),
+    }
 
 
 def load_paged_dit(
@@ -355,9 +448,7 @@ def load_paged_dit(
             group_size=recipe["group_size"],
             quantize_adaln=recipe.get("quantize_adaln", False),
             adaln_bits=recipe.get("adaln_bits") or 8,
-            overrides={
-                str(path): int(bits) for path, bits in recipe.get("overrides", {}).items()
-            },
+            overrides={str(path): int(bits) for path, bits in recipe.get("overrides", {}).items()},
             quantize_core=recipe.get("quantize_core", True),
         )
 
@@ -388,9 +479,7 @@ def load_paged_dit(
     finally:
         fixed.clear()
         store.release()
-    model.paged_blocks = PagedBlockExecutor(
-        manifest, config, quant_config, window_size, prefetch
-    )
+    model.paged_blocks = PagedBlockExecutor(manifest, config, quant_config, window_size, prefetch)
     return model
 
 

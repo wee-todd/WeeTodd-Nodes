@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from typing import NamedTuple
 
@@ -38,14 +39,14 @@ def extract_dfr_temporal_image_anchors(
         frame_indices = getattr(conditioning, "frame_indices", None)
         clean_latent = getattr(conditioning, "clean_latent", None)
         if frame_indices is not None and clean_latent is not None:
-            for index, pixel_frame in enumerate(frame_indices):
+            for index, latent_frame in enumerate(frame_indices):
                 start = index * rows_per_frame
                 end = start + rows_per_frame
                 if end > clean_latent.shape[1]:
                     raise ValueError("An LTX 2.5 image anchor has an invalid latent row count.")
                 anchors.append(
                     DFRTemporalImageAnchor(
-                        int(pixel_frame),
+                        int(latent_frame) * 8,
                         mx.contiguous(clean_latent[:, start:end]),
                         float(conditioning.strength),
                         True,
@@ -94,6 +95,54 @@ def select_dfr_generated_slot_tokens(latent: mx.array, slot_rows: int) -> mx.arr
     return latent[:, latent.shape[1] - rows :] if rows else latent[:, :0]
 
 
+def dfr_conditioning_fps(playback_fps: float) -> float:
+    if not math.isfinite(playback_fps) or playback_fps <= 0:
+        raise ValueError("DFR playback fps must be finite and positive.")
+    return 60.0 if playback_fps > 30.0 else playback_fps
+
+
+def frozen_audio_for_tile(audio, *, pixel_start, tile_frames, playback_fps, source_seconds):
+    """Resample a wall-clock slice of stage-1 audio into the tile's conditioning timebase.
+
+    Source duration stays fixed across every doubling round. Conditioning fps only
+    determines the destination token count, never the source window's location.
+    """
+    from ltx_core_mlx.conditioning.types.latent_cond import LatentState
+    from ltx_core_mlx.utils.positions import AUDIO_LATENTS_PER_SECOND, compute_audio_positions
+
+    fps = dfr_conditioning_fps(playback_fps)
+    if (
+        not math.isfinite(source_seconds)
+        or source_seconds <= 0
+        or pixel_start < 0
+        or tile_frames < 1
+    ):
+        raise ValueError("Invalid DFR audio window timing.")
+    if audio is None or audio.ndim != 3 or audio.shape[1] < 1:
+        raise ValueError("Temporal DFR requires packed, nonempty stage-1 audio.")
+    count = round(tile_frames / fps * AUDIO_LATENTS_PER_SECOND)
+    if count < 1:
+        raise ValueError("DFR temporal tile is too short to condition audio.")
+    source_count = audio.shape[1]
+    start = pixel_start / playback_fps / source_seconds * source_count
+    span = tile_frames / playback_fps / source_seconds * source_count
+    positions = mx.clip(start + mx.arange(count) * (span / count), 0, source_count - 1)
+    low = mx.floor(positions).astype(mx.int32)
+    high = mx.minimum(low + 1, source_count - 1)
+    fraction = (positions - low)[None, :, None]
+    values = (
+        audio[:, low].astype(mx.float32) * (1 - fraction)
+        + audio[:, high].astype(mx.float32) * fraction
+    )
+    mx.eval(values)
+    return LatentState(
+        latent=values,
+        clean_latent=values,
+        denoise_mask=mx.zeros((audio.shape[0], count, 1), dtype=audio.dtype),
+        positions=compute_audio_positions(count),
+    )
+
+
 def choose_dfr_segment_length(content_frames: int) -> int:
     """Choose the 24/32-frame segment that needs the least tail padding."""
     if content_frames < 1:
@@ -139,9 +188,7 @@ def plan_dfr_temporal_tiles(
     if not seams or seams[-1] != num_frames - 1:
         raise ValueError("DFR temporal seams must end on the final output frame.")
     boundaries = (0, *seams)
-    spans = tuple(
-        right - left for left, right in zip(boundaries, boundaries[1:], strict=False)
-    )
+    spans = tuple(right - left for left, right in zip(boundaries, boundaries[1:], strict=False))
     if any(span < temporal_scale * 2 or span % temporal_scale for span in spans):
         raise ValueError("DFR temporal seam spans must contain at least two latent intervals.")
     count = min(max(1, int(tile_count)), len(spans))
@@ -159,13 +206,10 @@ def plan_dfr_temporal_tiles(
         if own_start:
             drop += 1
         anchors = tuple(
-            boundaries[item]
-            for item in range(window_start, own_end + 1)
-            if boundaries[item]
+            boundaries[item] for item in range(window_start, own_end + 1) if boundaries[item]
         )
         slots = tuple(
-            (boundaries[item] + boundaries[item + 1]) // 2
-            for item in range(window_start, own_end)
+            (boundaries[item] + boundaries[item + 1]) // 2 for item in range(window_start, own_end)
         )
         tiles.append(
             DFRTemporalTile(
@@ -188,12 +232,16 @@ def stitch_dfr_temporal_tiles(
     if len(latents) != len(tiles) or not latents:
         raise ValueError("DFR temporal tile outputs must match the tile plan.")
     pieces = []
+    owned_end = 0
     for latent, tile in zip(latents, tiles, strict=True):
         expected = tile.latent_end_exclusive - tile.latent_start
         if latent.ndim != 5 or latent.shape[2] != expected:
             raise ValueError("A DFR temporal tile returned an invalid latent shape.")
         if not 0 <= tile.drop_latent_prefix < expected:
             raise ValueError("A DFR temporal tile has an invalid discarded prefix.")
+        if tile.latent_start + tile.drop_latent_prefix != owned_end:
+            raise ValueError("DFR temporal seam ownership has a gap or duplicate.")
+        owned_end = tile.latent_end_exclusive
         pieces.append(latent[:, :, tile.drop_latent_prefix :])
     return mx.concatenate(pieces, axis=2)
 

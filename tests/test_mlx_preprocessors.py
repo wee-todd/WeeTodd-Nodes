@@ -19,6 +19,10 @@ from mlx_preprocessors.lineart import (
 )
 from mlx_preprocessors.motion_tracks import MotionTrackConfig, render_motion_tracks
 from mlx_preprocessors.normals import NormalMapConfig, depth_to_normals
+from mlx_preprocessors.optical_flow_tracks import (
+    OpticalFlowTrackConfig,
+    extract_optical_flow_tracks,
+)
 from mlx_preprocessors.teed import TEED, TEEDConfig
 from mlx_preprocessors.video_depth import (
     VideoDepthAnythingSmall,
@@ -288,6 +292,37 @@ def test_motion_track_guide_rejects_invalid_tracks():
             '[[{"x":1.5,"y":0.5}]]',
             MotionTrackConfig(width=64, height=64, num_frames=4),
         )
+
+
+def test_optical_flow_extracts_forward_motion_and_renders_portable_tracks():
+    frames = np.zeros((6, 64, 64, 3), dtype=np.float32)
+    for index in range(len(frames)):
+        x = 16 + index * 3
+        frames[index, 26:35, x : x + 9] = 1.0
+    raw, report = extract_optical_flow_tracks(
+        frames,
+        OpticalFlowTrackConfig(
+            max_tracks=4,
+            quality_level=0.01,
+            minimum_distance=4,
+            window_size=15,
+            pyramid_levels=2,
+        ),
+    )
+    tracks = json.loads(raw)
+    assert 1 <= len(tracks) <= 4
+    assert all(len(track) == 6 for track in tracks)
+    assert np.mean([track[-1]["x"] - track[0]["x"] for track in tracks]) > 0.15
+    assert report["valid_observation_ratio"] > 0.8
+    assert report["track_format"] == "per-frame coordinates"
+
+
+def test_optical_flow_uses_a_reported_center_fallback_on_flat_frames():
+    raw, report = extract_optical_flow_tracks(np.zeros((3, 32, 48, 3), dtype=np.float32))
+    tracks = json.loads(raw)
+    assert report["fallback_center_track"] is True
+    assert len(tracks) == 1
+    assert tracks[0][0] == tracks[0][-1]
 
 
 def test_lineart_architecture_and_config_match_converted_contract():

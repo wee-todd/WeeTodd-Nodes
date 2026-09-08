@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 
 PROFILES = {"speed", "balance", "performance"}
-TASKS = {"t2v", "i2v", "fflf2va", "ref2va", "continuation", "video-upscale"}
+TASKS = {"t2v", "i2v", "fflf2va", "ref2va", "continuation", "video-upscale", "keying"}
 MEDIA_NODE_WIDGET = {"LoadImage": 0, "LoadVideo": 0, "LoadAudio": 0}
 MEDIA_NODE_INPUT = {"LoadImage": "image", "LoadVideo": "file", "LoadAudio": "audio"}
 H3_SAMPLERS = {"WeeToddH3Sample", "WeeToddH3LatentHiresFix"}

@@ -8,6 +8,7 @@ from wee_todd_nodes.conditioning_inputs import (
     H3ReferenceStack,
     H3TimedKeyframe,
     H3TimedKeyframeStack,
+    h3_external_extension_references,
     resolve_reference_image_canvas,
     resolve_reference_video_canvas,
 )
@@ -128,6 +129,27 @@ def test_reference_video_validates_frames_fps_and_soundtrack():
         fps=24.0,
         temporal_density="automatic (conservative, experimental)",
     ).validate()
+
+
+def test_external_extension_uses_full_ref2va_clip_audio_and_first_frame_anchor():
+    import numpy as np
+
+    video = np.zeros((73, 32, 32, 3), dtype=np.uint8)
+    video[-1] = 255
+    audio = np.zeros((2, 96000), dtype=np.float32)
+
+    stack = h3_external_extension_references(video, audio, 24.0)
+
+    assert [item.kind for item in stack.references] == ["video", "image"]
+    assert stack.references[0].media is video
+    assert stack.references[0].soundtrack["waveform"].shape == (1, 2, 96000)
+    assert stack.references[1].target_frame == 0
+    assert np.array_equal(stack.references[1].media, video[-1:])
+    assert stack.metadata()["references"][0]["prompt_labels"] == [
+        "<Audio 1>",
+        "<Video 1>",
+    ]
+    assert stack.metadata()["references"][1]["prompt_labels"] == ["<Picture 1>"]
 
 
 def test_reference_image_pixel_budget_scales_area_and_preserves_aspect():

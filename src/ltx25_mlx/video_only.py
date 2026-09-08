@@ -1,4 +1,4 @@
-"""Video-only LTX 2.5 transformer execution for temporal refinement."""
+"""Video-only LTX 2.5 ablation; DFR uses joint execution with frozen audio instead."""
 
 from __future__ import annotations
 

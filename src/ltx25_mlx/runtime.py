@@ -8,7 +8,7 @@ import inspect
 import json
 import time
 from contextlib import contextmanager
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from functools import lru_cache
 from pathlib import Path
 from threading import RLock
@@ -262,10 +262,10 @@ class LTX25ComponentSpec:
                 "LTX 2.5 IC-LoRA requires the distilled transformer. Select a distilled "
                 "Quality Mode or remove the IC-LoRA."
             )
-        if len(self.ic_loras) > 1:
+        if len(self.ic_loras) > 2:
             raise ValueError(
-                "LTX 2.5 supports one active IC-LoRA adapter per generation. Remove the "
-                "additional IC-LoRA loaders; standard style LoRAs may remain separate."
+                "LTX 2.5 supports at most two active IC-LoRA task adapters per generation. "
+                "Remove the additional IC-LoRA loaders; standard style LoRAs may remain separate."
             )
         if self.msr_lora_path:
             from .transformer import inspect_ltx25_msr_lora
@@ -322,6 +322,8 @@ class LTX25ComponentSpec:
                 raise FileNotFoundError(f"LTX 2.5 LoRA file not found: {resolved}")
             if strength <= 0:
                 raise ValueError("LTX 2.5 LoRA strength must be positive.")
+        ic_adapter_families: set[str] = set()
+        ic_reference_scales: set[tuple[int, int]] = set()
         for lora_path, strength in self.ic_loras:
             resolved = Path(lora_path).expanduser()
             if not resolved.is_file() or resolved.suffix != ".safetensors":
@@ -340,6 +342,38 @@ class LTX25ComponentSpec:
                     "The Pixel-Spatial IC-LoRA belongs to the Video Upscale / Refine node, "
                     "not the general video-reference stack."
                 )
+            family = str(ic_report.get("adapter_family") or "")
+            if family == "unclassified_reference_conditioning":
+                raise ValueError(
+                    "The LTX 2.5 IC-LoRA task cannot be determined from checkpoint metadata "
+                    "or its complete structural fingerprint. Use a supported complete task "
+                    "adapter; refusing to guess from its filename."
+                )
+            if family in ic_adapter_families:
+                raise ValueError(
+                    "Each stacked LTX 2.5 IC-LoRA must use a distinct adapter family; "
+                    f"duplicate family: {family or 'unknown'}."
+                )
+            ic_adapter_families.add(family)
+            ic_reference_scales.add(
+                (
+                    int(ic_report["reference_downscale_factor"]),
+                    int(ic_report["reference_temporal_scale_factor"]),
+                )
+            )
+        if len(ic_reference_scales) > 1:
+            raise ValueError(
+                "Stacked LTX 2.5 IC-LoRAs must use identical spatial and temporal "
+                "reference scale factors."
+            )
+        if len(ic_adapter_families) == 2 and ic_adapter_families != {
+            "crossview_warp",
+            "ingredients_reference_sheet",
+        }:
+            raise ValueError(
+                "The only validated two-adapter IC-LoRA stack is CrossView plus "
+                "Ingredients reference conditioning."
+            )
         missing = [
             name for name in sorted(required) if name not in paths or not paths[name].exists()
         ]
@@ -700,7 +734,10 @@ class LTX25GenerationConfig:
             from .transformer import inspect_ltx25_ic_lora
 
             detail = inspect_ltx25_ic_lora(detail_path)
-            if detail["reference_downscale_factor"] != 2:
+            if (
+                detail["adapter_family"] != "pixel_spatial_upscaler"
+                or detail["reference_downscale_factor"] != 2
+            ):
                 raise ValueError("LTX 2.5 DFR requires a 2x Pixel-Spatial IC-LoRA.")
             if self.dfr_prebaked_transformer_path:
                 from .paged_checkpoint import LTX25PagedManifest
@@ -818,6 +855,60 @@ def apply_ltx25_generation_preset(name: str, values: dict[str, object]) -> dict[
     return resolved
 
 
+def resolve_ltx25_runtime_config(
+    spec: LTX25ComponentSpec,
+    config: LTX25GenerationConfig,
+) -> tuple[LTX25GenerationConfig, list[str]]:
+    """Resolve checkpoint-dependent settings before allocating weighted components.
+
+    Paged transformer directories cannot run resident, while streamed transformer blocks
+    cannot use the experimental feed-forward implementations. The component loader and the
+    generation config are intentionally composable, so this compatibility can only be known
+    once both reach the runtime boundary.
+    """
+    adjustments: list[str] = []
+    transformer_is_paged = Path(spec.transformer_path).expanduser().is_dir()
+    dfr_stage2_is_paged = bool(
+        config.dfr_prebaked_transformer_path
+        and Path(config.dfr_prebaked_transformer_path).expanduser().is_dir()
+    )
+    low_ram_streaming = config.low_ram_streaming
+    feed_forward_backend = config.feed_forward_backend
+    sol_attention_profile = config.sol_attention_profile
+
+    if (transformer_is_paged or dfr_stage2_is_paged) and not low_ram_streaming:
+        low_ram_streaming = True
+        adjustments.append("enabled low-RAM streaming for the selected paged transformer")
+    if sol_attention_profile == "paged_speed" and not low_ram_streaming:
+        low_ram_streaming = True
+        adjustments.append("enabled low-RAM streaming for paged_speed Sol Attention")
+    if low_ram_streaming and feed_forward_backend != "reference_fp32":
+        feed_forward_backend = "reference_fp32"
+        adjustments.append(
+            "selected reference_fp32 feed-forward execution because streaming is active"
+        )
+    if not config.ic_lora_single_stage and sol_attention_profile != "disabled":
+        sol_attention_profile = "disabled"
+        adjustments.append(
+            "disabled Sol Attention because the selected pipeline is not single-stage"
+        )
+    if low_ram_streaming and sol_attention_profile not in {"disabled", "paged_speed"}:
+        sol_attention_profile = "paged_speed"
+        adjustments.append(
+            "selected paged_speed Sol Attention because streaming is active"
+        )
+
+    return (
+        replace(
+            config,
+            low_ram_streaming=low_ram_streaming,
+            feed_forward_backend=feed_forward_backend,
+            sol_attention_profile=sol_attention_profile,
+        ),
+        adjustments,
+    )
+
+
 def _pipeline_class():
     from .pipeline import LTX25DistilledPipeline
 
@@ -888,6 +979,7 @@ class LTX25RuntimeCache:
             return self._pipeline is not None
 
     def get(self, spec: LTX25ComponentSpec, config: LTX25GenerationConfig):
+        config, _adjustments = resolve_ltx25_runtime_config(spec, config)
         report = spec.validate(
             config.pipeline_mode,
             require_spatial_upscaler=not config.ic_lora_single_stage,
@@ -895,9 +987,7 @@ class LTX25RuntimeCache:
         scales = tuple(int(value) for value in report["video_scale_factors"])
         config.validate(
             scale_factors=scales,
-            reference_downscale_factor=int(
-                report.get("ic_lora_reference_downscale_factor") or 1
-            ),
+            reference_downscale_factor=int(report.get("ic_lora_reference_downscale_factor") or 1),
         )
         validate_ltx25_dfr_prebaked_pair(config, report)
         key = (
@@ -965,6 +1055,8 @@ class LTX25RuntimeCache:
         video_references: list[dict[str, object]] | None = None,
         msr_references: list[dict[str, object]] | None = None,
         audio_reference: dict[str, object] | None = None,
+        publication_audio: dict[str, object] | None = None,
+        extension_input: dict[str, object] | None = None,
         unload_after: bool = True,
         check_interrupted=None,
         step_callback=None,
@@ -975,13 +1067,57 @@ class LTX25RuntimeCache:
             config.pipeline_mode,
             require_spatial_upscaler=not config.ic_lora_single_stage,
         )
+        config, configuration_adjustments = resolve_ltx25_runtime_config(spec, config)
         scales = tuple(int(value) for value in report["video_scale_factors"])
         config.validate(
             scale_factors=scales,
-            reference_downscale_factor=int(
-                report.get("ic_lora_reference_downscale_factor") or 1
-            ),
+            reference_downscale_factor=int(report.get("ic_lora_reference_downscale_factor") or 1),
         )
+        # Match the node's topology gates for direct/headless callers as well.
+        if video_references and audio_reference is not None:
+            raise ValueError(
+                "Combined video-reference and A2V requires an unqualified LipDub topology"
+            )
+        if msr_references and (video_references or audio_reference is not None):
+            raise ValueError("MSR cannot be combined with video-reference or A2V conditioning")
+        if extension_input and (
+            image_path
+            or image_inputs
+            or video_references
+            or msr_references
+            or audio_reference is not None
+            or publication_audio is not None
+        ):
+            raise ValueError("LTX 2.5 extension cannot be combined with other conditioning")
+        if msr_references and (not spec.msr_lora_path or not config.ic_lora_single_stage):
+            raise ValueError(
+                "MSR requires its dedicated adapter and full-resolution single-stage mode"
+            )
+        if video_references:
+            from wee_todd_mlx.task_conditioning import validate_ltx25_control_families
+
+            validate_ltx25_control_families(
+                {
+                    "inputs": [
+                        {
+                            "id": f"reference-{index}",
+                            "role": "control",
+                            "control_type": item.get("control_type", "custom_preprocessed"),
+                        }
+                        for index, item in enumerate(video_references)
+                        if item.get("control_type", "custom_preprocessed") != "custom_preprocessed"
+                    ]
+                },
+                report,
+            )
+        seen_frames = {0} if image_path is not None else set()
+        for item in image_inputs or ():
+            frame = item["frame_index"]
+            if type(frame) is not int or frame in seen_frames or not 0 <= frame < config.num_frames:
+                raise ValueError("LTX 2.5 keyframe indices must be unique and inside the output")
+            seen_frames.add(frame)
+            if not 0 <= float(item["strength"]) <= 1 or not Path(item["path"]).is_file():
+                raise ValueError("LTX 2.5 keyframes require existing files and strengths in [0, 1]")
         dfr_recipe = resolve_ltx25_dfr_recipe(config, report)
         if config.duration_mode == "automatic" and not spec.duration_head_path:
             raise ValueError(
@@ -996,7 +1132,6 @@ class LTX25RuntimeCache:
         except (ImportError, AttributeError):
             mx = None
         started = time.perf_counter()
-        pipeline = self.get(spec, config)
         try:
             from .feed_forward import reset_feed_forward_runtime_status
 
@@ -1028,6 +1163,8 @@ class LTX25RuntimeCache:
             "video_references": video_references or [],
             "msr_references": msr_references or [],
             "audio_reference": audio_reference,
+            "publication_audio": publication_audio,
+            "extension_input": extension_input,
             "stage1_steps": config.stage1_steps,
             "stage2_steps": config.stage2_steps,
             "ic_lora_single_stage": config.ic_lora_single_stage,
@@ -1065,6 +1202,7 @@ class LTX25RuntimeCache:
             "auto_duration_min_seconds": config.auto_duration_min_seconds,
             "auto_duration_max_seconds": config.auto_duration_max_seconds,
         }
+        pipeline = self.get(spec, config)
         signature = inspect.signature(pipeline.generate_and_save)
         accepts_kwargs = any(
             parameter.kind is inspect.Parameter.VAR_KEYWORD
@@ -1075,6 +1213,22 @@ class LTX25RuntimeCache:
             for key, value in kwargs.items()
             if accepts_kwargs or key in signature.parameters
         }
+        requested_inputs = {
+            key
+            for key in (
+                "image",
+                "images",
+                "video_references",
+                "msr_references",
+                "audio_reference",
+                "publication_audio",
+                "extension_input",
+            )
+            if kwargs[key] is not None and (not isinstance(kwargs[key], list) or kwargs[key])
+        }
+        if requested_inputs - accepted.keys():
+            self.unload()
+            raise ValueError("Installed LTX 2.5 pipeline cannot consume requested conditioning")
         succeeded = False
         try:
             with (
@@ -1103,6 +1257,7 @@ class LTX25RuntimeCache:
                 "prompt": prompt,
                 "video_path": str(result_path),
                 "generation": asdict(config),
+                "configuration_adjustments": configuration_adjustments,
                 "sampling": {
                     "stage1_steps": config.stage1_steps,
                     "stage1_real_forwards": config.stage1_forward_passes,
@@ -1143,8 +1298,13 @@ class LTX25RuntimeCache:
                     "video_reference_count": len(video_references or ()),
                     "msr_reference_count": len(msr_references or ()),
                     "audio_driven": audio_reference is not None,
+                    "external_extension": extension_input is not None,
                     "audio_output": (
-                        "original_comfy_audio" if audio_reference is not None else "generated"
+                        "original_source_audio"
+                        if publication_audio is not None
+                        else "original_comfy_audio"
+                        if audio_reference is not None
+                        else "generated"
                     ),
                     "ic_lora_stage_scope": (
                         (
@@ -1152,7 +1312,7 @@ class LTX25RuntimeCache:
                             if config.ic_lora_single_stage
                             else "stage_1_only"
                         )
-                        if video_references
+                        if video_references or msr_references
                         else None
                     ),
                 },
@@ -1188,6 +1348,7 @@ class LTX25RuntimeCache:
             config.pipeline_mode,
             require_spatial_upscaler=not config.ic_lora_single_stage,
         )
+        config, configuration_adjustments = resolve_ltx25_runtime_config(spec, config)
         scales = tuple(int(value) for value in report["video_scale_factors"])
         config.validate(scale_factors=scales)
         if config.duration_mode != "manual":
@@ -1196,9 +1357,7 @@ class LTX25RuntimeCache:
                 "set an explicit total duration for chained timelines."
             )
         if config.dfr_temporal_rounds:
-            raise ValueError(
-                "LTX 2.5 temporal DFR is not yet available for chained timelines."
-            )
+            raise ValueError("LTX 2.5 temporal DFR is not yet available for chained timelines.")
         plan = plan_ltx25_chain(
             total_frames=config.num_frames,
             window_count=window_count,
@@ -1259,6 +1418,7 @@ class LTX25RuntimeCache:
                 "prompts": prompts,
                 "video_path": str(result_path),
                 "generation": asdict(config),
+                "configuration_adjustments": configuration_adjustments,
                 "num_frames": config.num_frames,
                 "delivered_duration_seconds": config.delivered_duration_seconds,
                 "pipeline_mode": config.pipeline_mode,

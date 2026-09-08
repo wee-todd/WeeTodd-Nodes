@@ -8,6 +8,7 @@ LTX25_UPSCALE_MODES = (
 )
 LTX25_SOURCE_FRAME_ANCHORS = ("none", "first frame", "first + last frames")
 LTX25_INPUT_SIZE_POLICIES = (
+    "fit nearest 32px grid (preserve aspect)",
     "center crop to 32px grid (recommended)",
     "require dimensions divisible by 32",
 )

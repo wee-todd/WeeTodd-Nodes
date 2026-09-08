@@ -164,6 +164,38 @@ def test_transformer_cache_samples_and_unloads(tmp_path: Path):
     assert len(created) == 1
 
 
+def test_resident_mode_is_explicit_cache_keyed_and_reports_warm_state(tmp_path):
+    created = []
+    def factory(spec):
+        result = FakeSampler(spec)
+        created.append(result)
+        return result
+    cache = H3TransformerCache(factory)
+    spec = _spec(tmp_path)
+    conditioning = _conditioning(spec)
+    config = H3GenerationConfig(steps=3, projection_backend="mlx")
+    cache.sample(spec, conditioning, config, unload_after=False)
+    for _ in range(2):
+        result = cache.sample(spec, conditioning, config, block_residency="resident",
+                              unload_after=False)
+    assert len(created) == 2
+    assert len(created[-1].calls) == 2
+    assert result.block_residency_report["mode"] == "resident"
+    assert result.block_residency_report["keep_warm"] is True
+    cache.sample(spec, conditioning, config, block_residency="resident", unload_after=True)
+    assert not cache.loaded
+
+
+@pytest.mark.parametrize("mode,memory", [("invalid", "normal"), ("resident", "low_memory_bf16")])
+def test_resident_invalid_policy_is_rejected_before_load(tmp_path, mode, memory):
+    def factory(spec):
+        raise AssertionError("invalid policy must not load weights")
+    spec = _spec(tmp_path)
+    with pytest.raises(ValueError, match="(block_residency|normal memory)"):
+        H3TransformerCache(factory).sample(spec, _conditioning(spec),
+            H3GenerationConfig(memory_mode=memory), block_residency=mode)
+
+
 def test_transformer_cache_closes_paged_worker_before_unload(tmp_path: Path):
     closed = False
 
@@ -775,6 +807,34 @@ def test_transformer_sampler_accepts_prepared_ref2va_conditioning(tmp_path: Path
     assert result.transformer_evaluations == 2
     kwargs = created[0].calls[0][2]
     assert kwargs["condition_video_rows"] == "reference-video-rows"
+    assert kwargs["condition_audio_rows"] == "reference-audio-rows"
+    assert kwargs["references"] == (reference,)
+
+
+def test_transformer_sampler_accepts_audio_only_ref2va_conditioning(tmp_path: Path):
+    created = []
+
+    def factory(spec):
+        sampler = FakeSampler(spec)
+        created.append(sampler)
+        return sampler
+
+    cache = H3TransformerCache(factory)
+    spec = _spec(tmp_path, task="ref2va")
+    reference = SimpleNamespace(kind="audio")
+    conditioning = _conditioning(
+        spec,
+        load_vision=False,
+        task="ref2va",
+        condition_audio_rows="reference-audio-rows",
+        references=(reference,),
+    )
+
+    result = cache.sample(spec, conditioning, H3GenerationConfig(steps=3))
+
+    assert result.transformer_evaluations == 2
+    kwargs = created[0].calls[0][2]
+    assert kwargs["condition_video_rows"] is None
     assert kwargs["condition_audio_rows"] == "reference-audio-rows"
     assert kwargs["references"] == (reference,)
 

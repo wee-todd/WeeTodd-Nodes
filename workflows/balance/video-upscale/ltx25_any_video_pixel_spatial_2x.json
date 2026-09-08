@@ -45,8 +45,8 @@
       "outputs": [{"name": "model", "type": "WEETODD_LTX25_MODEL", "links": [5], "slot_index": 0}],
       "properties": {"Node name for S&R": "WeeToddLTX25ComponentLoader"},
       "widgets_values": [
-        "ltx-2.5-22b-distilled-transformer-bf16.safetensors",
-        "gemma4-12b-with-proj-ltx-2.5-bf16.safetensors",
+        "ltx-2.5-22b-distilled-transformer-q8-paged",
+        "gemma4-12b-with-proj-ltx-2.5-q8-paged",
         "ltx-2.5-video-vae-conv-bf16.safetensors",
         "ltx-2.5-audio-vae-bf16.safetensors",
         "ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors",
@@ -78,17 +78,25 @@
         "pixel spatial IC-LoRA 2x (recommended)",
         "Describe the source movie accurately, preserving its people, setting, camera movement, action, lighting, and visual style while recovering clean fine detail. Keep motion and composition faithful to the source.",
         584293325,
-        "center crop to 32px grid (recommended)",
+        "fixed",
+        "fit nearest 32px grid (preserve aspect)",
         0.35,
         "first frame",
         0.7,
         "WeeTodd/LTX25_video_2x",
         0.1,
-        false,
+        true,
+        "disabled",
         "official_1024",
         "{\"workflow\": \"ltx25_any_video_pixel_spatial_2x\"}",
         "LTX-2.5/ltx-2.5-22b-ic-lora-pixel-spatial-upscaler-x2-1.0.safetensors",
-        1.0
+        1.0,
+        "",
+        true,
+        0.0,
+        "disabled",
+        260.0,
+        false
       ]
     },
     {
@@ -110,7 +118,7 @@
       "title": "Setup and model downloads",
       "properties": {},
       "widgets_values": [
-        "## ltx25 any video pixel spatial 2x\n\n1. Install WeeTodd Nodes and restart ComfyUI.\n2. Accept the LTX 2.5 license and download the split model components.\n3. Use `ComfyUI/models/` or shared roots from `extra_model_paths.yaml`.\n4. Select a source movie. Queue the workflow.\n\n### Downloads\n\n- [LTX 2.5 model components](https://huggingface.co/Lightricks/LTX-2.5)\n- [Pixel-spatial upscaler IC-LoRA](https://huggingface.co/Lightricks/LTX-2.5-22b-IC-LoRA-Pixel-Spatial-Upscaler)"
+        "## LTX 2.5 any-video Pixel Spatial 2x\n\n1. Install WeeTodd Nodes with the LTX extra and restart ComfyUI.\n2. Accept the LTX 2.5 license and download the split model components.\n3. Create the Q8-paged transformer and Gemma directories with the README conversion commands.\n4. Save the Pixel Spatial adapter under `ComfyUI/models/loras/LTX-2.5/`.\n5. Select a source movie. Queue the workflow.\n\nThis balance workflow uses Q8-paged components and staged block streaming. Keep `low_ram_streaming` on with paged checkpoints. The default source fit preserves aspect ratio and reaches the LTX grid. Prompt reuse skips repeated Gemma work for matching prompts and checkpoints; LTX 2.5 Unload clears it. Set a frame-megapixel limit only from measurements on your Mac. Leave `ffmpeg_path` empty for automatic discovery.\n\nPixel-Spatial refinement is a generative repaint. Check faces, logos, lettering, and small objects against the source. Keep temporal chunking disabled when the complete clip fits. For a longer clip, automatic chunking prefers scene cuts, requires at least 49 frames per split window, preserves the original audio, and resumes completed chunks. A forced split inside one shot can remain visible.\n\n### Downloads\n\n- [LTX 2.5 model components](https://huggingface.co/Lightricks/LTX-2.5)\n- [Pixel-spatial upscaler IC-LoRA](https://huggingface.co/Lightricks/LTX-2.5-22b-IC-LoRA-Pixel-Spatial-Upscaler)"
       ],
       "color": "#243447",
       "bgcolor": "#15202b"

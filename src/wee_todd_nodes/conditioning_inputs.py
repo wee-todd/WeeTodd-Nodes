@@ -570,3 +570,32 @@ class H3ReferenceStack:
                 )
             prepared.append(item)
         return prepared
+
+
+def h3_external_extension_references(frames: Any, waveform: Any, fps: float) -> H3ReferenceStack:
+    """Build the released Ref2VA continuation inputs from an external source clip.
+
+    The complete clip and soundtrack provide temporal/audio context. Its final decoded frame is
+    repeated as a target-frame-zero image guide so the generated continuation has an explicit seam
+    anchor instead of relying on semantic video-reference attention alone.
+    """
+
+    import numpy as np
+
+    video = np.asarray(frames)
+    audio = np.asarray(waveform, dtype=np.float32)
+    if video.ndim != 4 or video.shape[-1] != 3 or video.shape[0] < 5:
+        raise ValueError("H3 external extension requires at least five RGB source frames.")
+    if audio.ndim != 2 or audio.shape[0] != 2 or audio.shape[1] < 1:
+        raise ValueError("H3 external extension requires nonempty stereo source audio.")
+    stack = H3ReferenceStack().append(
+        H3ReferenceInput(
+            kind="video",
+            media=video,
+            fps=float(fps),
+            soundtrack={"waveform": audio[None], "sample_rate": 32000},
+        )
+    )
+    return stack.append(
+        H3ReferenceInput(kind="image", media=video[-1:], target_frame=0)
+    )

@@ -34,25 +34,35 @@ const float q_inverse_rms = rsqrt(simd_sum(q_squares) / float(HEAD_DIM) + 1.0e-5
 const float k_inverse_rms = rsqrt(simd_sum(k_squares) / float(HEAD_DIM) + 1.0e-5f);
 
 for (uint d = lane; d < HEAD_DIM; d += 32) {
-    float q_value = float(qkv[interleaved_base + d])
-        * q_inverse_rms * float(q_weight[d]);
-    float k_value = float(qkv[interleaved_base + HEAD_DIM + d])
-        * k_inverse_rms * float(k_weight[d]);
+    const bfloat q_normalized = bfloat(
+        float(qkv[interleaved_base + d]) * q_inverse_rms);
+    const bfloat k_normalized = bfloat(
+        float(qkv[interleaved_base + HEAD_DIM + d]) * k_inverse_rms);
+    bfloat q_value = bfloat(float(q_normalized) * float(q_weight[d]));
+    bfloat k_value = bfloat(float(k_normalized) * float(k_weight[d]));
     if (d < ROTARY_DIM) {
         const bool first_half = d < ROTARY_DIM / 2;
         const uint paired = first_half ? d + ROTARY_DIM / 2 : d - ROTARY_DIM / 2;
-        const float q_pair = float(qkv[interleaved_base + paired])
-            * q_inverse_rms * float(q_weight[paired]);
-        const float k_pair = float(qkv[interleaved_base + HEAD_DIM + paired])
-            * k_inverse_rms * float(k_weight[paired]);
-        const float cosine = float(cosine_table[row * ROTARY_DIM + d]);
-        const float sine = float(sine_table[row * ROTARY_DIM + d]);
+        const bfloat q_pair_normalized = bfloat(
+            float(qkv[interleaved_base + paired]) * q_inverse_rms);
+        const bfloat k_pair_normalized = bfloat(
+            float(qkv[interleaved_base + HEAD_DIM + paired]) * k_inverse_rms);
+        const bfloat q_pair = bfloat(
+            float(q_pair_normalized) * float(q_weight[paired]));
+        const bfloat k_pair = bfloat(
+            float(k_pair_normalized) * float(k_weight[paired]));
+        const bfloat cosine = bfloat(cosine_table[row * ROTARY_DIM + d]);
+        const bfloat sine = bfloat(sine_table[row * ROTARY_DIM + d]);
         const float sign = first_half ? -1.0f : 1.0f;
-        q_value = q_value * cosine + sign * q_pair * sine;
-        k_value = k_value * cosine + sign * k_pair * sine;
+        const bfloat q_direct = bfloat(float(q_value) * float(cosine));
+        const bfloat k_direct = bfloat(float(k_value) * float(cosine));
+        const bfloat q_rotated = bfloat(float(q_pair) * float(sine));
+        const bfloat k_rotated = bfloat(float(k_pair) * float(sine));
+        q_value = bfloat(float(q_direct) + sign * float(q_rotated));
+        k_value = bfloat(float(k_direct) + sign * float(k_rotated));
     }
-    query[output_base + d] = bfloat(q_value);
-    key[output_base + d] = bfloat(k_value);
+    query[output_base + d] = q_value;
+    key[output_base + d] = k_value;
     value[output_base + d] = qkv[interleaved_base + 2 * HEAD_DIM + d];
 }
 """

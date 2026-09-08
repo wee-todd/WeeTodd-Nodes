@@ -11,7 +11,8 @@ Two MLX-specific departures from the reference, both forced by the framework rat
   C_in)``, where torch uses ``(N, C, D, H, W)`` / ``(C_out, C_in, kD, kH, kW)``. The CNN runs
   channels-last internally and transposes only at the public encode/decode boundary, so the
   pipeline still sees the reference's ``(B, C, F, H, W)``.
-* **Reflect padding.** ``mx.pad`` has no reflect mode. :func:`reflect_pad` uses a gather operation.
+* **Reflect padding.** :func:`reflect_pad` uses a gather operation. MLX 0.32.2 added native
+  reflect padding, but a matched complete-decoder benchmark found the two-axis native form slower.
 
 The module tree reproduces the *original* checkpoint names (``encoder.down.{i}.block.{j}``,
 ``decoder.x_embedder``, ``attn.to_qkv``, ``ff.w1``), so the released weights load without renaming.
@@ -105,10 +106,7 @@ class VideoVAEConfig:
 
 
 def reflect_pad(x: mx.array, axis: int, left: int, right: int) -> mx.array:
-    """Reflect padding without repeating the edge element, matching ``F.pad(mode="reflect")``.
-
-    ``mx.pad`` supports only constant and edge, so the reflection is done by gather.
-    """
+    """Reflect padding without repeating the edge element, matching ``F.pad(mode="reflect")``."""
     if left == 0 and right == 0:
         return x
     n = x.shape[axis]
@@ -506,6 +504,8 @@ class VideoVAE(nn.Module):
         self.tile_sample_min_overlap_height = 64
         self.tile_sample_min_overlap_width = 64
         self.decode_batch = resolved_decode_batch()
+        self.decode_tile_mode = "fixed"
+        self.last_decode_tile_plan = None
 
     # -- tiling -----------------------------------------------------------------------------
 
@@ -573,6 +573,44 @@ class VideoVAE(nn.Module):
 
     # -- clip-level encode / decode ---------------------------------------------------------
 
+    def decode_tile_plan(self, height: int, width: int):
+        """Choose a bounded decode-only tile plan; never change encoder conditioning.
+
+        Geometry mode changes attention context and is intentionally opt-in. The cost
+        balances linear projection work and quadratic attention work, including overlap.
+        Candidates are at most 64 pixels above the configured reference tile size.
+        """
+        if self.decode_tile_mode not in {"fixed", "geometry_experimental"}:
+            raise ValueError("Unknown H3 decode tile mode.")
+        ratio = self.config.spatial_compression_ratio
+        base_h, base_w = self.tile_sample_min_height, self.tile_sample_min_width
+        hs, ws = [base_h], [base_w]
+        if self.decode_tile_mode == "geometry_experimental":
+            hs = range(base_h, base_h + 65, ratio)
+            ws = range(base_w, base_w + 65, ratio)
+        best = None
+        for th in hs:
+            yp = self._split_tiles(height, th, self.tile_sample_min_overlap_height)
+            for tw in ws:
+                xp = self._split_tiles(width, tw, self.tile_sample_min_overlap_width)
+                area = min(th, height) * min(tw, width)
+                count = len(yp[0]) * len(xp[0])
+                cost = count * area * (1.0 + area / (base_h * base_w))
+                key = (cost, th * tw, th, tw)
+                if best is None or key < best[0]:
+                    best = (key, yp, xp, th, tw, count)
+        _, yp, xp, th, tw, count = best
+        self.last_decode_tile_plan = {
+            "mode": self.decode_tile_mode,
+            "tile_height": th,
+            "tile_width": tw,
+            "spatial_tiles": count,
+            "height": height,
+            "width": width,
+            "pixel_exact_to_fixed": self.decode_tile_mode == "fixed",
+        }
+        return yp, xp
+
     def _encode_clip(self, x: mx.array) -> mx.array:
         """``x`` is channels-last ``(B, D, H, W, C)``."""
         if not self.use_tiling:
@@ -634,12 +672,7 @@ class VideoVAE(nn.Module):
             return self.decoder(self.post_quant_conv(z))
         ratio = self.config.spatial_compression_ratio
         h, w = z.shape[2] * ratio, z.shape[3] * ratio
-        y_idx, y_len, y_ov = self._split_tiles(
-            h, self.tile_sample_min_height, self.tile_sample_min_overlap_height
-        )
-        x_idx, x_len, x_ov = self._split_tiles(
-            w, self.tile_sample_min_width, self.tile_sample_min_overlap_width
-        )
+        (y_idx, y_len, y_ov), (x_idx, x_len, x_ov) = self.decode_tile_plan(h, w)
 
         tiles = [
             z[

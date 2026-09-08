@@ -134,6 +134,7 @@ class LTX25VideoDecoder:
         self.diffvae_query_chunk_size = diffvae_query_chunk_size
         self.diffvae_context_width_chunks = diffvae_context_width_chunks
         self.diffvae_stage4_tile_width = diffvae_stage4_tile_width
+        self._conv_acceleration = None
 
     def load(self):
         if self._decoder is not None:
@@ -187,6 +188,9 @@ class LTX25VideoDecoder:
         weights = remap_convolution_layout(decoder, weights)
         decoder.load_weights(list(weights.items()), strict=True)
         mx.eval(decoder.parameters())
+        from .conv_vae_acceleration import install_staged_conv3d
+
+        self._conv_acceleration = install_staged_conv3d(decoder)
         self._decoder = decoder
         _cleanup()
         return decoder
@@ -204,6 +208,7 @@ class LTX25VideoDecoder:
         audio_path: str | None = None,
     ) -> str:
         decoder = self.load()
+        is_diffusion = decoder.__class__.__name__ == "MLXDiffusionVideoDecoder"
         # ltx-core-mlx computes a conservative temporal tile from the actual
         # latent shape and streams completed RGB frames directly to ffmpeg. Keep
         # that bounded path visible in generation metadata instead of presenting
@@ -213,7 +218,6 @@ class LTX25VideoDecoder:
 
             from ltx_core_mlx.model.video_vae.video_vae import _compute_decode_tiling
 
-            is_diffusion = decoder.__class__.__name__ == "MLXDiffusionVideoDecoder"
             tiling = (
                 None
                 if is_diffusion
@@ -252,12 +256,26 @@ class LTX25VideoDecoder:
             }
         except (ImportError, AttributeError, TypeError, ValueError):
             self.last_decode_report = {"publication": "direct_ffmpeg_stream"}
-        decoder.decode_and_stream(
-            video_latent,
-            output_path,
-            frame_rate=frame_rate,
-            audio_path=audio_path,
-        )
+        if is_diffusion:
+            decoder.decode_and_stream(
+                video_latent,
+                output_path,
+                frame_rate=frame_rate,
+                audio_path=audio_path,
+            )
+        else:
+            from .conv_vae_acceleration import bounded_conv_workspace
+
+            with bounded_conv_workspace(self._conv_acceleration):
+                decoder.decode_and_stream(
+                    video_latent,
+                    output_path,
+                    frame_rate=frame_rate,
+                    audio_path=audio_path,
+                )
+            self.last_decode_report["conv3d_acceleration"] = (
+                self._conv_acceleration.as_dict() if self._conv_acceleration is not None else None
+            )
         return output_path
 
 

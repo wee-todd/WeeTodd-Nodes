@@ -31,3 +31,8 @@ algorithm_search_captures/
 .env.*
 !.env.example
 *.token
+
+# Local acceptance recipes contain machine paths and private input assets.
+/benchmarks/h3_acceptance/
+/benchmarks/ltx23_acceptance/
+/benchmarks/ltx25_acceptance/

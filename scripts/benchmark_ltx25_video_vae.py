@@ -161,7 +161,7 @@ def main() -> int:
         sampling_peak = 0
         audio_seconds = 0.0
 
-    decode_reports: dict[str, dict[str, float | int]] = {}
+    decode_reports: dict[str, dict[str, object]] = {}
     decode_targets = _decode_targets(args.decode_mode, args.conv_vae, args.diffusion_vae)
     for name, vae_path in decode_targets:
         decoder = LTX25VideoDecoder(
@@ -184,6 +184,7 @@ def main() -> int:
         decode_reports[name] = {
             "seconds": elapsed,
             "peak_bytes": int(mx.get_peak_memory()),
+            "runtime": decoder.last_decode_report,
         }
         decoder.free()
         mx.clear_cache()

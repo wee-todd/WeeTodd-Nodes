@@ -11,7 +11,7 @@ requires-python = ">=3.11"
 license = {file = "LICENSE"}
 authors = [{name = "wee-todd"}]
 dependencies = [
-  "mlx>=0.32.0",
+  "mlx>=0.32.2",
   "mlx-vlm>=0.4.4",
   "numpy>=1.26",
   "opencv-python-headless>=4.10",
@@ -25,8 +25,8 @@ convert = ["onnx==1.22.0"]
 docs = ["PyYAML>=6.0"]
 preview-ane = ["coremltools==9.0"]
 ltx = [
-  "ltx-core-mlx @ git+https://github.com/dgrauet/ltx-2-mlx.git@e1838a855bfd1640135c424c96cb27a0c0ad150e#subdirectory=packages/ltx-core-mlx",
-  "ltx-pipelines-mlx @ git+https://github.com/dgrauet/ltx-2-mlx.git@e1838a855bfd1640135c424c96cb27a0c0ad150e#subdirectory=packages/ltx-pipelines-mlx",
+  "ltx-core-mlx @ git+https://github.com/dgrauet/ltx-2-mlx.git@91e6f6c9bd621ff2ae31adfee643e113d67d6ae8#subdirectory=packages/ltx-core-mlx",
+  "ltx-pipelines-mlx @ git+https://github.com/dgrauet/ltx-2-mlx.git@91e6f6c9bd621ff2ae31adfee643e113d67d6ae8#subdirectory=packages/ltx-pipelines-mlx",
 ]
 
 [project.urls]

@@ -1,0 +1,5 @@
+integrated_multimodal_description: [Shot 1] Live-action cinematic realism in one continuous wide shot at a bright windswept beach. A black-and-white border collie sprints from left to right through shallow surf, leaps once, catches a red flying disc in midair, lands safely, and keeps running. The dog's markings and the red disc remain consistent. The camera pans quickly and smoothly to follow the dog without a cut, while waves roll diagonally behind it.
+
+overall_soundscape: Ocean waves and wind continue throughout. Rapid paw impacts splash in synchrony with the dog's stride, one larger splash coincides with takeoff, the dog gives one short bark immediately after catching the disc, and the landing produces a clear wet thump and spray.
+
+non_diegetic_music: N/A

@@ -26,6 +26,8 @@ from pathlib import Path
 import mlx.core as mx
 import numpy as np
 
+from wee_todd_mlx.numpy_import import adopt_numpy_array
+
 from .adaln import ModulationCache, drop_adaln_weights
 from .config import TAG_TEXT, TAG_VIDEO, PipelineConfig
 from .packing import (
@@ -91,7 +93,9 @@ def encode_keyframe_rows(
         pixels = (pixels / 255.0 - pixel_mean) / pixel_std
 
         # (1, 3, 1, H, W) -> channels-last for the spatial encoder.
-        moments = video_vae._encode_clip(mx.array(pixels).transpose(0, 2, 3, 4, 1))
+        moments = video_vae._encode_clip(
+            adopt_numpy_array(pixels).transpose(0, 2, 3, 4, 1)
+        )
         channels = cfg.latent_channels
         mean, logvar = moments[..., :channels], moments[..., channels:]
         logvar = mx.clip(logvar, -30.0, 20.0)
@@ -347,6 +351,7 @@ class MiniMaxH3Pipeline:
         initial_audio_latents: mx.array | None = None,
         refinement_strength: float = 1.0,
         preserve_initial_audio: bool = False,
+        fun_control=None,
     ) -> LatentResult:
         """Sample synchronized T2VA, FL2VA, or Ref2VA latents without loading a VAE."""
         run_started = time.perf_counter()
@@ -473,13 +478,14 @@ class MiniMaxH3Pipeline:
         if references:
             if keyframe_anchors:
                 raise ValueError("Ref2VA references cannot be combined with FL2VA keyframes.")
-            if condition_video_rows is None:
-                raise ValueError("Ref2VA requires encoded image or video reference rows.")
+            if condition_video_rows is None and condition_audio_rows is None:
+                raise ValueError("Ref2VA requires encoded image, video, or audio reference rows.")
             from .ref2va import validate_reference_set
 
             validate_reference_set(references, patch_size)
-            if condition_video_rows.ndim != 2 or int(condition_video_rows.shape[1]) != (
-                self.dit.config.video_patch_dim
+            if condition_video_rows is not None and (
+                condition_video_rows.ndim != 2
+                or int(condition_video_rows.shape[1]) != self.dit.config.video_patch_dim
             ):
                 raise ValueError("Ref2VA video rows must have shape (rows, video_patch_dim).")
             if condition_audio_rows is not None and (
@@ -489,7 +495,10 @@ class MiniMaxH3Pipeline:
                 raise ValueError("Ref2VA audio rows must have shape (rows, audio_latents_dim).")
             expected_video_rows = sum(reference.video_rows(patch_size) for reference in references)
             expected_audio_rows = sum(reference.audio_rows for reference in references)
-            if int(condition_video_rows.shape[0]) != expected_video_rows:
+            actual_video_rows = (
+                0 if condition_video_rows is None else int(condition_video_rows.shape[0])
+            )
+            if actual_video_rows != expected_video_rows:
                 raise ValueError(
                     "Ref2VA encoded video row count does not match the prepared references."
                 )
@@ -672,6 +681,18 @@ class MiniMaxH3Pipeline:
             audio_condition_strength,
         )
         self._ensure_cache(timestep_table, drop_adaln, verbose)
+        if fun_control is not None:
+            expected_control_shape = expected_initial_video_shape
+            if tuple(fun_control.latent.shape) != expected_control_shape:
+                raise ValueError(
+                    "H3 Fun control latent shape does not match the generation canvas: "
+                    f"expected {expected_control_shape}, got {tuple(fun_control.latent.shape)}"
+                )
+            fun_control.model.validate_base(self.dit)
+            schedule_key = tuple(round(float(value), 9) for value in timestep_table.tolist())
+            fun_control.model.prepare_modulation(
+                self.dit.embed_timesteps(timestep_table), schedule_key
+            )
         embeds = prompt_embeds.astype(mx.bfloat16)
 
         accelerators = sum(
@@ -799,6 +820,7 @@ class MiniMaxH3Pipeline:
                             step_index=index,
                             total_steps=total_steps,
                             diagnostics=diagnostics,
+                            fun_control=fun_control,
                         )
                     actual_transformer = not core_reuse and not replaying and (
                         hierarchical_blockcache

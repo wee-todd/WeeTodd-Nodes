@@ -39,6 +39,40 @@ def resolve_hires_canvas(
     return target_width, target_height
 
 
+def resolve_hires_maximum_canvas(
+    width: int,
+    height: int,
+    *,
+    multiple: int = 32,
+    max_dimension: int = 1920,
+    max_short_edge: int = 1088,
+) -> tuple[int, int]:
+    """Resolve the largest public H3 canvas for the source orientation.
+
+    This is deliberately an explicit ceiling mode rather than a claimed scale factor:
+    1344x768 cannot be enlarged by exactly 1.5x without exceeding the public
+    1920-pixel axis and 1088-pixel short-edge limits.
+    """
+    if width < multiple or height < multiple or width % multiple or height % multiple:
+        raise ValueError("H3 Hi Res Fix source dimensions must be positive multiples of 32.")
+    if max_dimension % multiple or max_short_edge % multiple:
+        raise ValueError("H3 Hi Res Fix public limits must be multiples of 32.")
+
+    if width > height:
+        target_width, target_height = max_dimension, max_short_edge
+    elif height > width:
+        target_width, target_height = max_short_edge, max_dimension
+    else:
+        target_width = target_height = max_short_edge
+
+    if target_width <= width or target_height <= height:
+        raise ValueError(
+            f"H3 Hi Res Fix maximum canvas {target_width}x{target_height} must enlarge "
+            f"the {width}x{height} source on both spatial axes."
+        )
+    return target_width, target_height
+
+
 def _validate_resize_request(
     latents: mx.array,
     target_height: int,
@@ -272,3 +306,56 @@ def resize_video_latents(
             f"Unsupported H3 latent resize method {method!r}. Select one of: {supported}."
         ) from error
     return resize(latents, target_height, target_width)
+
+
+def resize_fl2va_condition_rows(
+    rows: mx.array,
+    anchors: tuple[str | int, ...],
+    *,
+    source_height: int,
+    source_width: int,
+    target_height: int,
+    target_width: int,
+    method: str = "bilinear",
+    patch_size: tuple[int, int, int] = (1, 2, 2),
+    channels: int = 24,
+) -> mx.array:
+    """Resize packed FL2VA keyframe rows for a second-pass canvas.
+
+    Qwen vision embeddings are resolution-independent at this stage, but the video-VAE keyframe
+    rows are packed at the base latent geometry. They must be unpatched, resized, and repacked so
+    the second H3 layout has the expected row count.
+    """
+    from .packing import patchify_video_latents, unpatchify_video_tokens
+
+    if not anchors:
+        raise ValueError("FL2VA condition-row resize requires at least one keyframe anchor.")
+    _, patch_height, patch_width = patch_size
+    source_rows = (source_height // patch_height) * (source_width // patch_width)
+    expected = len(anchors) * source_rows
+    if rows.ndim != 2 or int(rows.shape[0]) != expected:
+        raise ValueError(
+            f"FL2VA source conditioning has {int(rows.shape[0]) if rows.ndim else 0} rows; "
+            f"expected {expected} for {len(anchors)} anchors."
+        )
+    resized_blocks = []
+    for index in range(len(anchors)):
+        block = rows[index * source_rows : (index + 1) * source_rows]
+        latent = unpatchify_video_tokens(
+            block,
+            1,
+            source_height,
+            source_width,
+            channels,
+            patch_size,
+        )
+        latent = resize_video_latents(
+            latent,
+            target_height,
+            target_width,
+            method=method,
+        )
+        resized_blocks.append(patchify_video_latents(latent, patch_size))
+    result = mx.concatenate(resized_blocks, axis=0)
+    mx.eval(result)
+    return result

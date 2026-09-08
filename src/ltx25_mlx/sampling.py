@@ -81,12 +81,17 @@ def euler_ancestral_denoise_loop(
     check_interrupted: Callable[[], None] | None = None,
     step_callback: Callable[[int, int], None] | None = None,
     evaluation_timing_callback: Callable[[int, float], None] | None = None,
+    freeze_audio: bool = False,
 ) -> LTX25DenoiseOutput:
     """Run the LTX 2.5 distilled ancestral stage over joint audio/video latents."""
     if video_state is None and audio_state is None:
         raise ValueError("LTX 2.5 sampling requires a video or audio latent state.")
     if len(sigmas) < 2:
         raise ValueError("LTX 2.5 sampling requires at least two sigma points.")
+    if freeze_audio and (
+        audio_state is None or not bool(mx.all(audio_state.denoise_mask == 0).item())
+    ):
+        raise ValueError("Frozen-audio refinement requires an audio state with an all-zero mask.")
 
     states = {"video": video_state, "audio": audio_state}
     video_uniform = video_state is None or _uniform(video_state.denoise_mask)
@@ -127,6 +132,9 @@ def euler_ancestral_denoise_loop(
             ("video", current_video, video_denoised),
             ("audio", current_audio, audio_denoised),
         ):
+            if modality == "audio" and freeze_audio:
+                # Keep cross-attention live, but do not consume RNG or step frozen audio.
+                continue
             if state is None or denoised is None:
                 continue
             clean_prediction = _masked_clean(denoised.astype(mx.float32), state)

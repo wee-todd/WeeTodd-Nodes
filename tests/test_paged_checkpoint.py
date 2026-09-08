@@ -88,6 +88,18 @@ def test_block_window_releases_after_cancellation_exception(tmp_path):
     assert store.active_page is None
 
 
+def test_store_loads_only_selected_block_pages(tmp_path):
+    manifest = convert_to_paged_checkpoint(_source(tmp_path), tmp_path / "paged")
+    store = PagedTensorStore(manifest)
+
+    values = store.load_blocks((1,))
+    mx.eval(values)
+
+    assert set(values) == {"blocks.1.attn.qkv_proj.weight"}
+    assert store.pages_loaded == 1
+    store.release()
+
+
 def test_manifest_rejects_a_modified_page(tmp_path):
     destination = tmp_path / "paged"
     manifest = convert_to_paged_checkpoint(_source(tmp_path), destination)
@@ -176,9 +188,7 @@ def test_paged_forward_and_modulation_cache_match_resident_model(tmp_path):
     )
     paged_dir = tmp_path / "paged"
     convert_to_paged_checkpoint(source, paged_dir)
-    paged = load_paged_dit(
-        paged_dir, window_size=2, verify_hashes=True, prefetch=True
-    )
+    paged = load_paged_dit(paged_dir, window_size=2, verify_hashes=True, prefetch=True)
 
     args = _tiny_inputs(config)
     resident_cache = ModulationCache.build(resident, args[3], dtype=mx.float32)
@@ -218,9 +228,7 @@ def test_paged_mpp_backend_wraps_each_materialized_bf16_block(tmp_path, monkeypa
     paged_dir = tmp_path / "paged"
     convert_to_paged_checkpoint(source, paged_dir)
     paged = load_paged_dit(paged_dir, window_size=2)
-    monkeypatch.setattr(
-        "minimax_h3_mlx.projection.mpp_capability", lambda: (True, None)
-    )
+    monkeypatch.setattr("minimax_h3_mlx.projection.mpp_capability", lambda: (True, None))
 
     report = configure_projection_backend(paged, "mpp_experimental")
     with paged.paged_blocks.window(0) as blocks:
@@ -235,9 +243,7 @@ def test_paged_mpp_backend_wraps_each_materialized_bf16_block(tmp_path, monkeypa
     paged.paged_blocks.close()
 
 
-def test_paged_transformer_prefetch_defaults_off_and_can_use_environment(
-    tmp_path, monkeypatch
-):
+def test_paged_transformer_prefetch_defaults_off_and_can_use_environment(tmp_path, monkeypatch):
     config = _tiny_dit_config()
     mx.random.seed(14)
     resident = MiniMaxH3DiT(config)
@@ -345,3 +351,47 @@ def test_paged_block_lora_matches_resident_adapter(tmp_path):
     np.testing.assert_array_equal(np.asarray(actual_video), np.asarray(expected_video))
     np.testing.assert_array_equal(np.asarray(actual_audio), np.asarray(expected_audio))
     assert paged.paged_blocks.report()["lora_count"] == 1
+
+    from minimax_h3_mlx.adaln import drop_adaln_weights
+
+    drop_adaln_weights(paged)
+    assert paged.paged_blocks.skip_adaln
+    opens = paged.paged_blocks.adapter_file_opens
+    skipped = paged(*args, modulation_cache=paged_cache)
+    mx.eval(skipped)
+    np.testing.assert_array_equal(np.asarray(skipped[0]), np.asarray(expected_video))
+    np.testing.assert_array_equal(np.asarray(skipped[1]), np.asarray(expected_audio))
+    assert paged.paged_blocks.adaln_bytes_avoided > 0
+    assert paged.paged_blocks.adapter_file_opens - opens == (config.num_layers + 1) // 2
+    rebuilt = ModulationCache.build(paged, args[3], dtype=mx.float32)
+    assert not paged.paged_blocks.skip_adaln
+    for old, new in zip(paged_cache.tables, rebuilt.tables, strict=True):
+        for a, b in zip(old, new, strict=True):
+            np.testing.assert_array_equal(np.asarray(a), np.asarray(b))
+
+
+def test_explicit_resident_materialization_preserves_paged_weights_and_forward(tmp_path):
+    from minimax_h3_mlx.paged_checkpoint import materialize_paged_blocks
+
+    config = _tiny_dit_config()
+    source = tmp_path / "resident-source"
+    source.mkdir()
+    model = MiniMaxH3DiT(config)
+    (source / "config.json").write_text(json.dumps(asdict(config)))
+    mx.save_safetensors(str(source / "model.safetensors"), dict(tree_flatten(model.parameters())))
+    convert_to_paged_checkpoint(source, tmp_path / "resident-paged")
+    paged = load_paged_dit(tmp_path / "resident-paged", window_size=2)
+    args = _tiny_inputs(config)
+    expected = paged(*args)
+    mx.eval(expected)
+    pager = paged.paged_blocks
+    report = materialize_paged_blocks(paged)
+    assert paged.paged_blocks is None
+    assert len(paged.blocks) == config.num_layers
+    assert report["materialized_blocks"] == config.num_layers
+    assert report["weight_bytes"] > 0
+    loaded = pager.store.pages_loaded
+    actual = paged(*args)
+    for a, b in zip(actual, expected, strict=True):
+        assert mx.array_equal(a, b).item()
+    assert pager.store.pages_loaded == loaded

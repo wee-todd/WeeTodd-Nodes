@@ -1,0 +1,5 @@
+integrated_multimodal_description: [Shot 1] Live-action cinematic realism in one unbroken medium close shot. A barista in a dark green apron stands behind a warm wooden cafe counter, looks directly toward a waiting customer beside the camera, places a ceramic cup on its saucer without spilling, and clearly says, "Your coffee is ready." Her face, hands, apron, cup, and counter remain consistent. The camera makes a very slow push in and does not cut.
+
+overall_soundscape: Natural cafe room tone continues throughout. The cup makes one distinct ceramic clink when it touches the saucer. A milk steamer hisses softly in the background. The barista's spoken sentence is clean, intelligible, synchronized to her mouth, and not overlapped by other voices.
+
+non_diegetic_music: N/A

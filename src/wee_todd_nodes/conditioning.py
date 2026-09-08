@@ -9,6 +9,7 @@ from pathlib import Path
 from threading import RLock
 from typing import Any
 
+from .phase_memory import measured_phase
 from .preflight import H3ComponentSetSpec
 
 
@@ -83,6 +84,8 @@ class H3Conditioning:
     references: tuple[Any, ...] = ()
     visual_condition_strength: float = 0.999
     audio_condition_strength: float = 1.0
+    cache_report: dict[str, Any] | None = None
+    phase_memory: dict[str, Any] | None = None
 
 
 EncoderFactory = Callable[[H3TextEncoderSpec], Any]
@@ -119,6 +122,7 @@ class H3TextEncoderCache:
         with self._lock:
             return self._spec
 
+    @measured_phase("text_encoder")
     def encode(
         self,
         spec: H3TextEncoderSpec,
@@ -129,6 +133,7 @@ class H3TextEncoderCache:
         task: str = "t2va",
         unload_after: bool = True,
         prepare_stage: Callable[[], None] | None = None,
+        cache_directory: str | Path | None = None,
     ) -> H3Conditioning:
         if not isinstance(prompt, str) or not prompt.strip():
             raise ValueError("Prompt must contain text.")
@@ -136,6 +141,38 @@ class H3TextEncoderCache:
         if prepare_stage is not None:
             prepare_stage()
         with self._lock:
+            cache_report = {"status": "disabled"}
+            key = None
+            if (
+                cache_directory is not None
+                and images is None
+                and references is None
+                and not spec.load_vision
+            ):
+                from .conditioning_cache import cache_key, read_features
+
+                try:
+                    key = cache_key(spec, prompt, task)
+                    cached = read_features(cache_directory, key)
+                    cache_report = {"status": "hit" if cached is not None else "miss", "key": key}
+                    if cached is not None:
+                        if unload_after:
+                            self._release_locked()
+                        embeddings, token_tags = cached
+                        return H3Conditioning(
+                            embeddings,
+                            token_tags,
+                            int(token_tags.shape[0]),
+                            prompt,
+                            spec.load_vision,
+                            spec,
+                            task=task,
+                            cache_report=cache_report,
+                        )
+                except (OSError, ValueError, RuntimeError) as exc:
+                    cache_report = {"status": "read_error", "error": type(exc).__name__}
+            elif cache_directory is not None:
+                cache_report = {"status": "bypass_media"}
             if self._encoder is None or self._spec != spec:
                 self._release_locked()
                 self._encoder = self._factory(spec)
@@ -144,9 +181,7 @@ class H3TextEncoderCache:
                 if images is None and references is None:
                     embeddings, token_tags = self._encoder.encode(prompt)
                 elif references is not None:
-                    embeddings, token_tags = self._encoder.encode(
-                        prompt, references=references
-                    )
+                    embeddings, token_tags = self._encoder.encode(prompt, references=references)
                 else:
                     embeddings, token_tags = self._encoder.encode(prompt, images)
                 # Materialize the only live outputs before dropping the encoder. Otherwise MLX's
@@ -169,7 +204,15 @@ class H3TextEncoderCache:
                     encoder_spec=spec,
                     paging_report=pager.report() if pager is not None else None,
                     task=task,
+                    cache_report=cache_report,
                 )
+                if key is not None:
+                    from .conditioning_cache import write_features
+
+                    try:
+                        write_features(cache_directory, key, embeddings, token_tags)
+                    except (OSError, ValueError, RuntimeError) as exc:
+                        cache_report["write_error"] = type(exc).__name__
             except BaseException:
                 self._release_locked()
                 raise

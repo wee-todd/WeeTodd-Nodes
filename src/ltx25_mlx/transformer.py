@@ -18,6 +18,9 @@ import mlx.nn as nn
 import numpy as np
 from safetensors import safe_open
 
+from wee_todd_mlx.adapter_contract import inspect_adapter
+from wee_todd_mlx.numpy_import import adopt_numpy_array
+
 
 class _BiasFreeFeedForward(nn.Module):
     """LTX 2.5 video GELU feed-forward network without projection biases."""
@@ -213,7 +216,7 @@ def precompute_rope_freqs_float64(
     count = inner_dim // (2 * num_pos_dims)
     powers = np.linspace(0.0, 1.0, count, dtype=np.float64)
     indices = np.power(theta, powers) * (math.pi / 2.0)
-    freqs = compute_freqs(mx.array(indices.astype(np.float32)), positions, max_pos)
+    freqs = compute_freqs(adopt_numpy_array(indices, dtype=np.float32), positions, max_pos)
     batch, tokens, frequency_count = freqs.shape
     if rope_type == "interleaved":
         cos_f = mx.repeat(mx.cos(freqs), 2, axis=-1)
@@ -283,6 +286,129 @@ def transformer_metadata(path: str | Path) -> dict[str, Any]:
     return decoded
 
 
+_LTX25_CANONICAL_IC_TARGETS = {
+    f"transformer_blocks.{block}.{target}"
+    for block in range(48)
+    for target in (
+        "attn1.to_k",
+        "attn1.to_out",
+        "attn1.to_q",
+        "attn1.to_v",
+        "attn2.to_k",
+        "attn2.to_out",
+        "attn2.to_q",
+        "attn2.to_v",
+        "ff.proj_in",
+        "ff.proj_out",
+    )
+}
+
+_LTX25_NON_BLOCK_LORA_TARGETS = {
+    *(f"{prefix}.emb.timestep_embedder.linear{index}" for prefix in (
+        "adaln_single",
+        "audio_adaln_single",
+        "audio_prompt_adaln_single",
+        "av_ca_a2v_gate_adaln_single",
+        "av_ca_audio_scale_shift_adaln_single",
+        "av_ca_v2a_gate_adaln_single",
+        "av_ca_video_scale_shift_adaln_single",
+        "prompt_adaln_single",
+    ) for index in (1, 2)),
+    *(f"{prefix}.linear" for prefix in (
+        "adaln_single",
+        "audio_adaln_single",
+        "audio_prompt_adaln_single",
+        "av_ca_a2v_gate_adaln_single",
+        "av_ca_audio_scale_shift_adaln_single",
+        "av_ca_v2a_gate_adaln_single",
+        "av_ca_video_scale_shift_adaln_single",
+        "prompt_adaln_single",
+    )),
+    "audio_patchify_proj",
+    "audio_proj_out",
+    "patchify_proj",
+    "proj_out",
+}
+
+
+def _normalize_ltx25_adapter_target(target: str) -> str | None:
+    mapped = remap_comfy_transformer_key(target + ".weight")
+    return mapped.removesuffix(".weight") if mapped is not None else None
+
+
+def _ltx25_auxiliary_names() -> set[str]:
+    return {
+        prefix + name
+        for prefix in (
+            "diffusion_model.reference_slot_embedding.",
+            "reference_slot_embedding.",
+        )
+        for name in _LTX25_MSR_SLOT_SHAPES
+    }
+
+
+def _inspect_ltx25_adapter_contract(path: Path) -> dict[str, Any]:
+    return inspect_adapter(
+        path,
+        target_normalizer=_normalize_ltx25_adapter_target,
+        allowed_auxiliary_names=_ltx25_auxiliary_names(),
+    )
+
+
+def _structural_ltx25_adapter_family(
+    *,
+    is_msr: bool,
+    downscale: int,
+    temporal_scale: int,
+    spatial_scale: int | None,
+    adapter_ranks: set[int],
+    adapter_targets: set[str],
+) -> tuple[str, str]:
+    """Classify released task adapters without trusting their filenames."""
+    if is_msr:
+        return "multi_subject_reference", "learned Fourier reference-slot tensors"
+    if spatial_scale is not None:
+        return "pixel_spatial_upscaler", "explicit reference_spatial_scale_factor metadata"
+    complete_48_block_layout = adapter_targets == _LTX25_CANONICAL_IC_TARGETS
+    signature = (downscale, temporal_scale, tuple(sorted(adapter_ranks)))
+    if complete_48_block_layout and signature == (1, 1, (32,)):
+        return "crossview_warp", "48-block target/rank/reference-scale fingerprint"
+    if complete_48_block_layout and signature == (1, 1, (128,)):
+        return "ingredients_reference_sheet", "48-block target/rank/reference-scale fingerprint"
+    if complete_48_block_layout and signature == (2, 1, (64,)):
+        return "union_control", "48-block target/rank/reference-scale fingerprint"
+    if complete_48_block_layout and signature == (2, 1, (32,)):
+        return "motion_track", "48-block target/rank/reference-scale fingerprint"
+    return "unclassified_reference_conditioning", "insufficient structural task evidence"
+
+
+def _declared_ltx25_adapter_family(metadata: dict[str, str]) -> str | None:
+    raw = metadata.get("weetodd_adapter_family") or metadata.get("adapter_family")
+    if raw in (None, ""):
+        return None
+    normalized = str(raw).strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "crossview": "crossview_warp",
+        "crossview_warp": "crossview_warp",
+        "ingredients": "ingredients_reference_sheet",
+        "ingredients_reference_sheet": "ingredients_reference_sheet",
+        "motion_track": "motion_track",
+        "motion_tracking": "motion_track",
+        "union": "union_control",
+        "union_control": "union_control",
+        "pixel_spatial": "pixel_spatial_upscaler",
+        "pixel_spatial_upscaler": "pixel_spatial_upscaler",
+        "msr": "multi_subject_reference",
+        "multi_subject_reference": "multi_subject_reference",
+    }
+    if normalized not in aliases:
+        raise ValueError(
+            "LTX 2.5 LoRA declares an unsupported adapter_family metadata value: "
+            f"{raw!r}."
+        )
+    return aliases[normalized]
+
+
 def inspect_ltx25_lora(path: str | Path) -> dict[str, Any]:
     """Validate an LTX 2.5-compatible LoRA header without materializing tensors.
 
@@ -294,10 +420,9 @@ def inspect_ltx25_lora(path: str | Path) -> dict[str, Any]:
     source = Path(path).expanduser()
     if not source.is_file() or source.suffix != ".safetensors":
         raise FileNotFoundError(f"LTX 2.5 LoRA is not a safetensors file: {source}")
-    with safe_open(source, framework="numpy") as handle:
-        metadata = handle.metadata() or {}
-        keys = list(handle.keys())
-        shapes = {key: tuple(handle.get_slice(key).get_shape()) for key in keys}
+    contract = _inspect_ltx25_adapter_contract(source)
+    metadata = contract["metadata"]
+    keys = [*contract["auxiliary_tensors"]]
     msr_slot_prefix = next(
         (
             prefix
@@ -317,7 +442,7 @@ def inspect_ltx25_lora(path: str | Path) -> dict[str, Any]:
         if version_match
         else None
     )
-    if (version is None and not is_msr) or (version is not None and version < (2, 3)):
+    if version is not None and version < (2, 3):
         raise ValueError(
             "The selected LoRA does not declare a supported LTX 2.3-or-newer model version; "
             f"model_version={model_version!r}."
@@ -332,55 +457,86 @@ def inspect_ltx25_lora(path: str | Path) -> dict[str, Any]:
         raise ValueError("LTX 2.5 LoRA has an invalid reference temporal scale factor.") from exc
     if downscale < 1 or temporal_scale < 1:
         raise ValueError("LTX 2.5 IC-LoRA reference scale factors must be positive.")
-    a_keys = [key for key in keys if key.endswith(".lora_A.weight")]
-    b_keys = [key for key in keys if key.endswith(".lora_B.weight")]
-    pairs = len(a_keys)
-    if pairs == 0 or pairs != len(b_keys):
-        raise ValueError("LTX 2.5 LoRA does not contain balanced A/B adapter pairs.")
-    adapter_ranks: set[int] = set()
+    pairs = len(contract["pairs"])
+    adapter_ranks = set(contract["ranks"])
     incompatible_targets: list[str] = []
-    for a_key in a_keys:
-        stem = a_key.removesuffix(".lora_A.weight")
-        b_key = stem + ".lora_B.weight"
-        if b_key not in shapes:
+    adapter_targets = {pair["normalized_target"] for pair in contract["pairs"]}
+    for pair in contract["pairs"]:
+        stem = pair["target"]
+        target = pair["normalized_target"] + ".weight"
+        expected = _ltx25_bridge_target_shape(target)
+        if expected is None and pair["normalized_target"] not in _LTX25_NON_BLOCK_LORA_TARGETS:
             incompatible_targets.append(stem)
-            continue
-        a_shape = shapes[a_key]
-        b_shape = shapes[b_key]
-        if len(a_shape) != 2 or len(b_shape) != 2 or a_shape[0] != b_shape[1]:
-            incompatible_targets.append(stem)
-            continue
-        adapter_ranks.add(int(a_shape[0]))
-        if version is None or version < (2, 5):
-            target = remap_comfy_transformer_key(stem + ".weight")
-            expected = _ltx25_bridge_target_shape(target)
-            actual = (int(b_shape[0]), int(a_shape[1]))
+        elif version is None or version < (2, 5):
+            actual = tuple(pair["logical_shape"])
             if expected is None or actual != expected:
                 incompatible_targets.append(stem)
     if incompatible_targets:
         examples = ", ".join(incompatible_targets[:3])
         raise ValueError(
-            "The older LTX LoRA does not match the supported LTX 2.5 22B transformer "
+            "The metadata-free or older LTX LoRA does not match the supported LTX 2.5 22B "
+            "transformer "
             f"targets; incompatible targets include: {examples}."
         )
+    spatial_scale = None
+    if metadata.get("reference_spatial_scale_factor") not in (None, ""):
+        try:
+            spatial_scale = int(metadata["reference_spatial_scale_factor"])
+        except (TypeError, ValueError) as exc:
+            raise ValueError("LTX 2.5 LoRA has an invalid reference spatial scale factor.") from exc
+    adapter_family, classification_basis = _structural_ltx25_adapter_family(
+        is_msr=is_msr,
+        downscale=downscale,
+        temporal_scale=temporal_scale,
+        adapter_ranks=adapter_ranks,
+        adapter_targets=adapter_targets,
+        spatial_scale=spatial_scale,
+    )
+    declared_family = _declared_ltx25_adapter_family(metadata)
+    if declared_family is not None:
+        if (
+            adapter_family != "unclassified_reference_conditioning"
+            and adapter_family != declared_family
+        ):
+            raise ValueError(
+                "LTX 2.5 LoRA adapter_family metadata conflicts with its structural task "
+                f"signature: declared {declared_family}, detected {adapter_family}."
+            )
+        adapter_family = declared_family
+        classification_basis = "explicit adapter_family checkpoint metadata"
+    family_scales = {
+        "crossview_warp": (1, 1),
+        "ingredients_reference_sheet": (1, 1),
+        "motion_track": (2, 1),
+        "union_control": (2, 1),
+        "pixel_spatial_upscaler": (2, 1),
+        "multi_subject_reference": (1, 1),
+    }
+    expected_scales = family_scales.get(adapter_family)
+    if expected_scales is not None and (downscale, temporal_scale) != expected_scales:
+        raise ValueError(
+            f"LTX 2.5 {adapter_family} requires reference scale factors "
+            f"{expected_scales}; found {(downscale, temporal_scale)}."
+        )
+    if adapter_family == "pixel_spatial_upscaler" and spatial_scale != 2:
+        raise ValueError("LTX 2.5 Pixel-Spatial adapter requires spatial scale factor 2.")
     compatibility = (
         "native_ltx_2_5_msr_slot_contract"
         if is_msr and version is None
+        else "ltx_2_3_22b_crossview_bridge"
+        if adapter_family == "crossview_warp" and (version is None or version < (2, 5))
         else "native_ltx_2_5"
-        if version >= (2, 5)
+        if version is not None and version >= (2, 5)
+        else "structural_ltx_2_5_22b"
+        if version is None
         else "ltx_2_3_22b_bridge"
     )
-    source_name = source.name.lower()
-    if is_msr:
-        adapter_family = "multi_subject_reference"
-    elif "union-control" in source_name:
-        adapter_family = "union_control"
-    elif "motion-track" in source_name:
-        adapter_family = "motion_track"
-    elif "ingredients" in source_name:
-        adapter_family = "ingredients_reference_sheet"
-    else:
-        adapter_family = "task_specific" if "reference_downscale_factor" in metadata else "standard"
+    if not is_msr and "reference_downscale_factor" not in metadata:
+        adapter_family = "standard"
+        classification_basis = "no task-conditioning metadata or auxiliary tensors"
+    scaling = contract["declared_scaling"]
+    global_rank = scaling["rank"]
+    global_alpha = scaling["alpha"]
     return {
         "path": source,
         "model_version": model_version,
@@ -388,15 +544,23 @@ def inspect_ltx25_lora(path: str | Path) -> dict[str, Any]:
         "reference_temporal_scale_factor": temporal_scale,
         "adapter_pairs": pairs,
         "adapter_ranks": sorted(adapter_ranks),
+        "pair_schemas": contract["pair_schemas"],
+        "target_fingerprint": contract["target_fingerprint"],
+        "normalized_target_count": len(adapter_targets),
         "compatibility": compatibility,
         "compatibility_basis": (
             "declared LTX 2.5 adapter"
             if compatibility == "native_ltx_2_5"
+            else "exact 48-block, 480-pair rank-32 LTX 2.5 target contract"
+            if compatibility == "ltx_2_3_22b_crossview_bridge"
             else "exact LTX 2.5 MSR learned-slot and 22B transformer target contract"
             if compatibility == "native_ltx_2_5_msr_slot_contract"
+            else "exact supported LTX 2.5 22B target names and tensor shapes"
+            if compatibility == "structural_ltx_2_5_22b"
             else "LTX 2.3-or-newer block targets and tensor shapes match the LTX 2.5 22B layout"
         ),
         "adapter_family": adapter_family,
+        "classification_basis": classification_basis,
         "adapter_role": (
             "ic_lora"
             if is_msr or "reference_downscale_factor" in metadata
@@ -404,13 +568,22 @@ def inspect_ltx25_lora(path: str | Path) -> dict[str, Any]:
         ),
         "ic_lora_task": (
             "pixel_spatial_upscaler"
-            if "reference_spatial_scale_factor" in metadata
+            if adapter_family == "pixel_spatial_upscaler"
             else "multi_subject_reference"
             if is_msr
             else ("reference_conditioning" if "reference_downscale_factor" in metadata else None)
         ),
-        "lora_rank": int(metadata["lora_rank"]) if metadata.get("lora_rank") else None,
-        "lora_alpha": int(metadata["lora_alpha"]) if metadata.get("lora_alpha") else None,
+        "lora_rank": global_rank,
+        "lora_alpha": global_alpha,
+        "scaling_convention": (
+            "per_target_alpha_over_pair_rank"
+            if any(pair["alpha_tensor"] for pair in contract["pairs"])
+            else "global_alpha_over_global_rank"
+            if global_alpha is not None and global_rank is not None
+            else "global_alpha_over_pair_rank"
+            if global_alpha is not None
+            else "unit"
+        ),
         "bytes": source.stat().st_size,
     }
 
@@ -554,7 +727,15 @@ def remap_comfy_transformer_key(key: str) -> str | None:
     are excluded here and loaded with the Gemma feature extractor so staged
     unloading can release the language model before sampling.
     """
-    for prefix in ("model.diffusion_model.", "diffusion_model.", "transformer."):
+    for prefix in (
+        "base_model.model.model.diffusion_model.",
+        "base_model.model.diffusion_model.",
+        "base_model.model.transformer.",
+        "base_model.model.",
+        "model.diffusion_model.",
+        "diffusion_model.",
+        "transformer.",
+    ):
         if key.startswith(prefix):
             key = key.removeprefix(prefix)
             break
@@ -584,20 +765,173 @@ def remap_comfy_transformer_weights(weights: dict[str, mx.array]) -> dict[str, m
     return mapped
 
 
-def _remap_comfy_lora_weights(weights: dict[str, mx.array]) -> dict[str, mx.array]:
+def _ltx25_lora_pair_scale(
+    pair: dict[str, Any],
+    report: dict[str, Any],
+    weights: dict[str, mx.array],
+) -> float:
+    """Resolve one adapter pair's baked scale without guessing exporter semantics."""
+    scale = 1.0
+    if pair.get("alpha_tensor"):
+        scale = float(weights[pair["alpha_tensor"]].item()) / int(pair["rank"])
+    elif report.get("lora_alpha") is not None:
+        declared_rank = report.get("lora_rank") or pair["rank"]
+        scale = float(report["lora_alpha"]) / float(declared_rank)
+    if not math.isfinite(scale) or scale < 0:
+        raise ValueError(f"Invalid LTX 2.5 LoRA scaling for target: {pair['target']}")
+    return scale
+
+
+def _remap_comfy_lora_weights(
+    weights: dict[str, mx.array],
+    *,
+    contract: dict[str, Any] | None = None,
+    report: dict[str, Any] | None = None,
+) -> dict[str, mx.array]:
+    """Normalize supported source pair schemas to the MLX loader's A/B layout."""
+    if contract is None:
+        suffixes = (
+            (".lora_A.turbo.weight", "a"),
+            (".lora_B.turbo.weight", "b"),
+            (".lora_A.default.weight", "a"),
+            (".lora_B.default.weight", "b"),
+            (".lora_A.weight", "a"),
+            (".lora_B.weight", "b"),
+            (".lora_down.weight", "a"),
+            (".lora_up.weight", "b"),
+            (".lora_a.weight", "a"),
+            (".lora_b.weight", "b"),
+        )
+        groups: dict[str, dict[str, str]] = {}
+        for key in weights:
+            for suffix, side in suffixes:
+                if key.endswith(suffix):
+                    groups.setdefault(key[: -len(suffix)], {})[side] = key
+                    break
+        pairs = [
+            {
+                "target": target,
+                "normalized_target": _normalize_ltx25_adapter_target(target),
+                "a": group["a"],
+                "b": group["b"],
+                "rank": int(weights[group["a"]].shape[0]),
+                "alpha_tensor": None,
+            }
+            for target, group in sorted(groups.items())
+            if set(group) == {"a", "b"}
+        ]
+    else:
+        pairs = contract["pairs"]
     mapped: dict[str, mx.array] = {}
-    for key, value in weights.items():
-        if key.startswith(
-            (
-                "diffusion_model.reference_slot_embedding.",
-                "reference_slot_embedding.",
-            )
-        ):
+    for pair in pairs:
+        target = pair["normalized_target"]
+        if target is None:
             continue
-        mapped_key = remap_comfy_transformer_key(key)
-        if mapped_key is not None:
-            mapped[mapped_key] = value
+        scale = (
+            _ltx25_lora_pair_scale(pair, report, weights)
+            if report is not None
+            else 1.0
+        )
+        mapped[target + ".lora_A.weight"] = weights[pair["a"]]
+        b = weights[pair["b"]]
+        mapped[target + ".lora_B.weight"] = b if scale == 1.0 else b * scale
     return mapped
+
+
+class _NormalizedLTX25BlockLoraSource:
+    """Lazy normalized adapter source for the low-RAM block streamer.
+
+    The safetensors payload remains memory mapped. Only pairs for the block
+    currently being bound are exposed to the upstream fusion hook, and source
+    alpha conventions are applied to B without writing a converted checkpoint.
+    """
+
+    def __init__(
+        self,
+        path: Path,
+        *,
+        strength: float,
+        report: dict[str, Any] | None = None,
+    ) -> None:
+        self.path = Path(path)
+        self.strength = float(strength)
+        self.report = report if report is not None else inspect_ltx25_lora(self.path)
+        self.contract = _inspect_ltx25_adapter_contract(self.path)
+        self._weights = dict(mx.load(str(self.path)))
+        self._block_pairs: dict[int, list[tuple[str, dict[str, Any]]]] = {}
+        self._non_block_pairs: list[tuple[str, dict[str, Any]]] = []
+        for pair in self.contract["pairs"]:
+            target = pair["normalized_target"]
+            match = re.fullmatch(r"transformer_blocks\.(\d+)\.(.+)", target)
+            if match is None:
+                self._non_block_pairs.append((target, pair))
+            else:
+                self._block_pairs.setdefault(int(match.group(1)), []).append(
+                    (match.group(2), pair)
+                )
+
+    def has_block(self, block_idx: int) -> bool:
+        return bool(self._block_pairs.get(block_idx))
+
+    def _normalized_pair(self, target: str, pair: dict[str, Any]) -> dict[str, mx.array]:
+        scale = _ltx25_lora_pair_scale(pair, self.report, self._weights)
+        a = self._weights[pair["a"]]
+        b = self._weights[pair["b"]]
+        return {
+            target + ".lora_A.weight": a,
+            target + ".lora_B.weight": b if scale == 1.0 else b * scale,
+        }
+
+    def get_block_lora_dict(self, block_idx: int) -> dict[str, mx.array]:
+        result: dict[str, mx.array] = {}
+        for target, pair in self._block_pairs.get(block_idx, ()):
+            result.update(self._normalized_pair(target, pair))
+        return result
+
+    def get_non_block_lora_dict(self) -> dict[str, mx.array]:
+        result: dict[str, mx.array] = {}
+        for target, pair in self._non_block_pairs:
+            result.update(self._normalized_pair(target, pair))
+        return result
+
+    def validate_targets(self, streamer, fixed_weights: dict[str, mx.array]) -> None:
+        """Fail before sampling if any normalized target is absent from the base."""
+        missing = []
+        for index, pairs in self._block_pairs.items():
+            try:
+                available = set(streamer.block_keys(index))
+            except KeyError:
+                missing.extend(
+                    f"transformer_blocks.{index}.{target}.weight" for target, _ in pairs
+                )
+                continue
+            missing.extend(
+                f"transformer_blocks.{index}.{target}.weight"
+                for target, _ in pairs
+                if target + ".weight" not in available
+            )
+        missing.extend(
+            target + ".weight"
+            for target, _ in self._non_block_pairs
+            if target + ".weight" not in fixed_weights
+        )
+        if missing:
+            raise ValueError(
+                "LTX 2.5 LoRA targets are not present in the selected transformer: "
+                + ", ".join(sorted(missing)[:3])
+            )
+
+    def close(self) -> None:
+        self._weights = {}
+        self._block_pairs = {}
+        self._non_block_pairs = []
+
+
+def _load_normalized_ltx25_lora(path: Path) -> tuple[dict[str, mx.array], dict[str, Any]]:
+    report = inspect_ltx25_lora(path)
+    contract = _inspect_ltx25_adapter_contract(path)
+    weights = dict(mx.load(str(path)))
+    return _remap_comfy_lora_weights(weights, contract=contract, report=report), report
 
 
 def _fuse_non_block_loras(
@@ -643,8 +977,20 @@ def _load_resident_transformer_with_loras(
 
     loaded_loras = []
     for path, strength in loras:
-        remapped = _remap_comfy_lora_weights(dict(mx.load(str(path))))
+        remapped, _report = _load_normalized_ltx25_lora(path)
         loaded_loras.append((remapped, float(strength)))
+    for remapped, _strength in loaded_loras:
+        requested_weights = {
+            key.removesuffix(".lora_A.weight") + ".weight"
+            for key in remapped
+            if key.endswith(".lora_A.weight")
+        }
+        missing = sorted(requested_weights - set(weights))
+        if missing:
+            raise ValueError(
+                "LTX 2.5 LoRA targets are not present in the selected transformer: "
+                + ", ".join(missing[:3])
+            )
 
     model.load_weights(_fuse_non_block_loras(weights, loaded_loras), strict=False)
 
@@ -908,8 +1254,7 @@ def load_ltx25_transformer(
                 "Paged LTX 2.5 transformer checkpoints require low_ram_streaming=true."
             )
     resolved_loras = tuple((Path(item).expanduser(), float(strength)) for item, strength in loras)
-    for lora_path, _strength in resolved_loras:
-        inspect_ltx25_lora(lora_path)
+    lora_reports = [inspect_ltx25_lora(lora_path) for lora_path, _ in resolved_loras]
     config = LTX25TransformerConfig.from_metadata(transformer_metadata(source))
     model = LTX25Model.build(config)
     if paged_manifest is None:
@@ -922,11 +1267,7 @@ def load_ltx25_transformer(
     if not weights:
         raise ValueError(f"LTX 2.5 transformer {source} has no recognized weights.")
     if low_ram_streaming:
-        from ltx_core_mlx.loader.block_streaming import BlockLoraSource, StreamingLTXModel
-        from ltx_core_mlx.loader.sd_ops import (
-            LTXV_LORA_BLOCK_PREFIX,
-            LTXV_LORA_COMFY_RENAMING_MAP,
-        )
+        from ltx_core_mlx.loader.block_streaming import StreamingLTXModel
 
         streaming_window = _streaming_window_from_environment(paged=paged_manifest is not None)
         model.transformer_blocks = [model.transformer_blocks[0]]
@@ -937,9 +1278,28 @@ def load_ltx25_transformer(
             )
             quantization_weights = {**weights, **first_page}
         apply_quantization(model, quantization_weights)
+        lora_sources = [
+            _NormalizedLTX25BlockLoraSource(
+                lora_path,
+                strength=strength,
+                report=report,
+            )
+            for (lora_path, strength), report in zip(
+                resolved_loras, lora_reports, strict=True
+            )
+        ]
+        streamer = _OfficialComfyBlockStreamer(block_sources, paged_manifest=paged_manifest)
+        try:
+            for lora_source in lora_sources:
+                lora_source.validate_targets(streamer, weights)
+        except Exception:
+            for lora_source in lora_sources:
+                lora_source.close()
+            streamer.close()
+            raise
         loaded_non_block_loras = [
-            (_remap_comfy_lora_weights(dict(mx.load(str(path)))), strength)
-            for path, strength in resolved_loras
+            (lora_source.get_non_block_lora_dict(), lora_source.strength)
+            for lora_source in lora_sources
         ]
         model.load_weights(
             _fuse_non_block_loras(weights, loaded_non_block_loras),
@@ -952,16 +1312,6 @@ def load_ltx25_transformer(
                 first_block,
                 *(copy.deepcopy(first_block) for _ in range(streaming_window - 1)),
             ]
-        lora_sources = [
-            BlockLoraSource(
-                lora_path,
-                block_prefix=LTXV_LORA_BLOCK_PREFIX,
-                strength=strength,
-                sd_ops=LTXV_LORA_COMFY_RENAMING_MAP,
-            )
-            for lora_path, strength in resolved_loras
-        ]
-        streamer = _OfficialComfyBlockStreamer(block_sources, paged_manifest=paged_manifest)
         if streaming_window == 1:
             model = StreamingLTXModel(model, streamer, lora_sources=lora_sources)
         else:
@@ -971,6 +1321,8 @@ def load_ltx25_transformer(
                 window=streaming_window,
                 lora_sources=lora_sources,
             )
+        object.__setattr__(model, "_weetodd_streamer", streamer)
+        object.__setattr__(model, "_weetodd_lora_sources", tuple(lora_sources))
         if paged_manifest is not None:
             object.__setattr__(
                 model,

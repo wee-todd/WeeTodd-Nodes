@@ -240,15 +240,23 @@ class LTX25DistilledPipeline:
 
     def _release_transformer(self) -> None:
         if self.dit is not None:
-            streamer = getattr(self.dit, "_weetodd_paged_streamer", None)
+            streamer = getattr(
+                self.dit,
+                "_weetodd_streamer",
+                getattr(self.dit, "_weetodd_paged_streamer", None),
+            )
             if streamer is not None:
-                window_report = getattr(self.dit, "streaming_window_report", None)
-                self.paged_transformer_report = {
-                    **(self.paged_transformer_report or {}),
-                    **streamer.report(),
-                    **(window_report() if window_report is not None else {}),
-                }
+                report = getattr(streamer, "report", None)
+                if report is not None:
+                    window_report = getattr(self.dit, "streaming_window_report", None)
+                    self.paged_transformer_report = {
+                        **(self.paged_transformer_report or {}),
+                        **report(),
+                        **(window_report() if window_report is not None else {}),
+                    }
                 streamer.close()
+            for source in getattr(self.dit, "_weetodd_lora_sources", ()):
+                source.close()
         self.dit = None
         self._loaded_loras = None
         self._loaded_transformer_path = None
@@ -291,6 +299,8 @@ class LTX25DistilledPipeline:
         self,
         *,
         video_latent: mx.array,
+        stage1_audio: mx.array,
+        source_seconds: float,
         carry_frames: tuple[int, ...],
         carry_keyframes: mx.array,
         image_anchors=(),
@@ -314,6 +324,8 @@ class LTX25DistilledPipeline:
         from ltx_pipelines_mlx.utils.helpers import create_noised_state
 
         from .dfr import (
+            dfr_conditioning_fps,
+            frozen_audio_for_tile,
             plan_dfr_temporal_tiles,
             scale_dfr_temporal_image_anchors,
             select_dfr_generated_slot_tokens,
@@ -356,9 +368,9 @@ class LTX25DistilledPipeline:
                 timings.setdefault("temporal_transformer_reload_seconds", []).append(
                     time.perf_counter() - reload_started
                 )
-            from .video_only import LTX25VideoOnlyX0Model
+            from .frozen_audio import DFRFrozenAudioX0Model
 
-            video_only_model = LTX25VideoOnlyX0Model(self.dit)
+            joint_model = DFRFrozenAudioX0Model(self.dit)
             num_frames = 2 * (num_frames - 1) + 1
             current_fps *= 2.0
             seam_frames = tuple(2 * frame for frame in carry_frames)
@@ -369,7 +381,7 @@ class LTX25DistilledPipeline:
             slot_frames_all: list[int] = []
             slot_latents_all: list[mx.array] = []
             tile_reports = []
-            conditioning_fps = min(current_fps, 60.0)
+            conditioning_fps = dfr_conditioning_fps(current_fps)
             for tile_index, tile in enumerate(tiles):
                 if check_interrupted is not None:
                     check_interrupted()
@@ -379,6 +391,13 @@ class LTX25DistilledPipeline:
                 ]
                 local_latent_frames = tile_video.shape[2]
                 local_frames = (local_latent_frames - 1) * 8 + 1
+                frozen_audio = frozen_audio_for_tile(
+                    stage1_audio,
+                    pixel_start=tile.pixel_start,
+                    tile_frames=local_frames,
+                    playback_fps=current_fps,
+                    source_seconds=source_seconds,
+                )
                 conditionings = []
                 tile_image_anchors = tuple(
                     anchor
@@ -475,14 +494,15 @@ class LTX25DistilledPipeline:
                 evaluation_times = []
                 try:
                     result = euler_ancestral_denoise_loop(
-                        video_only_model,
+                        joint_model,
                         state,
-                        None,
+                        frozen_audio,
                         video_embeds,
                         audio_embeds,
                         sigmas=temporal_sigmas,
                         noise_seed=seed + round_index * 1000 + tile_index,
                         eta=0.5,
+                        freeze_audio=True,
                         check_interrupted=check_interrupted,
                         step_callback=(
                             (
@@ -528,6 +548,9 @@ class LTX25DistilledPipeline:
                     {
                         "tile": tile_index + 1,
                         "frames": local_frames,
+                        "audio_tokens": frozen_audio.latent.shape[1],
+                        "audio_policy": "frozen_stage1_joint_cross_attention",
+                        "audio_source_seconds": source_seconds,
                         "seconds": time.perf_counter() - tile_started,
                         "evaluations": evaluation_times,
                     }
@@ -908,6 +931,7 @@ class LTX25DistilledPipeline:
                     control_type=str(
                         reference.get("control_type", "custom_preprocessed")
                     ),
+                    reference_role=str(reference.get("reference_role", "")),
                     reference_size_policy=str(
                         reference.get("reference_size_policy", "quality")
                     ),
@@ -1502,6 +1526,8 @@ class LTX25DistilledPipeline:
             )
             video_latent, output_frames, output_fps = self._run_dfr_temporal_rounds(
                 video_latent=video_latent,
+                stage1_audio=dfr_audio_tokens,
+                source_seconds=requested_num_frames / frame_rate,
                 carry_frames=dfr_slot_frames,
                 carry_keyframes=carry_keyframes,
                 image_anchors=temporal_image_anchors,
@@ -1716,6 +1742,92 @@ class LTX25DistilledPipeline:
         }
         return output_path
 
+    def encode_external_continuation(
+        self,
+        *,
+        video,
+        audio,
+        height: int,
+        width: int,
+        frame_rate: float,
+        context_frames: int,
+        ic_lora_single_stage: bool = False,
+    ) -> tuple[LTX25LatentContinuation, dict[str, object]]:
+        """Encode an arbitrary decoded AV tail into the native continuation layout."""
+
+        import numpy as np
+        from ltx_core_mlx.utils.positions import compute_audio_token_count
+
+        from wee_todd_mlx.numpy_import import adopt_numpy_array
+
+        from .audio_driven import prepare_audio_driven_conditioning
+        from .ic_lora import _resize_center_crop
+
+        source = np.asarray(video)
+        if (
+            source.dtype != np.uint8
+            or source.shape != (context_frames, height, width, 3)
+            or (context_frames - 1) % 8
+        ):
+            raise ValueError(
+                "LTX 2.5 external continuation requires exact 8n+1 uint8 RGB context "
+                "at the configured output geometry."
+            )
+        normalized = np.ascontiguousarray(source.astype(np.float32) / 255.0)
+        low = (
+            normalized
+            if ic_lora_single_stage
+            else _resize_center_crop(normalized, height // 2, width // 2)
+        )
+        encoder = self.image_conditioner.load()
+
+        def encode_pixels(value):
+            pixels = adopt_numpy_array(value).transpose(3, 0, 1, 2)[None]
+            latent = encoder.encode((pixels * 2.0 - 1.0).astype(mx.bfloat16))
+            tokens, spatial = self.video_patchifier.patchify(latent)
+            tokens = mx.contiguous(tokens)
+            mx.eval(tokens)
+            return tokens, tuple(int(part) for part in spatial)
+
+        stage1_tokens, stage1_spatial = encode_pixels(low)
+        if ic_lora_single_stage:
+            stage2_tokens, stage2_spatial = stage1_tokens, stage1_spatial
+        else:
+            stage2_tokens, stage2_spatial = encode_pixels(normalized)
+        expected_latent_frames = (context_frames - 1) // 8 + 1
+        if (
+            stage1_spatial[0] != expected_latent_frames
+            or stage2_spatial[0] != expected_latent_frames
+        ):
+            raise RuntimeError("LTX 2.5 external continuation VAE returned a wrong time grid")
+
+        audio_token_count = compute_audio_token_count(context_frames, frame_rate=frame_rate)
+        audio_tokens, _publication, audio_report = prepare_audio_driven_conditioning(
+            audio=audio,
+            audio_conditioner=self.audio_conditioner,
+            audio_patchifier=self.audio_patchifier,
+            target_tokens=audio_token_count,
+            duration_seconds=context_frames / frame_rate,
+        )
+        self.image_conditioner.free()
+        self.audio_conditioner.free()
+        continuation = LTX25LatentContinuation(
+            stage1_video_tokens=stage1_tokens,
+            stage2_video_tokens=stage2_tokens,
+            audio_tokens=audio_tokens,
+            video_latent_frames=expected_latent_frames,
+            audio_token_count=audio_token_count,
+        )
+        return continuation, {
+            "context_frames": context_frames,
+            "video_latent_frames": expected_latent_frames,
+            "stage1_spatial": list(stage1_spatial),
+            "stage2_spatial": list(stage2_spatial),
+            "audio_tokens": audio_token_count,
+            "audio": audio_report.as_dict(),
+            "continuation_strength": LTX25_CHAIN_CONTINUATION_STRENGTH,
+        }
+
     def generate_and_save(self, *, output_path: str, frame_rate: float, **kwargs) -> str:
         from ltx_pipelines_mlx.utils._orchestration import decode_and_save_video
 
@@ -1727,9 +1839,42 @@ class LTX25DistilledPipeline:
             "stage2_sigmas",
         ):
             kwargs.pop(ignored, None)
+        publication_audio = kwargs.pop("publication_audio", None)
+        extension_input = kwargs.pop("extension_input", None)
+        external_report = None
+        if extension_input is not None:
+            continuation, external_report = self.encode_external_continuation(
+                video=extension_input["video"],
+                audio=extension_input["audio"],
+                height=int(kwargs["height"]),
+                width=int(kwargs["width"]),
+                frame_rate=frame_rate,
+                context_frames=int(extension_input["context_frames"]),
+                ic_lora_single_stage=bool(kwargs.get("ic_lora_single_stage", False)),
+            )
+            kwargs["continuation"] = continuation
+            kwargs["continuation_strength"] = LTX25_CHAIN_CONTINUATION_STRENGTH
         generation_started = time.perf_counter()
         video_latent, audio_latent = self.generate_two_stage(frame_rate=frame_rate, **kwargs)
         self.last_timings["generate_latents_seconds"] = time.perf_counter() - generation_started
+        if external_report is not None:
+            self.last_timings["external_continuation"] = external_report
+        if publication_audio is not None:
+            from .audio_driven import prepare_publication_audio
+
+            output_frame_rate = self.last_output_frame_rate or frame_rate
+            output_frames = int(self.last_num_frames or 0)
+            if output_frames < 1 or output_frame_rate <= 0:
+                raise RuntimeError("LTX 2.5 publication audio requires valid output timing.")
+            passthrough, publication_report = prepare_publication_audio(
+                audio=publication_audio,
+                duration_seconds=output_frames / output_frame_rate,
+            )
+            self.last_passthrough_audio = (
+                passthrough,
+                int(publication_report.source_sample_rate),
+            )
+            self.last_timings["publication_audio"] = publication_report.as_dict()
         if self.low_memory:
             release_started = time.perf_counter()
             self._release_sampling()
@@ -1763,7 +1908,11 @@ class LTX25DistilledPipeline:
                 )
             finally:
                 audio_path.unlink(missing_ok=True)
-            self.last_timings["audio_publication"] = "original_comfy_audio"
+            self.last_timings["audio_publication"] = (
+                "original_source_audio"
+                if publication_audio is not None
+                else "original_comfy_audio"
+            )
             self.last_passthrough_audio = None
         self.last_timings["decode_publish_seconds"] = time.perf_counter() - decode_started
         if self.low_memory:

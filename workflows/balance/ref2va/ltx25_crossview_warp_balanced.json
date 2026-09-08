@@ -1,0 +1,1227 @@
+{
+  "last_node_id": 21,
+  "last_link_id": 34,
+  "nodes": [
+    {
+      "id": 10,
+      "type": "MarkdownNote",
+      "pos": [
+        40,
+        -510
+      ],
+      "size": [
+        1560,
+        650
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {},
+      "widgets_values": [
+        "## LTX 2.5 CrossView Warp \u2014 Balanced\n\n1. Install WeeTodd Nodes and restart ComfyUI.\n2. Place the LTX 2.5 split components under `ComfyUI/models/` or a shared root from `extra_model_paths.yaml`.\n3. Download CrossView Warp v2 and Ingredients into `ComfyUI/models/loras/` (subfolders are supported).\n4. Download Video Depth Anything Small and run the README conversion command once.\n5. Select a 121-frame source movie. The workflow center-crops it to 768\u00d7512 before depth and warp preprocessing. Leave the video selector empty when sharing this workflow.\n6. Choose a source frame that clearly shows the people and scene. The selected frame is previewed and sent through the Ingredients reference IC-LoRA.\n7. The workflow connects the source movie's audio to `publication_audio`, preserving it during final muxing instead of publishing generated audio.\n8. Set a camera-path frame, use **Mode: place camera** to position it, and click **Add / Update**. Repeat for each keyframe. The green curve follows the selected interpolation; its small dots mark equal times so easing is visible. Switch to **Mode: rotate view**, or Shift/right-drag, to inspect every side without changing camera poses. Drag for yaw/pitch and Option-drag for roll.\n9. Inspect the saved moving magenta-hole warp preview before generation. This is the complete per-frame guide, not one middle frame.\n10. In the Ingredients guide, keep `crossview` and replace the bracketed dialogue placeholder with the source speech verbatim. This gives sampling the linguistic cue needed for closer mouth motion.\n11. Keep the prompt `crossview` for the first validation. Describe newly revealed content when distance exceeds 1.0.\n12. Queue the workflow after **LTX 2.5 Preflight** succeeds. The Generate node publishes the final regenerated video with the original soundtrack.\n\nThe model stack applies CrossView first and Ingredients second. The CrossView guide appends two references in the trained order: warp first, source second. Keep both guide strengths at 1.0. Adapter strength 1.3 is recommended for people; use 1.0\u20131.15 for vehicles and rigid objects. Start within \u00b145\u00b0 azimuth and \u221220\u00b0 to +30\u00b0 elevation. Distance control is weak in v2. The selected paged transformer automatically enables low-RAM streaming and the compatible reference_fp32 feed-forward path; users do not need to coordinate those controls manually.\n\n### Downloads\n\n- [LTX 2.5 model components](https://huggingface.co/Lightricks/LTX-2.5)\n- [CrossView Warp v2 IC-LoRA](https://huggingface.co/Cseti/LTX2.3-22B_IC-LoRA-CrossView-Warp_v2)\n- [Ingredients IC-LoRA](https://huggingface.co/Lightricks/LTX-2.3-22b-IC-LoRA-Ingredients)\n- [Video Depth Anything Small](https://huggingface.co/depth-anything/Video-Depth-Anything-Small)\n\n### One-time MLX depth conversion\n\n`$COMFYUI_ROOT/.venv/bin/python $COMFYUI_ROOT/custom_nodes/WeeTodd-Nodes/scripts/convert_video_depth_anything_mlx.py $COMFYUI_ROOT/models/annotators/video_depth_anything/video_depth_anything_vits.pth $COMFYUI_ROOT/models/annotators/video_depth_anything/video_depth_anything_vits_mlx.safetensors`\n\n### Audio and lip-sync\n\nThe untouched source audio is muxed after generation, so it remains clean. It is not used as audio-reference conditioning because CrossView plus Ingredients already uses the two validated IC-LoRA task slots and the current generator rejects the unvalidated video-reference + audio-reference LipDub topology. For speaking clips, paste the source dialogue verbatim into the Ingredients guide. This improves mouth intent but is not sample-exact lip-sync."
+      ],
+      "title": "Setup and model downloads",
+      "color": "#243447",
+      "bgcolor": "#15202b"
+    },
+    {
+      "id": 1,
+      "type": "WeeToddLTX25ComponentLoader",
+      "pos": [
+        40,
+        120
+      ],
+      "size": [
+        500,
+        310
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "model",
+          "type": "WEETODD_LTX25_MODEL",
+          "links": [
+            14
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddLTX25ComponentLoader"
+      },
+      "widgets_values": [
+        "ltx-2.5-22b-distilled-transformer-q8-paged",
+        "gemma4-12b-with-proj-ltx-2.5-q8-paged",
+        "ltx-2.5-video-vae-conv-bf16.safetensors",
+        "ltx-2.5-audio-vae-bf16.safetensors",
+        "ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors",
+        ""
+      ]
+    },
+    {
+      "id": 12,
+      "type": "WeeToddLTX25ICLoRALoader",
+      "pos": [
+        580,
+        120
+      ],
+      "size": [
+        480,
+        150
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "WEETODD_LTX25_MODEL",
+          "link": 14
+        }
+      ],
+      "outputs": [
+        {
+          "name": "model",
+          "type": "WEETODD_LTX25_MODEL",
+          "links": [
+            15
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "ic_lora_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddLTX25ICLoRALoader"
+      },
+      "widgets_values": [
+        "LTX-2.5/LTX2.3-22B_IC-LoRA-CrossView-Warp_v2_6000.safetensors",
+        1.3
+      ]
+    },
+    {
+      "id": 2,
+      "type": "WeeToddLTX25GenerationConfig",
+      "pos": [
+        40,
+        480
+      ],
+      "size": [
+        460,
+        300
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "config",
+          "type": "WEETODD_LTX25_CONFIG",
+          "links": [
+            2
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "resolved_settings",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddLTX25GenerationConfig"
+      },
+      "widgets_values": [
+        "Custom",
+        768,
+        512,
+        5.0,
+        24.0,
+        42,
+        true,
+        true,
+        "official_1024",
+        "reference_fp32"
+      ]
+    },
+    {
+      "id": 3,
+      "type": "WeeToddLTX25ICLoRAPipelineMode",
+      "pos": [
+        550,
+        480
+      ],
+      "size": [
+        470,
+        170
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "config",
+          "type": "WEETODD_LTX25_CONFIG",
+          "link": 2
+        }
+      ],
+      "outputs": [
+        {
+          "name": "config",
+          "type": "WEETODD_LTX25_CONFIG",
+          "links": [
+            3,
+            4
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "mode_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddLTX25ICLoRAPipelineMode"
+      },
+      "widgets_values": [
+        "Two stage \u2014 8 low-resolution + 3 clean refinement",
+        "automatic",
+        "full"
+      ]
+    },
+    {
+      "id": 8,
+      "type": "WeeToddLTX25Preflight",
+      "pos": [
+        1620,
+        150
+      ],
+      "size": [
+        380,
+        190
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "WEETODD_LTX25_MODEL",
+          "link": 28
+        },
+        {
+          "name": "config",
+          "type": "WEETODD_LTX25_CONFIG",
+          "link": 3
+        }
+      ],
+      "outputs": [
+        {
+          "name": "model",
+          "type": "WEETODD_LTX25_MODEL",
+          "links": [
+            21
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "preflight_report",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddLTX25Preflight"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 9,
+      "type": "WeeToddLTX25Generate",
+      "pos": [
+        3260,
+        180
+      ],
+      "size": [
+        600,
+        500
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "WEETODD_LTX25_MODEL",
+          "link": 21
+        },
+        {
+          "name": "config",
+          "type": "WEETODD_LTX25_CONFIG",
+          "link": 4
+        },
+        {
+          "name": "prompt",
+          "type": "STRING",
+          "link": 34
+        },
+        {
+          "name": "first_frame",
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "keyframes",
+          "type": "WEETODD_LTX25_KEYFRAMES",
+          "link": null
+        },
+        {
+          "name": "media_conditioning",
+          "type": "WEETODD_LTX25_MEDIA_CONDITIONING",
+          "link": 33
+        },
+        {
+          "name": "msr_references",
+          "type": "WEETODD_LTX25_MSR_REFERENCES",
+          "link": null
+        },
+        {
+          "name": "publication_audio",
+          "type": "AUDIO",
+          "link": 25
+        }
+      ],
+      "outputs": [
+        {
+          "name": "video_path",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 0
+        },
+        {
+          "name": "generation_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddLTX25Generate"
+      },
+      "widgets_values": [
+        "crossview",
+        "WeeTodd/LTX25_crossview_warp_ingredients_balanced",
+        true
+      ],
+      "title": "FINAL OUTPUT — regenerated video + source audio"
+    },
+    {
+      "id": 4,
+      "type": "LoadVideo",
+      "pos": [
+        40,
+        850
+      ],
+      "size": [
+        360,
+        280
+      ],
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "VIDEO",
+          "type": "VIDEO",
+          "links": [
+            10
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoadVideo"
+      },
+      "widgets_values": [
+        ""
+      ]
+    },
+    {
+      "id": 5,
+      "type": "GetVideoComponents",
+      "pos": [
+        440,
+        850
+      ],
+      "size": [
+        300,
+        180
+      ],
+      "flags": {},
+      "order": 8,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "video",
+          "type": "VIDEO",
+          "link": 10
+        }
+      ],
+      "outputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "links": [
+            22
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "audio",
+          "type": "AUDIO",
+          "links": [
+            25,
+            26
+          ],
+          "slot_index": 1
+        },
+        {
+          "name": "fps",
+          "type": "FLOAT",
+          "links": [
+            27
+          ],
+          "slot_index": 2
+        },
+        {
+          "name": "bit_depth",
+          "type": "INT",
+          "links": null,
+          "slot_index": 3
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "GetVideoComponents"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 15,
+      "type": "ImageScale",
+      "pos": [
+        760,
+        650
+      ],
+      "size": [
+        380,
+        180
+      ],
+      "flags": {},
+      "order": 9,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": 22
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            12,
+            16,
+            19,
+            29
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "ImageScale"
+      },
+      "widgets_values": [
+        "lanczos",
+        768,
+        512,
+        "center"
+      ]
+    },
+    {
+      "id": 6,
+      "type": "WeeToddMLXVideoDepthLoader",
+      "pos": [
+        790,
+        750
+      ],
+      "size": [
+        430,
+        100
+      ],
+      "flags": {},
+      "order": 10,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "depth_model",
+          "type": "WEETODD_MLX_VIDEO_DEPTH_MODEL",
+          "links": [
+            13
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "model_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddMLXVideoDepthLoader"
+      },
+      "widgets_values": [
+        "video_depth_anything/video_depth_anything_vits_mlx.safetensors"
+      ]
+    },
+    {
+      "id": 11,
+      "type": "WeeToddMLXVideoDepthPreprocessor",
+      "pos": [
+        790,
+        900
+      ],
+      "size": [
+        450,
+        220
+      ],
+      "flags": {},
+      "order": 11,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 12
+        },
+        {
+          "name": "depth_model",
+          "type": "WEETODD_MLX_VIDEO_DEPTH_MODEL",
+          "link": 13
+        }
+      ],
+      "outputs": [
+        {
+          "name": "depth_images",
+          "type": "IMAGE",
+          "links": [
+            17
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "preprocessor_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddMLXVideoDepthPreprocessor"
+      },
+      "widgets_values": [
+        518,
+        "float32 quality",
+        4,
+        4,
+        "near white (recommended)",
+        false
+      ]
+    },
+    {
+      "id": 17,
+      "type": "WeeToddLTX25CrossViewCameraOrbit",
+      "pos": [
+        1260,
+        650
+      ],
+      "size": [
+        420,
+        680
+      ],
+      "flags": {},
+      "order": 12,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "camera",
+          "type": "WEETODD_LTX25_CROSSVIEW_CAMERA",
+          "links": [
+            24
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "camera_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddLTX25CrossViewCameraOrbit"
+      },
+      "widgets_values": [
+        -30.0,
+        15.0,
+        1.0,
+        50.0,
+        0.0,
+        6.0,
+        false,
+        true,
+        "",
+        "smooth",
+        0.0,
+        0.0,
+        1.05,
+        2
+      ]
+    },
+    {
+      "id": 13,
+      "type": "WeeToddLTX25CrossViewWarp",
+      "pos": [
+        1710,
+        820
+      ],
+      "size": [
+        420,
+        520
+      ],
+      "flags": {},
+      "order": 13,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "source_video",
+          "type": "IMAGE",
+          "link": 16
+        },
+        {
+          "name": "depth_video",
+          "type": "IMAGE",
+          "link": 17
+        },
+        {
+          "name": "camera",
+          "type": "WEETODD_LTX25_CROSSVIEW_CAMERA",
+          "link": 24
+        }
+      ],
+      "outputs": [
+        {
+          "name": "warp_video",
+          "type": "IMAGE",
+          "links": [
+            18,
+            23
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "warp_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddLTX25CrossViewWarp"
+      },
+      "widgets_values": [
+        -30.0,
+        15.0,
+        1.0,
+        50.0,
+        0.0,
+        6.0,
+        false,
+        true,
+        "",
+        "smooth",
+        0.0,
+        0.0,
+        1.05,
+        2
+      ]
+    },
+    {
+      "id": 7,
+      "type": "WeeToddLTX25CrossViewDualReferenceGuide",
+      "pos": [
+        2180,
+        820
+      ],
+      "size": [
+        480,
+        220
+      ],
+      "flags": {},
+      "order": 14,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "warp_video",
+          "type": "IMAGE",
+          "link": 18
+        },
+        {
+          "name": "source_video",
+          "type": "IMAGE",
+          "link": 19
+        },
+        {
+          "name": "previous_conditioning",
+          "type": "WEETODD_LTX25_MEDIA_CONDITIONING",
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "name": "conditioning",
+          "type": "WEETODD_LTX25_MEDIA_CONDITIONING",
+          "links": [
+            32
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "guide_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddLTX25CrossViewDualReferenceGuide"
+      },
+      "widgets_values": [
+        0,
+        120,
+        1.0,
+        1.0
+      ]
+    },
+    {
+      "id": 16,
+      "type": "CreateVideo",
+      "pos": [
+        1710,
+        1380
+      ],
+      "size": [
+        420,
+        180
+      ],
+      "flags": {},
+      "order": 15,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 23
+        },
+        {
+          "name": "fps",
+          "type": "FLOAT",
+          "link": 27
+        },
+        {
+          "name": "audio",
+          "type": "AUDIO",
+          "link": 26
+        }
+      ],
+      "outputs": [
+        {
+          "name": "VIDEO",
+          "type": "VIDEO",
+          "links": [
+            20
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "CreateVideo"
+      },
+      "widgets_values": [
+        8
+      ]
+    },
+    {
+      "id": 14,
+      "type": "SaveVideo",
+      "pos": [
+        1710,
+        1590
+      ],
+      "size": [
+        420,
+        240
+      ],
+      "flags": {},
+      "order": 16,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "video",
+          "type": "VIDEO",
+          "link": 20
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "SaveVideo"
+      },
+      "widgets_values": [
+        "WeeTodd/DIAGNOSTIC_CrossView_magenta_warp",
+        "mp4",
+        "auto"
+      ],
+      "title": "MAGENTA DIAGNOSTIC ONLY — inspect before final render"
+    },
+    {
+      "id": 18,
+      "type": "WeeToddLTX25ICLoRALoader",
+      "pos": [
+        1100,
+        120
+      ],
+      "size": [
+        480,
+        150
+      ],
+      "flags": {},
+      "order": 17,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "WEETODD_LTX25_MODEL",
+          "link": 15
+        }
+      ],
+      "outputs": [
+        {
+          "name": "model",
+          "type": "WEETODD_LTX25_MODEL",
+          "links": [
+            28
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "ic_lora_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddLTX25ICLoRALoader"
+      },
+      "widgets_values": [
+        "ltx-2.3-22b-ic-lora-ingredients-0.9.safetensors",
+        1.2
+      ],
+      "title": "Ingredients character / scene IC-LoRA"
+    },
+    {
+      "id": 19,
+      "type": "ImageFromBatch",
+      "pos": [
+        760,
+        1380
+      ],
+      "size": [
+        330,
+        110
+      ],
+      "flags": {},
+      "order": 18,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": 29
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            30,
+            31
+          ],
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "ImageFromBatch"
+      },
+      "widgets_values": [
+        47,
+        1
+      ],
+      "title": "Choose clear character / scene reference frame"
+    },
+    {
+      "id": 20,
+      "type": "PreviewImage",
+      "pos": [
+        1120,
+        1380
+      ],
+      "size": [
+        420,
+        300
+      ],
+      "flags": {},
+      "order": 19,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 30
+        }
+      ],
+      "outputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "links": null,
+          "slot_index": 0
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "PreviewImage"
+      },
+      "widgets_values": [],
+      "title": "Preview selected Ingredients reference"
+    },
+    {
+      "id": 21,
+      "type": "WeeToddLTX25ReferenceSheetGuide",
+      "pos": [
+        2700,
+        820
+      ],
+      "size": [
+        600,
+        430
+      ],
+      "flags": {},
+      "order": 20,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "reference_sheet",
+          "type": "IMAGE",
+          "link": 31
+        },
+        {
+          "name": "attention_mask",
+          "type": "MASK",
+          "link": null
+        },
+        {
+          "name": "previous_conditioning",
+          "type": "WEETODD_LTX25_MEDIA_CONDITIONING",
+          "link": 32
+        }
+      ],
+      "outputs": [
+        {
+          "name": "conditioning",
+          "type": "WEETODD_LTX25_MEDIA_CONDITIONING",
+          "links": [
+            33
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "prompt",
+          "type": "STRING",
+          "links": [
+            34
+          ],
+          "slot_index": 1
+        },
+        {
+          "name": "reference_info",
+          "type": "STRING",
+          "links": null,
+          "slot_index": 2
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "WeeToddLTX25ReferenceSheetGuide"
+      },
+      "widgets_values": [
+        "The selected source frame defines both characters' faces, hair, clothing, body proportions, props, lighting, and scene layout. Preserve each identity separately.",
+        "crossview. Preserve the source characters and scene while following the camera path. Match visible mouth motion to this source dialogue spoken verbatim: [REPLACE WITH THE SOURCE DIALOGUE].",
+        1.0,
+        1.0,
+        "balanced"
+      ],
+      "title": "Ingredients source-frame reference + dialogue prompt"
+    }
+  ],
+  "links": [
+    [
+      2,
+      2,
+      0,
+      3,
+      0,
+      "WEETODD_LTX25_CONFIG"
+    ],
+    [
+      3,
+      3,
+      0,
+      8,
+      1,
+      "WEETODD_LTX25_CONFIG"
+    ],
+    [
+      4,
+      3,
+      0,
+      9,
+      1,
+      "WEETODD_LTX25_CONFIG"
+    ],
+    [
+      10,
+      4,
+      0,
+      5,
+      0,
+      "VIDEO"
+    ],
+    [
+      12,
+      15,
+      0,
+      11,
+      0,
+      "IMAGE"
+    ],
+    [
+      13,
+      6,
+      0,
+      11,
+      1,
+      "WEETODD_MLX_VIDEO_DEPTH_MODEL"
+    ],
+    [
+      14,
+      1,
+      0,
+      12,
+      0,
+      "WEETODD_LTX25_MODEL"
+    ],
+    [
+      15,
+      12,
+      0,
+      18,
+      0,
+      "WEETODD_LTX25_MODEL"
+    ],
+    [
+      16,
+      15,
+      0,
+      13,
+      0,
+      "IMAGE"
+    ],
+    [
+      17,
+      11,
+      0,
+      13,
+      1,
+      "IMAGE"
+    ],
+    [
+      18,
+      13,
+      0,
+      7,
+      0,
+      "IMAGE"
+    ],
+    [
+      19,
+      15,
+      0,
+      7,
+      1,
+      "IMAGE"
+    ],
+    [
+      20,
+      16,
+      0,
+      14,
+      0,
+      "VIDEO"
+    ],
+    [
+      23,
+      13,
+      0,
+      16,
+      0,
+      "IMAGE"
+    ],
+    [
+      21,
+      8,
+      0,
+      9,
+      0,
+      "WEETODD_LTX25_MODEL"
+    ],
+    [
+      22,
+      5,
+      0,
+      15,
+      0,
+      "IMAGE"
+    ],
+    [
+      24,
+      17,
+      0,
+      13,
+      2,
+      "WEETODD_LTX25_CROSSVIEW_CAMERA"
+    ],
+    [
+      25,
+      5,
+      1,
+      9,
+      7,
+      "AUDIO"
+    ],
+    [
+      26,
+      5,
+      1,
+      16,
+      2,
+      "AUDIO"
+    ],
+    [
+      27,
+      5,
+      2,
+      16,
+      1,
+      "FLOAT"
+    ],
+    [
+      28,
+      18,
+      0,
+      8,
+      0,
+      "WEETODD_LTX25_MODEL"
+    ],
+    [
+      29,
+      15,
+      0,
+      19,
+      0,
+      "IMAGE"
+    ],
+    [
+      30,
+      19,
+      0,
+      20,
+      0,
+      "IMAGE"
+    ],
+    [
+      31,
+      19,
+      0,
+      21,
+      0,
+      "IMAGE"
+    ],
+    [
+      32,
+      7,
+      0,
+      21,
+      2,
+      "WEETODD_LTX25_MEDIA_CONDITIONING"
+    ],
+    [
+      33,
+      21,
+      0,
+      9,
+      5,
+      "WEETODD_LTX25_MEDIA_CONDITIONING"
+    ],
+    [
+      34,
+      21,
+      1,
+      9,
+      2,
+      "STRING"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {},
+  "version": 0.4
+}

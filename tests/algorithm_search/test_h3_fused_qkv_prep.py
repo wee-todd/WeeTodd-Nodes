@@ -28,8 +28,8 @@ def test_fused_h3_qkv_prep_matches_reference_layout_and_values():
     mx.eval(query, key, value, reference_query, reference_key, reference_value)
 
     assert query.shape == (1, 2, 7, 128)
-    assert mx.allclose(query, reference_query, rtol=2e-2, atol=2e-2)
-    assert mx.allclose(key, reference_key, rtol=2e-2, atol=2e-2)
+    assert mx.array_equal(query, reference_query)
+    assert mx.array_equal(key, reference_key)
     assert mx.array_equal(value, reference_value)
 
 

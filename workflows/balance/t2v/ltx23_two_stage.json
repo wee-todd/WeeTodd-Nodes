@@ -29,7 +29,7 @@
         {"name": "resolved_settings", "type": "STRING", "links": null, "slot_index": 1}
       ],
       "properties": {"Node name for S&R": "WeeToddLTX23GenerationConfig"},
-      "widgets_values": ["two_stage", 704, 448, 5.0, 24.0, 0, 0, 0, 3.0, 1.0, true, false]
+      "widgets_values": ["two_stage", 704, 448, 5.0, 24.0, 0, 0, 0, 3.0, 1.0, true, false, "auto"]
     },
     {
       "id": 3,

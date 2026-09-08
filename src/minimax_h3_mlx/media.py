@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 import wave
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,6 +39,17 @@ def _executable_path(value: str, search_path: str | None = None) -> Path | None:
     return Path(located).resolve() if located else None
 
 
+def _platform_ffmpeg_candidates() -> tuple[tuple[str, Path], ...]:
+    """Return executable locations commonly omitted from GUI application PATHs."""
+    executable_sibling = Path(sys.executable).resolve().parent / "ffmpeg"
+    return (
+        ("ComfyUI Python environment", executable_sibling),
+        ("Homebrew (Apple Silicon)", Path("/opt/homebrew/bin/ffmpeg")),
+        ("Homebrew (Intel)", Path("/usr/local/bin/ffmpeg")),
+        ("MacPorts", Path("/opt/local/bin/ffmpeg")),
+    )
+
+
 def resolve_ffmpeg(
     explicit_path: str | Path | None = None,
     *,
@@ -63,6 +75,11 @@ def resolve_ffmpeg(
     if located:
         return FFmpegExecutable(Path(located).resolve(), "process PATH")
 
+    for source, candidate in _platform_ffmpeg_candidates():
+        resolved = _executable_path(str(candidate))
+        if resolved is not None:
+            return FFmpegExecutable(resolved, source)
+
     try:
         import imageio_ffmpeg
 
@@ -74,7 +91,8 @@ def resolve_ffmpeg(
 
     raise RuntimeError(
         "ffmpeg is unavailable to the ComfyUI Python process. Set the node's ffmpeg_path, "
-        "set WEETODD_FFMPEG, or install ffmpeg on the process PATH."
+        "set WEETODD_FFMPEG, install imageio-ffmpeg, or install ffmpeg in a standard "
+        "Homebrew/MacPorts location. A shell-profile symlink is not required."
     )
 
 

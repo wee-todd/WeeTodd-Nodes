@@ -77,6 +77,9 @@ class ModulationCache:
                 mx.eval(table)
                 tables.append(table)
         else:
+            # A new schedule must rebuild modulation from actual weights, even if a
+            # previous schedule enabled the denoising-only page layout.
+            paged.skip_adaln = False
             for start in range(0, paged.num_blocks, paged.window_size):
                 with paged.window(start) as blocks:
                     for block in blocks:
@@ -103,6 +106,11 @@ def final_layer_modulation(dit, timesteps: mx.array, dtype: mx.Dtype = mx.bfloat
     return shift, scale
 
 
+class CachedOnlyModulation(nn.Module):
+    def __call__(self, *_):
+        raise RuntimeError("Paged H3 AdaLN weights were omitted; a modulation cache is required.")
+
+
 def drop_adaln_weights(dit) -> int:
     """Delete the per-block ``adaln_proj`` projections after a cache has been built.
 
@@ -114,6 +122,11 @@ def drop_adaln_weights(dit) -> int:
     array the layer holds is removed.
     """
     freed = 0
+    paged = getattr(dit, "paged_blocks", None)
+    if paged is not None:
+        # Page files remain unchanged. Subsequent windows omit unused modulation
+        # tensors and adapters before materializing any GPU arrays.
+        paged.skip_adaln = True
     for block in dit.blocks:
         linear = block.adaln_proj.linear
         adapters = getattr(linear, "adapters", ())
