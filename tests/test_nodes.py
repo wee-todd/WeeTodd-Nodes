@@ -608,7 +608,7 @@ def test_hires_fix_resolves_target_and_preserves_audio_contract(monkeypatch):
 
 
 def test_expected_nodes_are_registered():
-    assert len(NODE_CLASS_MAPPINGS) == 119
+    assert len(NODE_CLASS_MAPPINGS) == 121
     assert "WeeToddLTX23LoRALoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3ComponentLoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3QuantizedTransformerLoader" in NODE_CLASS_MAPPINGS
@@ -628,6 +628,8 @@ def test_expected_nodes_are_registered():
     assert "WeeToddFlorence2ModelLoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddFlorence2TextMask" in NODE_CLASS_MAPPINGS
     assert "WeeToddFlorence2Unload" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3MotionSettings" in NODE_CLASS_MAPPINGS
+    assert "WeeToddH3MotionRefine" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3ChainedTimeline" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3Frames" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3TimedKeyframe" in NODE_CLASS_MAPPINGS

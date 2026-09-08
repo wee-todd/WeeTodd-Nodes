@@ -25,7 +25,7 @@ enum ClipState: String {
   var label: String {
     switch self {
     case .generated: return "Generated"
-    case .updated: return "Updated · render again"
+    case .updated: return "Updated · processing needed"
     case .ready: return "Ready to generate"
     case .attention: return "Needs attention"
     case .movie: return "Movie asset"
@@ -112,7 +112,7 @@ enum ClipState: String {
       if clip.renderedSignature == signature(for: clip)
         && FileManager.default.fileExists(atPath: clip.sourcePath)
       {
-        return .generated
+        return clip.motionFidelity?.enabled == true && !clip.motionIsCurrent ? .updated : .generated
       }
       return .updated
     }
@@ -158,9 +158,14 @@ enum ClipState: String {
             destination: text.contains("recipe")
               ? "runtime" : text.contains("prompt") ? "prompt" : "clip"))
       }
+      if c.motionFidelity?.enabled == true && !c.motionIsCurrent {
+        items.append(ActionItem(id: c.id.uuidString + "-motion", priority: 1,
+          title: c.name + " · Enhance motion", detail: "Analyze or refine Motion Fidelity in the clip inspector.",
+          clipID: c.id, destination: "clip"))
+      }
       if blockers.isEmpty {
         let state = clipState(c)
-        if state == .updated || state == .ready {
+        if (state == .updated && c.renderedSignature != signature(for: c)) || state == .ready {
           items.append(
             ActionItem(
               id: c.id.uuidString + "-render", priority: 1,
@@ -246,7 +251,7 @@ enum ClipState: String {
         var body = try payload()
         body["clipOnly"] = clipOnly
         body["generateIDs"] = project.clips.filter {
-          $0.engine != .movie && clipState($0) != .generated
+          $0.engine != .movie && ($0.renderedSignature != signature(for: $0) || !FileManager.default.fileExists(atPath: $0.sourcePath))
         }.map { $0.id.uuidString }
         _ = try await bridge.invoke("export-job", runtime: runtime, payload: body, output: url)
         notice = "Exported resumable headless job. Run it with render_headless.py --job."

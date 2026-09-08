@@ -669,6 +669,15 @@ class H3AudioVAECache:
                     np.asarray(cfg.latents_std, dtype=np.float32)
                 ).reshape(1, -1, 1)
                 normalized = (mean.astype(mx.float32) - latent_mean) / latent_std
+                # The codec right-pads to ceil(samples / 800), whereas the joint H3
+                # clock rounds video duration to 40 Hz. Discard only that known final
+                # padding token; larger mismatches still indicate an invalid encoder.
+                if (
+                    expected_samples % 800
+                    and int(normalized.shape[2]) == expected_latents + 1
+                    and (expected_samples + 799) // 800 == expected_latents + 1
+                ):
+                    normalized = normalized[:, :, :expected_latents]
                 if int(normalized.shape[2]) != expected_latents:
                     raise RuntimeError("H3 continuation audio VAE produced the wrong token count.")
                 mx.eval(normalized)

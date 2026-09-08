@@ -166,18 +166,21 @@ def test_transformer_cache_samples_and_unloads(tmp_path: Path):
 
 def test_resident_mode_is_explicit_cache_keyed_and_reports_warm_state(tmp_path):
     created = []
+
     def factory(spec):
         result = FakeSampler(spec)
         created.append(result)
         return result
+
     cache = H3TransformerCache(factory)
     spec = _spec(tmp_path)
     conditioning = _conditioning(spec)
     config = H3GenerationConfig(steps=3, projection_backend="mlx")
     cache.sample(spec, conditioning, config, unload_after=False)
     for _ in range(2):
-        result = cache.sample(spec, conditioning, config, block_residency="resident",
-                              unload_after=False)
+        result = cache.sample(
+            spec, conditioning, config, block_residency="resident", unload_after=False
+        )
     assert len(created) == 2
     assert len(created[-1].calls) == 2
     assert result.block_residency_report["mode"] == "resident"
@@ -190,10 +193,12 @@ def test_resident_mode_is_explicit_cache_keyed_and_reports_warm_state(tmp_path):
 def test_resident_invalid_policy_is_rejected_before_load(tmp_path, mode, memory):
     def factory(spec):
         raise AssertionError("invalid policy must not load weights")
+
     spec = _spec(tmp_path)
     with pytest.raises(ValueError, match="(block_residency|normal memory)"):
-        H3TransformerCache(factory).sample(spec, _conditioning(spec),
-            H3GenerationConfig(memory_mode=memory), block_residency=mode)
+        H3TransformerCache(factory).sample(
+            spec, _conditioning(spec), H3GenerationConfig(memory_mode=memory), block_residency=mode
+        )
 
 
 def test_transformer_cache_closes_paged_worker_before_unload(tmp_path: Path):
@@ -956,3 +961,66 @@ def test_transformer_sampler_rejects_conditioning_from_other_components(tmp_path
 
     with pytest.raises(ValueError, match="different Qwen3-VL component specification"):
         cache.sample(spec, conditioning, H3GenerationConfig(steps=3))
+
+
+def test_motion_refinement_preserves_canvas_and_joint_initialization(tmp_path):
+    from dataclasses import replace
+
+    created = []
+
+    def factory(spec):
+        sampler = FakeSampler(spec)
+        created.append(sampler)
+        return sampler
+
+    spec = _spec(tmp_path)
+    config = H3GenerationConfig(steps=16, width=640, height=384)
+    source = H3Latents(
+        video=mx.zeros((1, 24, 37, 24, 40)),
+        audio=mx.zeros((2, 32, 207)),
+        num_frames=124,
+        width=640,
+        height=384,
+        fps=24,
+        sample_rate=32000,
+        transformer_evaluations=0,
+        seconds_per_evaluation=0,
+        total_seconds=0,
+        transformer_spec=spec,
+        generation_config=config,
+    )
+    cache = H3TransformerCache(factory)
+    cache.sample(
+        spec,
+        _conditioning(spec),
+        config,
+        refinement_source=source,
+        refinement_mode="motion",
+        refinement_strength=0.5,
+    )
+    kwargs = created[0].calls[0][2]
+    assert kwargs["initial_video_latents"] is source.video
+    assert kwargs["initial_audio_latents"] is source.audio
+    assert kwargs["refinement_strength"] == 0.5
+    assert kwargs["preserve_initial_audio"] is True
+    assert not cache.loaded
+    with pytest.raises(ValueError, match="preserve source dimensions"):
+        cache.sample(
+            spec,
+            _conditioning(spec),
+            replace(config, width=960),
+            refinement_source=source,
+            refinement_mode="motion",
+        )
+    with pytest.raises(ValueError, match="plain H3"):
+        cache.sample(
+            spec,
+            _conditioning(spec),
+            config,
+            refinement_source=source,
+            refinement_mode="motion",
+            blockcache=H3BlockCacheConfig(),
+        )
+    with pytest.raises(ValueError, match="initialized"):
+        cache.sample(spec, _conditioning(spec), config, refinement_mode="motion")
+    assert len(created) == 1

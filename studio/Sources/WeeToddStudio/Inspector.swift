@@ -136,6 +136,7 @@ struct ClipInspector: View {
           }
         }.controlSize(.small)
       }
+      MotionFidelityInspector(clip: clip)
       DisclosureGroup("Advanced generation") {
         VStack(alignment: .leading, spacing: 10) {
           if clip.engine != .movie {

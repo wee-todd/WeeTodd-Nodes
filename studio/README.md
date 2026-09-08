@@ -154,6 +154,69 @@ notarize the app, test clean Macs and lower-memory hardware, qualify more condit
 and improve live timeline playback. Useful next features are audio waveforms, proxy/cache management,
 crash-recovery history, and a render-cost/memory estimate before queuing large movies.
 
+## Motion Fidelity (De-Roping) · experimental H3
+
+Select an H3 clip and open **Motion Fidelity** in the clip inspector. Enable **Use enhanced
+motion**, then choose **Analyze** to inspect the expansion plan or **Enhance** to render it.
+The original movie remains in Versions and Clip Assets. The enhancement is a separate Clip Asset;
+turn the option off to compare the original at the same playhead position. Changing enhancement
+settings marks the clip yellow without invalidating its base generation. Actions links to pending
+motion work. A stale or missing enhancement blocks direct movie export rather than silently using
+the original. Export a headless job to process pending enhancements with Studio closed.
+
+- **Adaptive** uses third temporal differences of H3 video latents, adjusted for the VAE's five-phase
+  cadence, to allocate integer frame holds. It is a heuristic, not a reliable artifact detector.
+  A quiet plan bypasses refinement. **Uniform** expands every source frame equally.
+  Inspect the analysis before rendering: adaptive coverage can be sparse even during continuous
+  action. Use Uniform when you want the entire clip treated.
+- **Maximum hold** is 2–4×. Sensitivity affects adaptive coverage; refinement strength controls
+  partial denoising. A value of 0.5 starts video at 50% noise; audio uses its corresponding
+  shifted clock. Evaluation count is the ceiling of the recipe's full evaluations × strength.
+  The partial interval is resampled instead of taking the tail of a heavily shifted schedule.
+  The seed belongs to enhancement independently of the base clip.
+- Use a plain H3 T2VA repair recipe with at least 16 schedule points. The default uses the selected
+  base render's recipe. Choose an explicit compatible repair recipe when the original used image,
+  reference or audio conditioning. Its prompt and components govern refinement. FastH3/VDN,
+  LoRAs, cache accelerators and extra conditioning are rejected, not silently stripped.
+- Input is constant 24 fps, with frame-aligned trims, 32-pixel-grid dimensions and 60–345 source
+  frames. Expansion is padded to H3's `17k+5` geometry and must fit the configured budget, at most
+  345 frames. The current RGB conversion also limits expanded width × height × frames to
+  160 million pixels. Split longer clips or reduce the budget; no automatic windowing is claimed.
+- Expanded conditioning audio is stretched with pitch-preserving FFmpeg filters. Final output
+  uses the original trimmed soundtrack, re-encoded to AAC, at the original duration and frame
+  rate. Silent sources receive silence. Model refinement can still alter mouth motion or identity.
+
+Movie/clip jobs with Motion Fidelity use `weetodd-studio-job-v2` and embed their repair recipes.
+The current `WeeToddCLI` runs generation, enhancement, upscaling/interpolation and assembly serially.
+Completed enhancements are hash-checked on resume; an interrupted enhancement restarts that clip's
+refinement. It does not resume inside transformer sampling. The app-managed native runtime needs
+this renderer revision; install a fresh runtime when adopting it and export a fresh job. Jobs with
+the option off retain v1 behavior. Project files and Collect Media retain both source and enhancement,
+including the enhancement's analysis and repair-recipe record. Model weights remain shared.
+
+ComfyUI exposes **H3 Motion Fidelity Settings** and **H3 Motion Fidelity Refine**. Connect H3
+Components, Generation Config and Motion Settings; provide a source movie path, native trim and
+repair prompt. Analyze-only defaults on. The adapter runs the same isolated helper used by Studio
+and jobs, returning a movie path and JSON analysis report. No paid workflow or external node pack
+is required. The existing 42 shipped workflows are unchanged.
+
+Validation includes a real native MLX partial-denoise render, exact 73-frame recovery at 24 fps,
+32 kHz source-audio remuxing, mixed audio holds, optional bypass, old project decoding and separate
+base/enhancement invalidation. Low-resolution fixtures establish execution and timing only;
+they are unsuitable for judging motion fidelity. Refinement uses an explicit source-noise fraction
+to avoid injecting near-pure noise from H3's heavily shifted generation schedule.
+The motion-quality reference is a dense H3 boxing clip at 896×512, 124 frames and 24 fps, generated
+with 20 schedule points (19 evaluations) and no FastVideo/VDN acceleration. Uniform 2× expansion
+with strength 0.5 completed ten refinement evaluations over 260 padded frames, then recovered
+exactly 124 frames with less than 1 ms AV drift. Matching-frame review retained the subject and
+action, but changes were subtle and fast-glove blur remained. This does not establish a general
+visual improvement or qualify dialogue/identity preservation across scenes.
+The packaged CLI completed a v2 enhanced movie and reused the same final hash on resume. Native
+Studio Enhance added a separate Clip Asset; toggling the source comparison reused it. The complete
+suite passed 1,345 Python tests (one skip) and 12 Swift tests for this checkpoint.
+LTX, imported-movie UI support, regional editing, overlapping long-clip windows, side-by-side viewing,
+per-stage latent resume and broad dialogue/identity qualification remain future work.
+
 ## Development files and cleanup
 
 - `studio/.build/` contains Swift build products and the local app. Rebuilding refreshes the bundled

@@ -93,9 +93,7 @@ def encode_keyframe_rows(
         pixels = (pixels / 255.0 - pixel_mean) / pixel_std
 
         # (1, 3, 1, H, W) -> channels-last for the spatial encoder.
-        moments = video_vae._encode_clip(
-            adopt_numpy_array(pixels).transpose(0, 2, 3, 4, 1)
-        )
+        moments = video_vae._encode_clip(adopt_numpy_array(pixels).transpose(0, 2, 3, 4, 1))
         channels = cfg.latent_channels
         mean, logvar = moments[..., :channels], moments[..., channels:]
         logvar = mx.clip(logvar, -30.0, 20.0)
@@ -350,6 +348,7 @@ class MiniMaxH3Pipeline:
         initial_video_latents: mx.array | None = None,
         initial_audio_latents: mx.array | None = None,
         refinement_strength: float = 1.0,
+        refinement_start_sigma: float | None = None,
         preserve_initial_audio: bool = False,
         fun_control=None,
     ) -> LatentResult:
@@ -373,9 +372,7 @@ class MiniMaxH3Pipeline:
             if not 0.0 <= value <= 1.0:
                 raise ValueError(f"`{name}` must be between 0 and 1, got {value}.")
         has_initial_latents = initial_video_latents is not None or initial_audio_latents is not None
-        if has_initial_latents and (
-            initial_video_latents is None or initial_audio_latents is None
-        ):
+        if has_initial_latents and (initial_video_latents is None or initial_audio_latents is None):
             raise ValueError("H3 refinement requires both initial video and audio latents.")
         if has_initial_latents and not 0.0 < refinement_strength <= 1.0:
             raise ValueError("`refinement_strength` must be greater than 0 and no more than 1.")
@@ -593,7 +590,18 @@ class MiniMaxH3Pipeline:
         video_sched, audio_sched = self._build_schedules(
             num_inference_steps, sampling_method=sampling_method
         )
-        if has_initial_latents and refinement_strength < 1.0:
+        if refinement_start_sigma is not None:
+            if not has_initial_latents:
+                raise ValueError("An explicit refinement sigma requires joint initial latents.")
+            from .scheduler import refinement_sigmas
+
+            active_steps = max(1, int(math.ceil(len(video_sched.timesteps) * refinement_strength)))
+            video_sigmas, audio_sigmas = refinement_sigmas(
+                refinement_start_sigma, active_steps, video_sched.shift, audio_sched.shift
+            )
+            video_sched.set_timesteps(sigmas=video_sigmas)
+            audio_sched.set_timesteps(sigmas=audio_sigmas)
+        elif has_initial_latents and refinement_strength < 1.0:
             full_steps = len(video_sched.timesteps)
             active_steps = max(1, min(full_steps, int(math.ceil(full_steps * refinement_strength))))
             video_sigmas = video_sched.sigmas.tolist()[-(active_steps + 1) :]
@@ -822,13 +830,17 @@ class MiniMaxH3Pipeline:
                             diagnostics=diagnostics,
                             fun_control=fun_control,
                         )
-                    actual_transformer = not core_reuse and not replaying and (
-                        hierarchical_blockcache
-                        or (
-                            (blockcache is None or not blockcache.last_was_hit)
-                            and (
-                                trajectory_forecast is None
-                                or not trajectory_forecast.last_was_forecast
+                    actual_transformer = (
+                        not core_reuse
+                        and not replaying
+                        and (
+                            hierarchical_blockcache
+                            or (
+                                (blockcache is None or not blockcache.last_was_hit)
+                                and (
+                                    trajectory_forecast is None
+                                    or not trajectory_forecast.last_was_forecast
+                                )
                             )
                         )
                     )
@@ -841,13 +853,11 @@ class MiniMaxH3Pipeline:
                 scheduler_started = time.perf_counter()
                 preview_latents = None
                 if latent_preview_callback is not None:
-                    sigma_from_timestep = float(
-                        np.float32(1.0) - np.float32(timestep)
-                    )
-                    denoised_video_rows = (
-                        current_video_rows[condition_video_count:]
-                        + sigma_from_timestep
-                        * video_pred[0, condition_video_count:].astype(mx.float32)
+                    sigma_from_timestep = float(np.float32(1.0) - np.float32(timestep))
+                    denoised_video_rows = current_video_rows[
+                        condition_video_count:
+                    ] + sigma_from_timestep * video_pred[0, condition_video_count:].astype(
+                        mx.float32
                     )
                     preview_latents = unpatchify_video_tokens(
                         denoised_video_rows,

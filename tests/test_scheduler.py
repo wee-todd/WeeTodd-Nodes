@@ -62,3 +62,24 @@ def test_res_multistep_state_resets_with_new_schedule():
     scheduler.set_timesteps(4)
     assert scheduler.step_index is None
     assert scheduler._old_denoised is None
+
+
+def test_motion_refinement_uses_explicit_noise_fraction_on_joint_clock():
+    import numpy as np
+    import pytest
+
+    from minimax_h3_mlx.scheduler import refinement_sigmas
+
+    video, audio = refinement_sigmas(0.5, 8)
+    assert len(video) == len(audio) == 9
+    assert video[0] == pytest.approx(0.5)
+    assert audio[0] == pytest.approx(0.2)
+    assert video[-1] == audio[-1] == 0
+    assert all(a > b for a, b in zip(video, video[1:], strict=False))
+    # Invert each modality shift: both must describe the same underlying time.
+    v = np.array(video) / (12 - 11 * np.array(video))
+    a = np.array(audio) / (3 - 2 * np.array(audio))
+    assert np.allclose(v, a)
+    for invalid in (0, -1, 2, float("nan")):
+        with pytest.raises(ValueError):
+            refinement_sigmas(invalid, 8)

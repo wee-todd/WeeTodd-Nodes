@@ -5323,3 +5323,14 @@ from .florence_mask_nodes import (  # noqa: E402
 
 NODE_CLASS_MAPPINGS.update(FLORENCE_MASK_NODE_CLASS_MAPPINGS)
 NODE_DISPLAY_NAME_MAPPINGS.update(FLORENCE_MASK_NODE_DISPLAY_NAME_MAPPINGS)
+
+# Motion refinement runs the same isolated renderer used by Studio and headless jobs.
+from .motion_nodes import (  # noqa: E402
+    NODE_CLASS_MAPPINGS as MOTION_NODE_CLASS_MAPPINGS,
+)
+from .motion_nodes import (  # noqa: E402
+    NODE_DISPLAY_NAME_MAPPINGS as MOTION_NODE_DISPLAY_NAME_MAPPINGS,
+)
+
+NODE_CLASS_MAPPINGS.update(MOTION_NODE_CLASS_MAPPINGS)
+NODE_DISPLAY_NAME_MAPPINGS.update(MOTION_NODE_DISPLAY_NAME_MAPPINGS)

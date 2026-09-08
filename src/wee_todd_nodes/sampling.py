@@ -214,6 +214,7 @@ class H3TransformerCache:
         continuation: H3ContinuationContext | None = None,
         refinement_source: H3Latents | None = None,
         refinement_strength: float = 1.0,
+        refinement_mode: str = "spatial",
         refinement_resize_method: str = "bilinear",
         refinement_learned_upscaler: H3LearnedLatentUpscalerSpec | None = None,
         refinement_upscaler_callback=None,
@@ -226,6 +227,27 @@ class H3TransformerCache:
     ) -> H3Latents:
         spec.validate()
         config.validate()
+        if refinement_mode not in {"spatial", "motion"}:
+            raise ValueError("Unknown H3 refinement mode.")
+        if refinement_mode == "motion":
+            if refinement_source is None or spec.task != "t2va":
+                raise ValueError("Motion refinement requires initialized native T2VA latents.")
+            if any(
+                value is not None
+                for value in (
+                    continuation,
+                    easycache,
+                    blockcache,
+                    trajectory_forecast,
+                    sol_attention,
+                    fastvideo,
+                    vdn,
+                    loras,
+                    fun_control_spec,
+                    refinement_learned_upscaler,
+                )
+            ):
+                raise ValueError("Motion refinement requires a plain H3 recipe without adapters.")
         if (fun_control_spec is None) != (fun_control_latent is None):
             raise ValueError("H3 Fun ControlNet requires both a checkpoint spec and control latent")
         fun_control_key = None
@@ -250,9 +272,9 @@ class H3TransformerCache:
             and conditioning.condition_video_rows is None
             and not conditioning.keyframe_anchors
         )
-        expected_vision = (
-            spec.task == "fl2va" and not continuation_text_only_fl2va
-        ) or (spec.task == "ref2va" and conditioning.condition_video_rows is not None)
+        expected_vision = (spec.task == "fl2va" and not continuation_text_only_fl2va) or (
+            spec.task == "ref2va" and conditioning.condition_video_rows is not None
+        )
         if conditioning.task != spec.task:
             raise ValueError(
                 f"Conditioning task {conditioning.task!r} does not match "
@@ -297,7 +319,13 @@ class H3TransformerCache:
                 )
             if refinement_source.fps != 24 or refinement_source.sample_rate != 32000:
                 raise ValueError("H3 Hi Res Fix requires native 24 fps and 32 kHz H3 latents.")
-            if config.width <= refinement_source.width or config.height <= refinement_source.height:
+            if refinement_mode == "motion" and (
+                config.width != refinement_source.width or config.height != refinement_source.height
+            ):
+                raise ValueError("Motion refinement must preserve source dimensions.")
+            if refinement_mode == "spatial" and (
+                config.width <= refinement_source.width or config.height <= refinement_source.height
+            ):
                 raise ValueError(
                     "H3 Hi Res Fix target dimensions must exceed the source dimensions."
                 )
@@ -336,6 +364,7 @@ class H3TransformerCache:
             )
             refinement_condition_rows_resized = True
         condition_schedule_key = (
+            refinement_mode,
             continuation is not None,
             refinement_source is not None,
             round(float(refinement_strength), 6) if refinement_source is not None else None,
@@ -469,7 +498,9 @@ class H3TransformerCache:
         if refinement_source is not None:
             import mlx.core as mx
 
-            if refinement_learned_upscaler is not None:
+            if refinement_mode == "motion":
+                initial_video_latents = refinement_source.video
+            elif refinement_learned_upscaler is not None:
                 # A warm transformer from the first pass must not overlap the temporary learned
                 # upscaler. Reloading it after this stage is cheaper than increasing peak memory.
                 self.unload()
@@ -537,9 +568,7 @@ class H3TransformerCache:
                     if fun_control_spec is not None:
                         from minimax_h3_mlx.controlnet import load_fun_controlnet
 
-                        self._fun_control_model = load_fun_controlnet(
-                            fun_control_spec.validate()
-                        )
+                        self._fun_control_model = load_fun_controlnet(fun_control_spec.validate())
                     if loras.adapters:
                         from minimax_h3_mlx.lora import apply_lora_stack
 
@@ -686,6 +715,9 @@ class H3TransformerCache:
                         initial_video_latents=initial_video_latents,
                         initial_audio_latents=initial_audio_latents,
                         refinement_strength=refinement_strength,
+                        refinement_start_sigma=(
+                            refinement_strength if refinement_mode == "motion" else None
+                        ),
                         preserve_initial_audio=refinement_source is not None,
                         fun_control=fun_control,
                     )

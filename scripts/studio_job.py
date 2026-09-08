@@ -95,7 +95,12 @@ def renderer_fingerprint():
     files = sorted((bridge.ROOT / "src").rglob("*.py"))
     files += [
         bridge.ROOT / "scripts" / name
-        for name in ("render_headless.py", "studio_bridge.py", "studio_job.py")
+        for name in (
+            "render_headless.py",
+            "studio_bridge.py",
+            "studio_job.py",
+            "motion_fidelity.py",
+        )
     ]
     return digest([[str(p.relative_to(bridge.ROOT)), file_hash(p)] for p in files])
 
@@ -115,13 +120,20 @@ def export_job(request, target):
         current = dict(request, clipID=clip["id"])
         recipe, report = bridge.compose_recipe(current)
         recipes[clip["id"]] = {"recipe": recipe, "report": report}
+    motion_recipes = {}
+    for clip in request["project"]["clips"]:
+        if (clip.get("motionFidelity") or {}).get("enabled"):
+            motion_recipes[clip["id"]] = bridge.motion_request(dict(request, clipID=clip["id"]))[
+                "recipe"
+            ]
     job = {
-        "format": "weetodd-studio-job-v1",
+        "format": "weetodd-studio-job-v2" if motion_recipes else "weetodd-studio-job-v1",
         "scope": "clip" if request.get("clipOnly") else "movie",
         "project": request["project"],
         "globalAssets": request.get("globalAssets", []),
         "runtime": request["runtime"],
         "recipes": recipes,
+        **({"motionRecipes": motion_recipes} if motion_recipes else {}),
         "execution": {
             "parallelGenerations": 1,
             "rendererSHA256": renderer_fingerprint(),
@@ -203,6 +215,7 @@ def inputs_fingerprint(job):
 
     walk(job["project"])
     walk(job["recipes"])
+    walk(job.get("motionRecipes", {}))
     walk(job.get("globalAssets", []))
     walk(job["runtime"])
     observations = []
@@ -251,6 +264,23 @@ def preflight(job, output):
                 and clip.get("sourceIn", 0) + clip["duration"] > media["duration"] + 0.08
             ):
                 raise ValueError(f"{clip['name']}: trim extends beyond its source movie.")
+    for clip in job["project"]["clips"]:
+        if (clip.get("motionFidelity") or {}).get("enabled"):
+            from wee_todd_mlx.motion_fidelity import MotionSettings, validate_recipe
+
+            MotionSettings(**clip["motionFidelity"]).validate()
+            validate_recipe(job.get("motionRecipes", {}).get(clip["id"], {}))
+            if clip["id"] not in job["recipes"]:
+                from motion_fidelity import preflight as motion_preflight
+
+                motion_preflight(
+                    {
+                        "clip": clip,
+                        "recipe": job["motionRecipes"][clip["id"]],
+                        "settings": clip["motionFidelity"],
+                        "runtime": job["runtime"],
+                    }
+                )
     for region in job["project"].get("audio", []):
         media = bridge.inspect_media(region["path"], job["runtime"])
         if not media.get("hasAudio"):
@@ -338,6 +368,52 @@ def _execute_locked(job, output, resume):
                     clip["sourceIn"] = source["duration"]
                 clip["duration"] -= source["duration"]
             clip["duration"] = min(requested_duration, clip["duration"])
+        motion_outputs = {}
+        for clip in project["clips"]:
+            if not (clip.get("motionFidelity") or {}).get("enabled"):
+                continue
+            key = "motion-" + clip["id"]
+            previous = state["completed"].get(key)
+            if (
+                previous
+                and Path(previous["video"]).is_file()
+                and file_hash(previous["video"]) == previous["sha256"]
+                and previous.get("sourceSHA256") == file_hash(clip["sourcePath"])
+            ):
+                result = previous
+            else:
+                import uuid
+
+                folder = output / key / uuid.uuid4().hex
+                folder.parent.mkdir(parents=True, exist_ok=True)
+                request_path = folder.with_suffix(".json")
+                atomic_json(
+                    request_path,
+                    {
+                        "clip": clip,
+                        "recipe": job["motionRecipes"][clip["id"]],
+                        "settings": clip["motionFidelity"],
+                        "runtime": job["runtime"],
+                    },
+                )
+                bridge.run(
+                    [
+                        sys.executable,
+                        str(bridge.ROOT / "scripts/motion_fidelity.py"),
+                        "--request",
+                        str(request_path),
+                        "--output-directory",
+                        str(folder),
+                    ]
+                )
+                result = json.loads((folder / "result.json").read_text())
+                result["sha256"] = file_hash(result["video"])
+                state["completed"][key] = result
+                atomic_json(state_path, state)
+            motion_outputs[clip["id"]] = result["sha256"]
+            clip["sourcePath"] = result["video"]
+            clip["sourceIn"] = result.get("sourceIn", 0)
+            clip["motionFidelity"]["enabled"] = False  # already resolved for finishing
         format_name = project["settings"].get("format", "mp4")
         name = (
             "movie-frames"
@@ -348,6 +424,11 @@ def _execute_locked(job, output, resume):
         )
         final = output / name
         previous = state["completed"].get("export")
+        if previous and motion_outputs and previous.get("motionOutputs") != motion_outputs:
+            raise ValueError(
+                "An enhancement changed since the saved final export. "
+                "Choose a new output folder; existing movies are preserved."
+            )
         if previous and final.exists() and artifact_hash(final) == previous.get("sha256"):
             result = previous
         else:
@@ -362,6 +443,8 @@ def _execute_locked(job, output, resume):
                 cache_directory=output / "finished-clips",
             )
             result["sha256"] = artifact_hash(final)
+            if motion_outputs:
+                result["motionOutputs"] = motion_outputs
             state["completed"]["export"] = result
         state["status"] = "success"
         state["resolvedProject"] = project
@@ -384,7 +467,7 @@ def main():
     parser.add_argument("--preflight-only", action="store_true")
     args = parser.parse_args()
     job = json.loads(args.job.read_text())
-    if job.get("format") != "weetodd-studio-job-v1":
+    if job.get("format") not in {"weetodd-studio-job-v1", "weetodd-studio-job-v2"}:
         parser.error("Unsupported job format")
     body = dict(job)
     expected = body.pop("manifestSHA256", None)

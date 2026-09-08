@@ -7,7 +7,7 @@ Reconciled 2026-09-07 against the local source and saved acceptance evidence.
 The shared Python/MLX backend runs through ComfyUI or `scripts/render_headless.py`.
 The headless process blocks ComfyUI and node-catalog imports. It accepts versioned JSON
 recipes and records resolved assets, effective conditioning, results, and runtime unloading.
-The catalog contains 119 nodes and 42 UI workflows. Static validation establishes portable
+The catalog contains 121 nodes and 42 UI workflows. Static validation establishes portable
 contracts; it does not establish that every workflow has local models and selected input media.
 
 | Engine | Implemented | Qualification limits |
@@ -44,6 +44,21 @@ configuration; automatic model downloads, retail signing/notarization and clean-
 remain release work. MetalFX interpolation is experimental and requires explicit depth/motion/camera
 guides. See [Studio usage and limits](studio/README.md) for the exact implementation boundary.
 
+## Experimental clip motion enhancement
+
+Motion Fidelity (De-Roping) is implemented for H3 clips through Studio, v2 movie/clip headless jobs
+and two ComfyUI nodes. It is off by default. Adaptive latent analysis or uniform holds expands video
+and pitch-preserved conditioning audio; same-resolution partial H3 denoising then recovers source
+frame timing and remuxes the original soundtrack. Sources are retained and enhancement settings do
+not invalidate base generation. Completed enhancement stages can resume after hash verification.
+
+A dense H3 896×512 boxing reference used 19 source evaluations without FastVideo/VDN. Uniform 2×
+refinement recovered exactly 124 frames at 24 fps with audio/video duration drift below 1 ms.
+Matching frames retain the subject/action, but changes are subtle and fast-glove blur remains.
+This is not general motion-fidelity qualification. Plain H3 T2VA repair
+recipes only; LTX, imported-movie UI support, long-clip windows and regional edits remain gated.
+See [controls, budgets and limits](studio/README.md#motion-fidelity-de-roping--experimental-h3).
+
 ## Source checkpoints
 
 - `e31a27c`: shared headless renderer and conditioned ComfyUI workflows.
@@ -68,6 +83,10 @@ guides. See [Studio usage and limits](studio/README.md) for the exact implementa
   and verified output timing/dimensions. No general interpolation-quality claim follows from these tests.
 - Publication cleanup adds six packaging/preflight regressions. The full Python suite passed
   1,324 tests with one skipped (optional algorithm search excluded); all 10 Swift tests passed.
+- Motion Fidelity adds shared H3 timing/refinement, Studio and headless integration, and two
+  experimental ComfyUI nodes. The full suite passed 1,345 Python tests with one skipped; all 12
+  Swift tests passed. Real H3 generation/refinement, packaged CLI movie assembly/resume, and the
+  Studio Enhance/source-comparison action completed. Broad motion/identity quality remains open.
 - Complete retail packaging/model onboarding and qualification on clean, lower-memory Macs.
 - Qualify additional adapter/task/precision combinations before promoting them in the interface.
 
