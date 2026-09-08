@@ -397,14 +397,32 @@ def motion_request(request):
         recipe = json.loads(recipe_file.read_text())
     else:
         recipe, _ = compose_recipe(request)
+    recipe_prompt = recipe["prompt"]
+    override = clip.get("motionPrompt")
+    if override is not None:
+        if not isinstance(override, str) or not override.strip():
+            raise ValueError("The repair prompt override must be a nonblank string.")
+        recipe = copy.deepcopy(recipe)
+        recipe["prompt"] = override
     validate_recipe(recipe)
     return {
         "recipe": recipe,
+        "recipePrompt": recipe_prompt,
         "clip": clip,
         "settings": settings,
         "runtime": request["runtime"],
         "recipePath": recipe_path or "",
         "recipeEvidence": recipe_evidence,
+    }
+
+
+def motion_prepare(request):
+    """Resolve and validate the complete repair prompt without writing or loading weights."""
+    current = motion_request(request)
+    return {
+        "prompt": current["recipe"]["prompt"],
+        "recipePrompt": current["recipePrompt"],
+        "usingOverride": current["clip"].get("motionPrompt") is not None,
     }
 
 
@@ -438,6 +456,7 @@ def motion_enhance(request, destination, *, analyze=False):
             "duration": clip["duration"],
             "outputIn": result.get("sourceIn", 0),
             "recipeID": clip.get("motionRecipeID") or "",
+            "motionPrompt": clip.get("motionPrompt"),
             "settings": current["settings"],
             "sourceSHA256": result["sourceSHA256"],
             "sha256": file_hash(output),
@@ -466,6 +485,7 @@ def resolve_motion_output(clip):
         or result.get("sourceIn") != clip.get("sourceIn", 0)
         or result.get("duration") != clip.get("duration")
         or result.get("recipeID", "") != (clip.get("motionRecipeID") or "")
+        or result.get("motionPrompt") != clip.get("motionPrompt")
         or not Path(result.get("path", "")).is_file()
         or file_hash(clip["sourcePath"]) != result.get("sourceSHA256")
         or file_hash(result["path"]) != result.get("sha256")
@@ -1156,6 +1176,7 @@ def main():
             "bridge-frames",
             "motion-analyze",
             "motion-enhance",
+            "motion-prepare",
         ],
     )
     parser.add_argument("--request", type=Path, required=True)
@@ -1180,6 +1201,8 @@ def main():
         result = motion_enhance(
             request, args.output.resolve(), analyze=args.command == "motion-analyze"
         )
+    elif args.command == "motion-prepare":
+        result = motion_prepare(request)
     elif args.command == "prepare":
         result = prepare(request, args.output.resolve())
     elif args.command == "render":

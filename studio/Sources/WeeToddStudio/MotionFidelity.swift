@@ -34,6 +34,20 @@ struct MotionFidelityInspector: View {
           }
           Text("Requires a plain H3 recipe with at least 16 steps. Accelerators, LoRAs and additional conditioning are not qualified.")
             .font(.caption).foregroundStyle(.secondary)
+          Button {
+            Task { await store.openMotionPromptEditor() }
+          } label: {
+            HStack {
+              Image(systemName: "text.bubble")
+              Text(clip.motionPrompt == nil ? "Edit Repair Prompt" : "Edit Custom Repair Prompt")
+              Spacer()
+              Image(systemName: "arrow.up.left.and.arrow.down.right")
+            }
+          }
+          .buttonStyle(.bordered).disabled(store.bridge.busy)
+          if let prompt = clip.motionPrompt {
+            Text(prompt).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(3)
+          }
           Picker("Expansion", selection: setting(\.mode)) {
             Text("Adaptive motion analysis").tag("adaptive")
             Text("Uniform").tag("uniform")
@@ -77,6 +91,130 @@ struct MotionFidelityInspector: View {
 }
 
 @MainActor extension StudioStore {
+  func openMotionPromptEditor() async {
+    guard let clip = selectedClip else {
+      error = "Select an H3 clip before editing its repair prompt."
+      return
+    }
+    guard clip.engine == .h3 else {
+      error = "Repair prompts are available for H3 clips only."
+      return
+    }
+    let session = MotionPromptEditorSession(clipID: clip.id)
+    motionPromptSession = session
+    motionPromptDraft = ""
+    motionRecipePrompt = ""
+    motionPromptClipName = clip.name
+    motionPromptUsingOverride = clip.motionPrompt != nil
+    motionPromptEditorError = nil
+    motionPromptLoading = true
+    showMotionPrompt = true
+    await prepareMotionPromptEditor(for: clip, session: session)
+  }
+
+  func retryMotionPromptEditor() async {
+    guard let session = motionPromptSession, selectedClipID == session.clipID,
+      let clip = project.clips.first(where: { $0.id == session.clipID })
+    else {
+      motionPromptEditorError =
+        "The clip changed or is no longer available. Close this editor and select it again."
+      return
+    }
+    await prepareMotionPromptEditor(for: clip, session: session)
+  }
+
+  private func prepareMotionPromptEditor(for clip: Clip, session: MotionPromptEditorSession) async {
+    motionPromptLoading = true
+    motionPromptEditorError = nil
+    do {
+      let body: [String: Any] = [
+        "project": try project.object(),
+        "globalAssets": try JSONSerialization.jsonObject(with: JSONEncoder().encode(globalAssets)),
+        "clipID": clip.id.uuidString,
+      ]
+      let result = try await bridge.invoke("motion-prepare", runtime: runtime, payload: body)
+      guard showMotionPrompt,
+        motionPromptSession?.matches(clipID: clip.id, token: session.token) == true
+      else { return }
+      guard selectedClipID == clip.id,
+        project.clips.first(where: { $0.id == clip.id }) == clip
+      else {
+        motionPromptEditorError =
+          "The clip changed while its repair prompt was prepared. Close this editor and try again."
+        motionPromptLoading = false
+        return
+      }
+      guard let prompt = result["prompt"] as? String,
+        let recipePrompt = result["recipePrompt"] as? String,
+        let usingOverride = result["usingOverride"] as? Bool
+      else {
+        throw StudioError.invalid("The renderer returned an incomplete repair prompt.")
+      }
+      motionPromptDraft = prompt
+      motionRecipePrompt = recipePrompt
+      motionPromptUsingOverride = usingOverride
+    } catch {
+      guard showMotionPrompt,
+        motionPromptSession?.matches(clipID: clip.id, token: session.token) == true
+      else { return }
+      motionPromptEditorError = error.localizedDescription
+    }
+    motionPromptLoading = false
+  }
+
+  func cancelMotionPromptEditor() {
+    showMotionPrompt = false
+    motionPromptSession = nil
+    motionPromptDraft = ""
+    motionRecipePrompt = ""
+    motionPromptClipName = ""
+    motionPromptUsingOverride = false
+    motionPromptEditorError = nil
+    motionPromptLoading = false
+  }
+
+  func saveMotionPromptEditor() {
+    guard !motionPromptDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+      motionPromptEditorError = "The repair prompt cannot be blank."
+      return
+    }
+    guard let session = motionPromptSession, selectedClipID == session.clipID,
+      let index = project.clips.firstIndex(where: { $0.id == session.clipID })
+    else {
+      motionPromptEditorError = "The clip changed or is no longer available. No prompt was saved."
+      return
+    }
+    let changed = project.clips[index].motionPrompt != motionPromptDraft
+    if changed {
+      change { $0.clips[index].motionPrompt = motionPromptDraft }
+      refreshPreview()
+    }
+    notice =
+      changed
+      ? "Custom repair prompt saved. Motion enhancement is pending."
+      : "The custom repair prompt is unchanged."
+    cancelMotionPromptEditor()
+  }
+
+  func useRecipeMotionPrompt() {
+    guard let session = motionPromptSession, selectedClipID == session.clipID,
+      let index = project.clips.firstIndex(where: { $0.id == session.clipID })
+    else {
+      motionPromptEditorError = "The clip changed or is no longer available. No prompt was changed."
+      return
+    }
+    let changed = project.clips[index].motionPrompt != nil
+    if changed {
+      change { $0.clips[index].motionPrompt = nil }
+      refreshPreview()
+    }
+    notice =
+      changed
+      ? "The repair recipe prompt will be used. Motion enhancement is pending."
+      : "The repair recipe prompt is already in use."
+    cancelMotionPromptEditor()
+  }
+
   func enhanceMotion(analyze: Bool) async {
     guard let clip = selectedClip else { return }
     do {

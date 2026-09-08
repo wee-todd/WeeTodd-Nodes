@@ -160,6 +160,165 @@ def test_export_blocks_stale_enhancement_and_off_is_identity(tmp_path):
     assert off["sourcePath"] == str(source)
 
 
+def _motion_editor_request(tmp_path, motion_prompt=None):
+    recipe_file = tmp_path / "repair.json"
+    recipe_file.write_text(
+        json.dumps(
+            {
+                "engine": "h3",
+                "prompt": "Original repair prompt",
+                "components": {"task": "t2va", "transformer": str(tmp_path)},
+                "config": {"steps": 20},
+            }
+        )
+    )
+    clip = {
+        "id": "clip",
+        "name": "Shot",
+        "engine": "h3",
+        "sourcePath": str(tmp_path / "source.mp4"),
+        "sourceIn": 0,
+        "duration": 3,
+        "motionFidelity": {"enabled": True},
+        "motionRecipeID": str(recipe_file),
+    }
+    if motion_prompt is not None:
+        clip["motionPrompt"] = motion_prompt
+    return {
+        "project": {"clips": [clip], "settings": {}},
+        "runtime": {},
+        "clipID": "clip",
+    }, recipe_file
+
+
+def test_motion_request_preserves_recipe_and_applies_exact_override(tmp_path, monkeypatch):
+    request, recipe_file = _motion_editor_request(tmp_path, "  Exact repair direction.\n  ")
+    monkeypatch.setattr("wee_todd_mlx.motion_fidelity.validate_recipe", lambda _: None)
+
+    resolved = bridge.motion_request(request)
+
+    assert resolved["recipe"]["prompt"] == "  Exact repair direction.\n  "
+    assert resolved["recipePrompt"] == "Original repair prompt"
+    assert json.loads(recipe_file.read_text())["prompt"] == "Original repair prompt"
+    assert bridge.motion_prepare(request) == {
+        "prompt": "  Exact repair direction.\n  ",
+        "recipePrompt": "Original repair prompt",
+        "usingOverride": True,
+    }
+
+
+def test_motion_request_defaults_to_recipe_prompt_and_rejects_invalid_overrides(
+    tmp_path, monkeypatch
+):
+    request, _ = _motion_editor_request(tmp_path)
+    monkeypatch.setattr("wee_todd_mlx.motion_fidelity.validate_recipe", lambda _: None)
+    resolved = bridge.motion_request(request)
+    assert resolved["recipe"]["prompt"] == "Original repair prompt"
+    assert resolved["recipePrompt"] == "Original repair prompt"
+    assert bridge.motion_prepare(request)["usingOverride"] is False
+
+    for invalid in ("", " \n\t ", 42, True, ["prompt"]):
+        request["project"]["clips"][0]["motionPrompt"] = invalid
+        with pytest.raises(ValueError, match="repair prompt"):
+            bridge.motion_request(request)
+    request["project"]["clips"][0]["motionPrompt"] = None
+    reset = bridge.motion_prepare(request)
+    assert reset["prompt"] == "Original repair prompt"
+    assert reset["usingOverride"] is False
+
+
+def test_motion_enhancement_records_prompt_and_changed_override_is_stale(tmp_path, monkeypatch):
+    request, _ = _motion_editor_request(tmp_path, "Original override")
+    source = Path(request["project"]["clips"][0]["sourcePath"])
+    source.write_bytes(b"source")
+    destination = tmp_path / "enhancement"
+    recipe = {
+        "engine": "h3",
+        "prompt": "Original override",
+        "components": {"task": "t2va"},
+        "config": {"steps": 20},
+    }
+    monkeypatch.setattr(
+        bridge,
+        "motion_request",
+        lambda _: {
+            "recipe": recipe,
+            "recipePrompt": "Original repair prompt",
+            "clip": request["project"]["clips"][0],
+            "settings": {"enabled": True},
+            "runtime": {},
+            "recipePath": "",
+            "recipeEvidence": {},
+        },
+    )
+
+    def run(_):
+        destination.mkdir()
+        enhanced = destination / "enhanced.mp4"
+        enhanced.write_bytes(b"enhanced")
+        (destination / "result.json").write_text(
+            json.dumps(
+                {
+                    "video": str(enhanced),
+                    "sourceIn": 0,
+                    "sourceSHA256": jobs.file_hash(source),
+                    "report": str(destination / "plan.json"),
+                }
+            )
+        )
+
+    monkeypatch.setattr(bridge, "run", run)
+    result = bridge.motion_enhance(request, destination)
+    evidence = result["motionResult"]
+    assert evidence["motionPrompt"] == "Original override"
+
+    accepted_clip = dict(request["project"]["clips"][0])
+    accepted_clip["motionResult"] = evidence
+    bridge.resolve_motion_output(accepted_clip)
+    assert accepted_clip["sourcePath"] == evidence["path"]
+
+    changed_clip = dict(request["project"]["clips"][0])
+    changed_clip["motionPrompt"] = "A different repair prompt"
+    changed_clip["motionResult"] = evidence
+    with pytest.raises(ValueError, match="pending|stale"):
+        bridge.resolve_motion_output(changed_clip)
+    changed_clip.pop("motionPrompt")
+    with pytest.raises(ValueError, match="pending|stale"):
+        bridge.resolve_motion_output(changed_clip)
+
+
+def test_exported_job_embeds_override_and_prompt_change_invalidates_resume(tmp_path, monkeypatch):
+    request, _ = _motion_editor_request(tmp_path, "Headless override")
+    Path(request["project"]["clips"][0]["sourcePath"]).write_bytes(b"source")
+    monkeypatch.setattr("wee_todd_mlx.motion_fidelity.validate_recipe", lambda _: None)
+    monkeypatch.setattr(jobs, "renderer_fingerprint", lambda: "renderer")
+    job_file = tmp_path / "movie.json"
+
+    jobs.export_job(request, job_file)
+
+    exported = json.loads(job_file.read_text())
+    assert exported["motionRecipes"]["clip"]["prompt"] == "Headless override"
+    output = tmp_path / "job-output"
+    output.mkdir()
+    (output / "job-state.json").write_text(
+        json.dumps(
+            {
+                "manifestSHA256": exported["manifestSHA256"],
+                "inputsFingerprint": jobs.inputs_fingerprint(exported),
+                "completed": {},
+                "status": "running",
+            }
+        )
+    )
+    changed = json.loads(json.dumps(exported))
+    changed["motionRecipes"]["clip"]["prompt"] = "Changed headless override"
+    body = dict(changed)
+    body.pop("manifestSHA256")
+    changed["manifestSHA256"] = jobs.digest(body)
+    with pytest.raises(ValueError, match="Job or source inputs changed"):
+        jobs.execute(changed, output, resume=True)
+
+
 def test_node_settings_contract_and_validation():
     from wee_todd_nodes.motion_nodes import WeeToddH3MotionRefine, WeeToddH3MotionSettings
 

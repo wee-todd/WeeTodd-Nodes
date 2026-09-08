@@ -163,6 +163,7 @@ extension Encodable {
   @Published var profiles: [ModelProfile] = []
   @Published var projectURL: URL?
   @Published var showPrompt = false
+  @Published var showMotionPrompt = false
   @Published var showRuntime = false
   @Published var showProjectSettings = false
   @Published var showLog = false
@@ -174,6 +175,12 @@ extension Encodable {
   @Published var preparedPrompt = ""
   @Published var preparedRecipe: String?
   @Published var preparedReport = ""
+  @Published var motionPromptDraft = ""
+  @Published var motionRecipePrompt = ""
+  @Published var motionPromptClipName = ""
+  @Published var motionPromptUsingOverride = false
+  @Published var motionPromptLoading = false
+  @Published var motionPromptEditorError: String?
   @Published var dirty = false
   @Published var player = AVPlayer()
   @Published var isPlaying = false
@@ -181,6 +188,7 @@ extension Encodable {
   @Published var previewMode = "Clip"
   let bridge = Bridge()
   private var preparedFingerprint: String?
+  var motionPromptSession: MotionPromptEditorSession?
   private var undoStates: [StudioProject] = []
   private var redoStates: [StudioProject] = []
   private var autosaveTask: Task<Void, Never>?
@@ -401,6 +409,7 @@ extension Encodable {
   func load(_ url: URL) {
     do {
       let p = try ProjectStorage.read(url)
+      cancelMotionPromptEditor()
       change { $0 = p }
       projectURL = url
       selectedClipID = p.clips.first?.id
@@ -409,6 +418,7 @@ extension Encodable {
     } catch { self.error = error.localizedDescription }
   }
   func newProject() {
+    cancelMotionPromptEditor()
     change { $0 = StudioProject() }
     projectURL = nil
     selectedClipID = nil

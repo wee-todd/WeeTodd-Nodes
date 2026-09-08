@@ -114,8 +114,11 @@ struct StudioView: View {
           AssetBrowser().frame(minWidth: 245, idealWidth: 290, maxWidth: 370)
         }
       }
-      .disabled(store.showPrompt)
+      .disabled(store.showPrompt || store.showMotionPrompt)
       if store.showPrompt { PromptEditor().transition(.opacity).zIndex(10) }
+      if store.showMotionPrompt {
+        MotionPromptEditor().transition(.opacity).zIndex(10)
+      }
     }
     .background(Theme.background).foregroundStyle(Theme.text).tint(.accentColor)
     .sheet(isPresented: $store.showProjectSettings) {
