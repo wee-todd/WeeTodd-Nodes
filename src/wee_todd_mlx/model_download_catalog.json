@@ -1,0 +1,941 @@
+[
+  {
+    "descriptor": {
+      "id": "h3-qwen-q8-vision-preconverted",
+      "name": "H3 Q8 vision encoder \u00b7 Preconverted (Recommended)",
+      "description": "Download ready-to-use Q8 language pages and the retained vision tower. Supports H3 text, first/last-frame and reference clips. No local conversion. Transformer, VAEs and tokenizer/processor are separate components.",
+      "downloadBytes": 28222816181,
+      "requiredDiskBytes": 28491251637,
+      "sourceURL": "https://huggingface.co/Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged/tree/0b92db8cf89d2f28f2c3ee72340929a057385977",
+      "licenseURL": "https://huggingface.co/Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged/blob/0b92db8cf89d2f28f2c3ee72340929a057385977/MINIMAX_H3_LICENSE",
+      "licenseNotice": "This mixed-provenance release retains MiniMax H3 source terms (including territorial restrictions) and separate Qwen Apache attribution. Review the model card and source terms; accept access on Hugging Face.",
+      "outputKind": "directory",
+      "engines": [
+        "h3"
+      ]
+    },
+    "kind": "h3-qwen",
+    "files": [
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/fixed.safetensors",
+        "size": 1555824752,
+        "sha256": "53fd531b979f27255b5a07cca8b7ff6edb8b6e382f015e3cae59e2874276eda0",
+        "target": "pages/fixed.safetensors"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-000.safetensors",
+        "size": 518085864,
+        "sha256": "1f2e7e91eeca6aa907bece38a1b6def9f0ad118a2ccb5390b756b29038485859",
+        "target": "pages/layer-000.safetensors"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-001.safetensors",
+        "size": 518085864,
+        "sha256": "63ffa4b092ba9cbecfa991ee66b082667defdabfbbdb0b5fef452a8c35b5be46",
+        "target": "pages/layer-001.safetensors"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-002.safetensors",
+        "size": 518085864,
+        "sha256": "be875b40405ad273ec969ebbffcafcd9ba4b21fb267c03c8898cb2288805cfda",
+        "target": "pages/layer-002.safetensors"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-003.safetensors",
+        "size": 518085864,
+        "sha256": "4e4560a5364a85b432de1b869029ce339f26723e18e8843dab39f05b5d3a8a5d",
+        "target": "pages/layer-003.safetensors"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-004.safetensors",
+        "size": 518085864,
+        "sha256": "32103a10f35837ac30f9b0bfc3784b666224bbd5b8cb2122f48c3ab51b361e01",
+        "target": "pages/layer-004.safetensors"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-005.safetensors",
+        "size": 518085864,
+        "sha256": "258197e9c87c3d7da8e34a94cca991f188f266d792796bff6ee8cb005e6ed12d",
+        "target": "pages/layer-005.safetensors"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-006.safetensors",
+        "size": 518085864,
+        "sha256": "4d20b74386c42b845bced6e66081526fd3abb7055aa62b780b26ba5d2bf0163d",
+        "target": "pages/layer-006.safetensors"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-007.safetensors",
+        "size": 518085864,
+        "sha256": "1c9039a4733ce3e31fdfc5e8bd92372ab7669a2e6ce71d4867133bf78ce76afd",
+        "target": "pages/layer-007.safetensors"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-008.safetensors",
+        "size": 518085864,
+        "sha256": "4a8705e6f68ef7ea00c1169e37b4ebbe7d2c36115d45bbdd774187fb94c1f43d",
+        "target": "pages/layer-008.safetensors"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-009.safetensors",
+        "size": 518085864,
+        "sha256": "73bec5d40057909df74eca1433b1431c419075d6087d5461eda7de6a43748d16",
+        "target": "pages/layer-009.safetensors"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-010.safetensors",
+        "size": 518085888,
+        "sha256": "6de9cd224e3919e549f65f267d8ba5d157770143e070221638af3160abb40327",
+        "target": "pages/layer-010.safetensors"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-011.safetensors",
+        "size": 518085888,
+        "sha256": "19f64a5db0735b1c0a2a4ae634eba43fa70d45fe683a52b4fc375d61dface25d",
+        "target": "pages/layer-011.safetensors"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-012.safetensors",
+        "size": 518085888,
+        "sha256": "06d0e3f56b62225d2a437b409afacfd1e334395ff1e43d0f9f136fd7f5f03cd0",
+        "target": "pages/layer-012.safetensors"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-013.safetensors",
+        "size": 518085888,
+        "sha256": "4454f07601fc0c11cde99f4db192fcaeecc6b7b824be914952d74516c7fa6465",
+        "target": "pages/layer-013.safetensors"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-014.safetensors",
+        "size": 518085888,
+        "sha256": "cb203336e1d4a0e2839762725bae6888f1064c711b8b361e6a319c8f32d4aadb",
+        "target": "pages/layer-014.safetensors"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-015.safetensors",
+        "size": 518085888,
+        "sha256": "1cfcb3c2e56778496a969e690260d3b930024a3b7b7b983315b154c9e6ee6ce1",
+        "target": "pages/layer-015.safetensors"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-016.safetensors",
+        "size": 518085888,
+        "sha256": "ff595ef964ff2c847c5111f93f23cc7bb1e434e8d88675d475e4b8027bf1dba5",
+        "target": "pages/layer-016.safetensors"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-017.safetensors",
+        "size": 518085888,
+        "sha256": "0e01722e9c8c0c48c1aceee261561fb816fed72e168a058fd2fc31b9d2d98f78",
+        "target": "pages/layer-017.safetensors"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-018.safetensors",
+        "size": 518085888,
+        "sha256": "c4f0e660782724ef0d85d740108bfea6534c2c35cccfbdb22b62d7bcab5e1fbb",
+        "target": "pages/layer-018.safetensors"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-019.safetensors",
+        "size": 518085888,
+        "sha256": "a04ec2b9021feddc367bca3f1d7eace5edcd99a4af0c77a743f4c2c570159a79",
+        "target": "pages/layer-019.safetensors"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-020.safetensors",
+        "size": 518085888,
+        "sha256": "03b55c2ce62a85e04ab069e791dd9470dbafdb304a6946184b10697d7ecaf61f",
+        "target": "pages/layer-020.safetensors"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-021.safetensors",
+        "size": 518085888,
+        "sha256": "7ead46a31691fbef806eac58574ac14f9b47f76bfb1cd65de05025ce2427fcde",
+        "target": "pages/layer-021.safetensors"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-022.safetensors",
+        "size": 518085888,
+        "sha256": "fc4bf0706f70da82a67c560b3f91e00094325606ccd72f9225561df3d106e80d",
+        "target": "pages/layer-022.safetensors"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-023.safetensors",
+        "size": 518085888,
+        "sha256": "06e05cfbe907700dea6e456da1b9bd36ad6ec0ef04af93d1949a4b170686f055",
+        "target": "pages/layer-023.safetensors"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-024.safetensors",
+        "size": 518085888,
+        "sha256": "da7f7f3c86f0a758a6101ffdf08ac387c833e90cbba9a38e99f736790507b78b",
+        "target": "pages/layer-024.safetensors"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-025.safetensors",
+        "size": 518085888,
+        "sha256": "e1f101aec55bf16ec2100dacbab745d94798dad741e376c91d7cbf169e2d4d84",
+        "target": "pages/layer-025.safetensors"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-026.safetensors",
+        "size": 518085888,
+        "sha256": "ef8323398dc3d30669177b95584ae38e13d65f36cc71ea30eedf96cf2f598741",
+        "target": "pages/layer-026.safetensors"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-027.safetensors",
+        "size": 518085888,
+        "sha256": "342eadcd1a051f73be1f8e6687ea9ccae8069b4b1a63050cb0385053f2e84c70",
+        "target": "pages/layer-027.safetensors"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-028.safetensors",
+        "size": 518085888,
+        "sha256": "4ff53f89340174b689c3a818a5b7ad016dc21c0d4f7b92d3510ea22584831070",
+        "target": "pages/layer-028.safetensors"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-029.safetensors",
+        "size": 518085888,
+        "sha256": "739a7421cef5fb053df26d050ff2933da55436f8d32382f4c035d63aed898e30",
+        "target": "pages/layer-029.safetensors"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-030.safetensors",
+        "size": 518085888,
+        "sha256": "eeb75807185ba2f3d1e70a683dac47647de9f573090769cab2e338fea7cccc44",
+        "target": "pages/layer-030.safetensors"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-031.safetensors",
+        "size": 518085888,
+        "sha256": "56c22f2c4a890ef2ee6f2fecdaffd59fed50f7de7bccdaee9da1b4d6d327377e",
+        "target": "pages/layer-031.safetensors"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-032.safetensors",
+        "size": 518085888,
+        "sha256": "ea416f0d2b43b3e8fbd01f11c954f9be21aebe46c337c00d5b8882f71f7b7ab6",
+        "target": "pages/layer-032.safetensors"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-033.safetensors",
+        "size": 518085888,
+        "sha256": "22cb27d839ad64ca7c6abdec829df24c049188c08995bc316b0d7cf09fc09bb4",
+        "target": "pages/layer-033.safetensors"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-034.safetensors",
+        "size": 518085888,
+        "sha256": "21974ec40d7bf99cdf4315860b71a9b305511d79145082c83b79f7276dd9af34",
+        "target": "pages/layer-034.safetensors"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-035.safetensors",
+        "size": 518085888,
+        "sha256": "408a2fa29c072135e41ba911dd58fccecf2a232df5c8e30f1ccc4dd5a8f790a5",
+        "target": "pages/layer-035.safetensors"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-036.safetensors",
+        "size": 518085888,
+        "sha256": "0def8c7c5e1710e9b077b84915a87ea8a8758b012789695d5aec0d27c2f50c7c",
+        "target": "pages/layer-036.safetensors"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-037.safetensors",
+        "size": 518085888,
+        "sha256": "345d45676fa29430c7dc96991b8bf77ff83448382d56cbdf577543a7decaf104",
+        "target": "pages/layer-037.safetensors"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-038.safetensors",
+        "size": 518085888,
+        "sha256": "6c820135e08804832ebf3bcbe9a0f7c4f7e97dda287d13b20919a523f6a28f96",
+        "target": "pages/layer-038.safetensors"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-039.safetensors",
+        "size": 518085888,
+        "sha256": "27503fa4faf48fb1614f4f0c5f0910779efd960497ee08759ac75b172d1c4b5f",
+        "target": "pages/layer-039.safetensors"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-040.safetensors",
+        "size": 518085888,
+        "sha256": "b8c462a018ea169a76339b7e79ceb5e50a4e0f54b011d5725e0668c578a26d20",
+        "target": "pages/layer-040.safetensors"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-041.safetensors",
+        "size": 518085888,
+        "sha256": "8e0179cf39ccae990c10d5136a104b12e1a3eda832a2ca1a81f8137f695dd02b",
+        "target": "pages/layer-041.safetensors"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-042.safetensors",
+        "size": 518085888,
+        "sha256": "b11cfc86438e5a7d7129d89aaaabb12c05f5d1d5bd1f013d0e351b0e57767b7d",
+        "target": "pages/layer-042.safetensors"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-043.safetensors",
+        "size": 518085888,
+        "sha256": "c5718fdd671d241da1fce17497246f56b6e1d51511d3d54694dd60ce7227816b",
+        "target": "pages/layer-043.safetensors"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-044.safetensors",
+        "size": 518085888,
+        "sha256": "a14603996bf739273e8bb6bb8356fa78aa8c0c7cf3dbfa2eb54069921782f90d",
+        "target": "pages/layer-044.safetensors"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-045.safetensors",
+        "size": 518085888,
+        "sha256": "42e3424b3d7217ae6533d8407252701c74ca712a6d304b136ed245b9308c26ec",
+        "target": "pages/layer-045.safetensors"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-046.safetensors",
+        "size": 518085888,
+        "sha256": "b50f2d66c5078cad1febe7c483fc05602824671528869bb279501c18ea599fda",
+        "target": "pages/layer-046.safetensors"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-047.safetensors",
+        "size": 518085888,
+        "sha256": "ba1441173df356656840b1b07e51d2ab5eb2693f0daa53e84356565874c9799c",
+        "target": "pages/layer-047.safetensors"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-048.safetensors",
+        "size": 518085888,
+        "sha256": "5c1451994d31d116ce1bcc344323b555605a8ff802c8c55c769a9deb3d3b7dc3",
+        "target": "pages/layer-048.safetensors"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-049.safetensors",
+        "size": 518085888,
+        "sha256": "0b6fe45cb8db784fadbd2e61bb8e40a594e43a2708480c2605185e2c4d036812",
+        "target": "pages/layer-049.safetensors"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/vision.safetensors",
+        "size": 762616248,
+        "sha256": "d190fed29fb2f14907635a586c36b88bce9c5165880938fe01bddab918e6c1d4",
+        "target": "pages/vision.safetensors"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "paged_text_encoder_manifest.json",
+        "size": 10577,
+        "sha256": "88e73768a9d3e94637519fe9f92f6dc9de83243e64ef24ab4664a2d02aef275d",
+        "target": "paged_text_encoder_manifest.json"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/fixed.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "pages/fixed.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-000.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "pages/layer-000.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-001.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "pages/layer-001.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-002.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "pages/layer-002.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-003.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "pages/layer-003.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-004.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "pages/layer-004.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-005.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "pages/layer-005.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-006.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "pages/layer-006.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-007.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "pages/layer-007.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-008.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "pages/layer-008.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-009.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "pages/layer-009.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-010.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "pages/layer-010.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-011.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "pages/layer-011.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-012.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "pages/layer-012.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-013.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "pages/layer-013.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-014.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "pages/layer-014.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-015.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "pages/layer-015.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-016.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "pages/layer-016.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-017.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "pages/layer-017.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-018.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "pages/layer-018.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-019.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "pages/layer-019.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-020.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "pages/layer-020.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-021.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "pages/layer-021.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-022.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "pages/layer-022.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-023.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "pages/layer-023.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-024.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "pages/layer-024.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-025.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "pages/layer-025.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-026.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "pages/layer-026.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-027.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "pages/layer-027.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-028.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "pages/layer-028.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-029.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "pages/layer-029.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-030.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "pages/layer-030.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-031.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "pages/layer-031.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-032.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "pages/layer-032.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-033.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "pages/layer-033.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-034.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "pages/layer-034.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-035.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "pages/layer-035.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-036.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "pages/layer-036.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-037.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "pages/layer-037.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-038.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "pages/layer-038.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-039.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "pages/layer-039.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-040.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "pages/layer-040.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-041.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "pages/layer-041.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-042.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "pages/layer-042.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-043.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "pages/layer-043.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-044.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "pages/layer-044.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-045.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "pages/layer-045.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-046.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "pages/layer-046.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-047.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "pages/layer-047.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-048.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "pages/layer-048.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/layer-049.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "pages/layer-049.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "pages/vision.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "pages/vision.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "config.json",
+        "size": 724,
+        "sha256": "add27928e87c54c6a88901d8a8c177df47691661e455f6747bc8916cee6149ec",
+        "target": "config.json"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "architecture_config.json",
+        "size": 1474,
+        "sha256": "d2dd0c60d01b9e195d9447c52da61c7302d28828524914c044d9c6e1b81d0427",
+        "target": "architecture_config.json"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "LICENSE",
+        "size": 11358,
+        "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+        "target": "LICENSE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "MINIMAX_H3_LICENSE",
+        "size": 17604,
+        "sha256": "59b99642b95ea21630e311198ddbfffbfe05aadba0c2f5d884cbdf4efcc90f44",
+        "target": "MINIMAX_H3_LICENSE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "MODIFICATIONS.md",
+        "size": 1693,
+        "sha256": "187a105b805ce09947a484f9160143000ef0efa7d787fcaf79ab48b85cf02cb1",
+        "target": "MODIFICATIONS.md"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "NOTICE",
+        "size": 723,
+        "sha256": "feb444c9670f7c015a40bf8e4c41f064de4c25bc17f59bba09d8ff9bf3d4e493",
+        "target": "NOTICE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "README.md",
+        "size": 3666,
+        "sha256": "62957bed2f53817f1922dcd362219c9f2456ad4c85faabe90c6807661786a5f8",
+        "target": "README.md"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "provenance/SOURCE_LICENSE",
+        "size": 17604,
+        "sha256": "59b99642b95ea21630e311198ddbfffbfe05aadba0c2f5d884cbdf4efcc90f44",
+        "target": "provenance/SOURCE_LICENSE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "provenance/SOURCE_NOTICE",
+        "size": 552,
+        "sha256": "3ea3c60ee64954fc0898e68b7534e3613ba74586256aec6edad557b7f217c7c6",
+        "target": "provenance/SOURCE_NOTICE"
+      },
+      {
+        "repo": "Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged",
+        "revision": "0b92db8cf89d2f28f2c3ee72340929a057385977",
+        "filename": "provenance/SOURCE_MODIFICATIONS.md",
+        "size": 1630,
+        "sha256": "3439a033d427a8b3225640fad4dc76787496982ee4565deafc556852a7af902a",
+        "target": "provenance/SOURCE_MODIFICATIONS.md"
+      }
+    ]
+  }
+]

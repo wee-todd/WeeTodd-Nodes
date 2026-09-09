@@ -66,6 +66,8 @@ struct ClipInspector: View {
               Text($0.name).tag($0.id)
             }
           }.labelsHidden()
+          Button("Set up or repair models…") { store.showRuntime = true }
+            .font(.caption)
         }
         Button {
           store.showPrompt = true

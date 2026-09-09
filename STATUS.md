@@ -1,6 +1,6 @@
 # WeeTodd implementation status
 
-Reconciled 2026-09-08 against the local source and saved acceptance evidence.
+Reconciled 2026-09-09 against the local source and saved acceptance evidence.
 
 ## Shared renderer and ComfyUI
 
@@ -24,7 +24,9 @@ Newer conditioning integrations have their own evidence and do not inherit this 
 
 The local model library supports inventory, a persistent registry, shared asset references,
 recipe import, supported LoRA normalization, and preflight. It does not implement universal
-model detection, automatic downloads/conversions, DoRA/LyCORIS, or arbitrary missing-file discovery.
+model detection, arbitrary downloads/conversions, DoRA/LyCORIS, or arbitrary missing-file discovery.
+Explicit guided setup now discovers supported component layouts and handles pinned catalog downloads
+and selected conversions outside graph execution.
 
 ## Standalone graphical interface
 
@@ -45,10 +47,15 @@ members and strengths into the clip; editing a template cannot mutate existing p
 jobs. The shared renderer retains authoritative adapter and task checks. GUI validation uses synthetic
 header fixtures and establishes editing/transport behavior, not visual quality.
 
-The app is an initial development build. Model recipes, FFmpeg/FFprobe, and optional RIFE still need
-configuration; automatic model downloads, retail signing/notarization and clean-Mac qualification
-remain release work. MetalFX interpolation is experimental and requires explicit depth/motion/camera
-guides. See [Studio usage and limits](studio/README.md) for the exact implementation boundary.
+Guided setup now provides seven built-in H3/LTX presets, header-based existing-model reuse, validated
+recipe creation, memory-policy advisories and explicit pinned downloads/preparation. Interrupted
+downloads resume; SHA-256 and staged output publication protect existing models. Final media
+preflight remains required for image/reference clips. Preconverted Q8 distribution is handled through
+versioned source releases with their applicable model terms.
+
+The app is an initial development build. FFmpeg/FFprobe and optional RIFE still need configuration;
+retail signing/notarization and clean-Mac qualification remain release work. MetalFX interpolation is
+experimental and requires explicit depth/motion/camera guides. See [Studio usage and limits](studio/README.md) for the exact implementation boundary.
 
 ## Experimental clip motion enhancement
 

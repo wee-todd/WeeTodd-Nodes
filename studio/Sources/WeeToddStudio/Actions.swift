@@ -149,8 +149,8 @@ enum ClipState: String {
     if profiles.isEmpty {
       items.append(
         ActionItem(
-          id: "profiles", priority: 0, title: "Import model recipes",
-          detail: "Generation needs at least one compatible component recipe.",
+          id: "profiles", priority: 0, title: "Set up models",
+          detail: "Choose a built-in preset and locate or prepare its model components.",
           destination: "runtime"))
     }
     for c in project.clips {
@@ -161,6 +161,9 @@ enum ClipState: String {
             id: c.id.uuidString + "-\(i)", priority: 0, title: c.name + " · " + text,
             detail: "Resolve before generation or export.", clipID: c.id,
             destination: text.contains("recipe")
+              || text.localizedCaseInsensitiveContains("checkpoint")
+              || text.localizedCaseInsensitiveContains("model")
+              || text.localizedCaseInsensitiveContains("encoder")
               ? "runtime" : text.contains("prompt") ? "prompt" : "clip"))
       }
       if c.motionFidelity?.enabled == true && !c.motionIsCurrent {

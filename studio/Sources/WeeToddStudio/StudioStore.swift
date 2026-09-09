@@ -56,6 +56,11 @@ struct ModelProfile: Identifiable {
       throw StudioError.invalid(
         "Select the WeeTodd repository and its Python environment in Runtime Settings.")
     }
+    var env = ProcessInfo.processInfo.environment
+    if command == "setup-download" {
+      env = try ModelDownloadToken.environment(env, savedToken: ModelDownloadToken.read())
+    }
+    env["PYTHONUNBUFFERED"] = "1"
     let input = StudioStore.supportDirectory.appendingPathComponent(
       "Requests/\(UUID().uuidString).json")
     try FileManager.default.createDirectory(
@@ -73,8 +78,6 @@ struct ModelProfile: Identifiable {
     task.arguments = [runtime.root + "/scripts/studio_bridge.py", command, "--request", input.path]
     if let output { task.arguments! += ["--output", output.path] }
     task.currentDirectoryURL = URL(fileURLWithPath: runtime.root)
-    var env = ProcessInfo.processInfo.environment
-    env["PYTHONUNBUFFERED"] = "1"
     task.environment = env
     let pipe = Pipe()
     task.standardOutput = pipe

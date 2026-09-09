@@ -30,14 +30,64 @@ and other applications' environments are preserved. There is no Linux virtual ma
 The bootstrap uses a pinned, checksum-verified uv release from Astral.
 
 Advanced users can connect an existing compatible WeeTodd repository and Python environment.
-Import existing `weetodd-headless-v2` recipes to identify model component sets. Automatic selection
-matches the clip engine and media roles. Model downloads and conversions are not automated by
-this first GUI build. FFmpeg/FFprobe and optional RIFE remain separately configured tools;
-a retail installer must package these tools with their licenses and finish the model setup flow.
+Use guided model setup below, or import existing `weetodd-headless-v2` recipes to identify model
+component sets. Automatic selection matches the clip engine and media roles. FFmpeg/FFprobe and
+optional RIFE remain separately configured tools; a retail installer must package these tools
+with their licenses and complete clean-Mac qualification.
 
 Runtime settings, autosave, global assets, recipes, previews and jobs live under
 `~/Library/Application Support/WeeTodd Studio`. User media and model weights stay in their existing
 locations. `WEETODD_STUDIO_DATA` selects a separate data directory for isolated development tests.
+
+## Guided model setup
+
+1. Open **Studio Settings → Model setup**. Built-in presets appear independently of installed recipe
+   count once the renderer is configured. Choose H3 text/image/reference or LTX 2.3/2.5 text/image.
+2. Choose **Set Up… → Use Existing Models**, select model folders (including an existing ComfyUI
+   `models` folder), then scan. Inspection reads bounded headers and manifests, never model tensors.
+   A single candidate is selected automatically; multiple candidates require your choice. Missing
+   components have a browse control and validation explains incompatible architecture or task support.
+3. Use **Automatic** to select a lower-memory policy on Macs with 64 GB or less, **Lower Memory** to
+   request supported memory-saving settings, or **Custom** to retain the preset policy for later
+   advanced adjustment. Memory information is advisory and does not promise fit, allocate RAM, or
+   enforce a hard limit. Clip size/duration and other resident applications still matter.
+4. **Create Recipe** runs the shared component/configuration preflight and writes a new recipe.
+   Image/reference presets still need media attached to a clip before full render preflight can pass.
+   Existing recipes and model files are preserved. Use the new recipe for a compatible selected clip,
+   or choose it in the clip inspector. **Set Up Models…** is also available from missing-model actions.
+
+**Download or prepare a model** shows compatible catalog items with source terms, download size and
+required space before an explicit download. Prefer preconverted Q8 when available; source conversion
+is an alternative. LTX 2.5 source preparation downloads the five official distilled components and
+converts transformer/Gemma to paged Q8. H3 encoder preparation downloads just the compact Q8 encoder,
+its support files and full Qwen architecture config, then retains the vision page. H3 transformer,
+VAEs and tokenizer/processor remain separate required components.
+
+Selected existing roots are checked for exact source checksums before downloading replacements.
+Same-volume source files are reused through links; cross-volume source references remain linked,
+with copies only where final component packaging needs them. Existing converted components can be
+selected directly without conversion. Partial downloads resume after cancellation or network failure.
+Sources are retained in the chosen library’s `.weetodd-downloads` directory for reuse. Only verified,
+fully prepared output is installed; source terms/attribution remain with the output. Gated sources
+require accepting their upstream access terms. In **Hugging Face access**, open the
+token settings link, paste a read token and save it to macOS Keychain. The field clears after saving;
+the token is passed only in the download process environment and never written to recipes or setup logs.
+Remove it with the same controls. An existing CLI login (`hf auth login`) remains supported when no
+Studio token is saved.
+The setup log explains authentication, disk-space, checksum and conversion failures.
+
+For CLI users, `python scripts/setup_models.py --help` exposes the same catalog, scans, recipe creation
+and downloads. For example:
+
+```bash
+python scripts/setup_models.py download ltx25-distilled-q8 \
+  --destination /path/to/shared-models --existing-root /path/to/ComfyUI/models
+```
+
+This command prepares from the pinned source files; choose a preconverted catalog ID to skip conversion.
+After a download, scan the returned directory, choose the components, and create the recipe. ComfyUI
+users can select those same paths in existing loaders; setup never downloads or converts during a graph.
+The [headless example/schema](../examples/headless/README.md) remains available for direct JSON users.
 
 ## H3 reference clips with paged Q8 models
 
@@ -49,7 +99,8 @@ The existing text-only Qwen page export cannot encode reference images.
 
 See the [model preparation commands](../README.md#experimental-h3-reference-paging). Preparation
 requires an existing compact Q8 Qwen encoder containing vision weights and a genuine Ref2VA
-transformer. The current GUI does not perform these conversions automatically. Clip/movie headless
+transformer. Guided setup can prepare the encoder; the genuine Ref2VA transformer must be prepared
+separately with the existing bounded-memory conversion commands. Clip/movie headless
 export preserves this recipe so Studio can be closed during generation. One-image 640×384 generation measured a 21.70GB complete Comfy process peak on an M3 Ultra
 with 256 GiB. The headless output was byte-identical and peaked at 21.26GB.
 A 36GB physical-device maximum is not yet established; the header-based estimate omits reference-dependent workspace.
@@ -210,7 +261,7 @@ Seed Undo/Redo was also checked in the release app with a focused field, after T
 menu, with multi-digit replacement, and across separate editing sessions. Restoring the generated
 seed restores the clip's green status without rerendering.
 
-Before a broad consumer release: complete model discovery/download UI and tool packaging, sign and
+Before a broad consumer release: expanded model download coverage and tool packaging, sign and
 notarize the app, test clean Macs and lower-memory hardware, qualify more conditioning combinations,
 and improve live timeline playback. Useful next features are audio waveforms, proxy/cache management,
 crash-recovery history, and a render-cost/memory estimate before queuing large movies.

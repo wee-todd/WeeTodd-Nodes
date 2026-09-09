@@ -16,8 +16,9 @@ and imported clips, titles, transitions and multiple audio tracks, and exports r
 jobs for the shared headless renderer. Its [LoRA library and groups](studio/README.md#loras-and-groups)
 filter by clip model, support mixed LTX 2.3/2.5 groups for LTX 2.5, and preserve adjustable strengths
 in projects and exported jobs. A managed native Python runtime can be installed from Studio
-Settings. This initial build still requires model recipes and finishing-tool configuration; see the
-Studio guide for build instructions, tested behavior, and consumer-release limitations.
+Settings. Guided model setup provides built-in presets, existing-model discovery, compatible recipe
+creation and explicit verified downloads/preparation. Finishing tools still need configuration; see
+the Studio guide for build instructions, tested behavior, and consumer-release limitations.
 
 Recent experimental controls include target-frame H3 image, clip, and audio guides; an H3 token
 and attention-workspace estimator; independent MLX attention-head and feed-forward row chunking;
@@ -219,6 +220,29 @@ the node completed. This is not a complete CorridorKey graph or complete-ComfyUI
 
 ## Model downloads and reuse
 
+Studio users can open **Studio Settings → Model setup**, choose an H3/LTX preset, and select
+**Use Existing Models**. Scan an existing ComfyUI model folder or another shared library, resolve
+any ambiguous components, then create a validated recipe. Weights remain in their existing locations.
+Image/reference presets prepare the components first; required clip media is validated after attachment.
+See [guided setup](studio/README.md#guided-model-setup) and the
+[portable LTX 2.5 recipe example](examples/headless/ltx25_distilled_q8_t2v.json).
+
+The same setup service is available without Studio:
+
+```bash
+python scripts/setup_models.py catalog
+python scripts/setup_models.py scan ltx25-text /path/to/ComfyUI/models
+python scripts/setup_models.py downloads
+```
+
+Downloads are explicit setup actions and never run inside a node graph. The catalog lists pinned
+sources, terms and disk requirements. Downloads resume after interruption, verify complete SHA-256
+hashes, reuse checksum-matching files from selected roots, and prepare outputs in a new directory.
+The [preconverted Q8 vision encoder](https://huggingface.co/Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged)
+avoids local conversion and is the recommended H3 encoder download. It retains source terms and
+requires Hugging Face access. Source conversion remains available as an alternative.
+The same prepared components can be selected by Studio, the headless runner and existing ComfyUI nodes.
+
 Choose a workflow first; install only its dependencies. The supported H3/LTX candidates are
 alternatives, not a requirement to download every checkpoint. Optional control, preview,
 upscaling, and refinement assets are needed only by workflows that use them.
@@ -338,9 +362,9 @@ if a path changes. New H3 `auto` selection reads declared profile, step, and QKV
 profile metadata is absent it defaults to standard independently of the filename. Select Turbo
 explicitly for metadata-poor distilled adapters. The common adapter inspector validates A/B,
 default/turbo A/B, down/up, and lowercase A/B pair structures; H3, resident LTX 2.3, and LTX 2.5
-use its rank, schema, and canonical target descriptors. Conversion and missing-dependency downloads
-remain separate implementation work. Unsupported tensor formats are rejected, never silently
-omitted.
+use its rank, schema, and canonical target descriptors. LoRA format conversion and automatic
+missing-adapter downloads remain separate implementation work. Unsupported tensor formats are
+rejected, never silently omitted.
 
 ### LTX 2.3 IC-LoRA controls
 
@@ -469,6 +493,14 @@ v1 exports remain supported for T2VA and are rejected for visual conditioning. T
 bounded file copying for the Qwen pages and preserves packed Q8 storage. Hashes are verified by
 default. Conversion does not download weights or change the originals.
 
+For manual conversion, the compact source is **`text_encoder.safetensors` plus `config.json`** from
+[ddalcu’s 8-bit bundle](https://huggingface.co/ddalcu/MiniMax-H3-FL2VA-MLX-Serve-8bit/tree/64314cde0ac6d90f132bc94ae58e0c82f77396c6).
+Its FL2VA bundle name does not make its transformer a Ref2VA transformer. The separate full architecture
+configuration comes from [Qwen3-VL-32B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-32B-Instruct/blob/0cfaf48183f594c314753d30a4c4974bc75f3ccb/config.json).
+Retain source LICENSE, NOTICE and modification records and review their applicable terms. The guided
+**H3 Q8 vision encoder · Convert from source** preparation handles these exact files automatically;
+it does not download the entire source bundle. Text-only v1 pages cannot be upgraded without vision weights.
+
 Prepare the genuine native Ref2VA transformer, then the **compact Q8 Qwen encoder containing
 vision weights**. Do not use the FL2VA Q8 transformer linked above as a Ref2VA substitute.
 `--architecture-config` must identify the full Qwen3-VL architecture, including the original
@@ -520,7 +552,8 @@ python scripts/render_headless.py --recipe /path/to/H3_Reference_Q8_Paged.json \
 Recipe preparation validates models and media before writing a new file. Import that recipe in
 Studio Runtime Settings, select it for an H3 clip, attach the desired image with the **Reference**
 role and write the native H3 prompt. Studio's clip/movie job export retains the same paged model
-paths and conditioning. Model preparation remains an explicit setup step in this development build.
+paths and conditioning. Model preparation remains an explicit setup step; guided setup and the CLI
+can perform catalog preparations.
 
 ## LTX 2.5 model layout
 

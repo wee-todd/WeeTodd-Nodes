@@ -188,6 +188,7 @@ struct RuntimeView: View {
   @EnvironmentObject var store: StudioStore
   @AppStorage("appearance") var appearance = "system"
   @StateObject private var installer = RuntimeInstaller()
+  @StateObject private var modelSetup = ModelSetupState()
   var body: some View {
     VStack(alignment: .leading, spacing: 20) {
       HStack {
@@ -253,6 +254,9 @@ struct RuntimeView: View {
           Text(
             "A recipe identifies a compatible component set and sampling policy. Automatic selection matches the clip’s engine and media roles."
           ).font(.caption).foregroundStyle(.secondary)
+          Divider()
+          ModelSetupCatalogView(
+            state: modelSetup, bridge: store.bridge, rendererInstalling: installer.busy)
           Divider()
           Text("Finishing tools").font(.headline)
           PathPicker(

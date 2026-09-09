@@ -1172,6 +1172,11 @@ def main():
     parser.add_argument(
         "command",
         choices=[
+            "setup-catalog",
+            "setup-scan",
+            "setup-create",
+            "setup-downloads",
+            "setup-download",
             "catalog",
             "inspect",
             "prepare",
@@ -1190,7 +1195,36 @@ def main():
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     request = json.loads(args.request.read_text())
-    if args.command == "catalog":
+    if args.command == "setup-catalog":
+        from wee_todd_mlx.model_setup import setup_catalog
+
+        result = {"presets": setup_catalog()}
+    elif args.command == "setup-scan":
+        from wee_todd_mlx.model_setup import scan_models
+
+        result = scan_models(request["presetID"], request["roots"])
+    elif args.command == "setup-create":
+        from wee_todd_mlx.model_setup import prepare_recipe
+
+        result = prepare_recipe(
+            request["presetID"], request["components"], request["runtime"]["profilesDirectory"],
+            request.get("memoryMode", "automatic"), request.get("memoryGB"),
+        )
+    elif args.command == "setup-downloads":
+        from wee_todd_mlx.model_downloads import download_catalog
+
+        result = {"downloads": download_catalog()}
+    elif args.command == "setup-download":
+        from wee_todd_mlx.model_downloads import prepare_download
+
+        result = prepare_download(
+            request["downloadID"], request["destination"],
+            existing_roots=request.get("existingRoots", []),
+            progress=lambda message, fraction: emit(
+                event="progress", message=message, fraction=fraction
+            ),
+        )
+    elif args.command == "catalog":
         result = {"profiles": profiles(request["runtime"]["profilesDirectory"])}
     elif args.command == "inspect":
         result = inspect_media(request["path"], request["runtime"])
