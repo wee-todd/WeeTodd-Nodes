@@ -45,6 +45,7 @@ public struct MediaAsset: Codable, Identifiable, Equatable {
   public var fps: Double = 0
   public var thumbnail: String = ""
   public var text: String = ""
+  public var loraModel: LoRAModel?
   public init(
     name: String, kind: AssetKind, path: String = "", scope: AssetScope = .project,
     owner: UUID? = nil
@@ -62,6 +63,8 @@ public struct Attachment: Codable, Identifiable, Equatable {
   public var role: MediaRole
   public var time: Double = 0
   public var strength: Double = 1
+  public var loraGroupID: UUID?
+  public var loraGroupName: String?
   public var controlType = "canny_edges"
   public var description = ""
   public init(assetID: UUID, role: MediaRole, time: Double = 0) {
@@ -269,6 +272,20 @@ public struct StudioProject: Codable, Equatable {
     for j in second.attachments.indices where second.attachments[j].role == .keyframe {
       second.attachments[j].time -= seconds
     }
+    // Clip-owned links must survive deletion or relinking of either split half.
+    var cloned: [UUID: UUID] = [:]
+    for j in second.attachments.indices {
+      let sourceID = second.attachments[j].assetID
+      if let newID = cloned[sourceID] {
+        second.attachments[j].assetID = newID
+      } else if var linked = assets.first(where: { $0.id == sourceID && $0.scope == .clip }) {
+        linked.id = UUID()
+        linked.owner = second.id
+        assets.append(linked)
+        cloned[sourceID] = linked.id
+        second.attachments[j].assetID = linked.id
+      }
+    }
     clips[i].duration = seconds
     clips[i].name += " · A"
     clips[i].attachments.removeAll { $0.role == .keyframe && $0.time >= seconds }
@@ -327,7 +344,8 @@ public enum ProjectStorage {
       project.clips[i].sourcePath = transform(project.clips[i].sourcePath)
       if project.clips[i].motionResult != nil {
         project.clips[i].motionResult!.path = transform(project.clips[i].motionResult!.path)
-        project.clips[i].motionResult!.sourcePath = transform(project.clips[i].motionResult!.sourcePath)
+        project.clips[i].motionResult!.sourcePath = transform(
+          project.clips[i].motionResult!.sourcePath)
         project.clips[i].motionResult!.report = transform(project.clips[i].motionResult!.report)
         if let recipe = project.clips[i].motionResult!.recipePath {
           project.clips[i].motionResult!.recipePath = transform(recipe)

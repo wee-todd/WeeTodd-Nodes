@@ -72,7 +72,9 @@ def inspect_media(value, settings):
     if suffix in {".txt", ".md"}:
         return {"kind": "text", "text": source.read_text()[:100000], "path": str(source)}
     if suffix == ".safetensors":
-        return {"kind": "lora", "path": str(source)}
+        from studio_lora import inspect_lora
+
+        return inspect_lora(source)
     probe = json.loads(
         run(
             [
@@ -208,9 +210,12 @@ def compose_recipe(request):
             raise ValueError("A clip attachment is missing from its asset store.")
         role = attachment["role"]
         if role == "lora":
-            if asset["kind"] != "lora":
-                raise ValueError("A LoRA attachment must reference a SafeTensors adapter.")
-            loras.append({"path": asset["path"], "strength": attachment.get("strength", 1)})
+            from studio_lora import clip_lora
+
+            item = clip_lora(asset, attachment, engine)
+            if any(previous["path"] == item["path"] for previous in loras):
+                raise ValueError("Each LoRA file can be applied only once per clip.")
+            loras.append(item)
             continue
         item = {
             "id": attachment["id"],
@@ -272,6 +277,8 @@ def compose_recipe(request):
             recipe["components"].setdefault("loras", []).extend(
                 [[a["path"], a["strength"]] for a in loras]
             )
+        elif engine == "ltx23" and recipe["components"].get("loras"):
+            recipe["components"]["loras"].extend(loras)
         else:
             recipe.setdefault("loras", {}).setdefault("adapters", []).extend(loras)
     recipe["conditioning"] = contract

@@ -96,6 +96,11 @@ enum ClipState: String {
       if [.first, .last, .keyframe].contains(a.role) && asset.kind != .image {
         result.append("Use an image for \(a.role.label)")
       }
+      if a.role == .lora {
+        do { try LoRAMember(asset: asset, strength: a.strength).validate(for: clip.engine) } catch {
+          result.append("\(asset.name): \(error.localizedDescription)")
+        }
+      }
       if a.role == .audioDriver && asset.kind != .audio {
         result.append("Use an audio file for the audio driver")
       }
@@ -159,9 +164,12 @@ enum ClipState: String {
               ? "runtime" : text.contains("prompt") ? "prompt" : "clip"))
       }
       if c.motionFidelity?.enabled == true && !c.motionIsCurrent {
-        items.append(ActionItem(id: c.id.uuidString + "-motion", priority: 1,
-          title: c.name + " · Enhance motion", detail: "Analyze or refine Motion Fidelity in the clip inspector.",
-          clipID: c.id, destination: "clip"))
+        items.append(
+          ActionItem(
+            id: c.id.uuidString + "-motion", priority: 1,
+            title: c.name + " · Enhance motion",
+            detail: "Analyze or refine Motion Fidelity in the clip inspector.",
+            clipID: c.id, destination: "clip"))
       }
       if blockers.isEmpty {
         let state = clipState(c)
@@ -251,7 +259,9 @@ enum ClipState: String {
         var body = try payload()
         body["clipOnly"] = clipOnly
         body["generateIDs"] = project.clips.filter {
-          $0.engine != .movie && ($0.renderedSignature != signature(for: $0) || !FileManager.default.fileExists(atPath: $0.sourcePath))
+          $0.engine != .movie
+            && ($0.renderedSignature != signature(for: $0)
+              || !FileManager.default.fileExists(atPath: $0.sourcePath))
         }.map { $0.id.uuidString }
         _ = try await bridge.invoke("export-job", runtime: runtime, payload: body, output: url)
         notice = "Exported resumable headless job. Run it with render_headless.py --job."

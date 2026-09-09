@@ -20,6 +20,8 @@ struct AssetBrowser: View {
       }.font(.system(size: 11)).padding(10).background(
         Theme.raised, in: RoundedRectangle(cornerRadius: 6)
       ).padding(12)
+      Button("LoRAs & Groups…") { store.showLoRALibrary = true }
+        .padding(.horizontal, 12).padding(.bottom, 10)
       ScrollView {
         VStack(alignment: .leading, spacing: 18) {
           section("Global", scope: .global, expanded: $globalOpen, assets: store.globalAssets)
@@ -33,7 +35,10 @@ struct AssetBrowser: View {
             })
         }.padding(.horizontal, 12).padding(.bottom, 16)
       }
-      if let asset = store.selectedAsset {
+      if let asset = store.selectedAsset,
+        asset.kind != .lora
+          || asset.loraModel?.supports(store.selectedClip?.engine ?? .movie) == true
+      {
         Divider()
         VStack(alignment: .leading, spacing: 9) {
           Text(asset.name).font(.system(size: 12, weight: .semibold)).lineLimit(2)
@@ -69,6 +74,7 @@ struct AssetBrowser: View {
         Spacer()
       }.font(.system(size: 9)).foregroundStyle(.secondary).padding(12)
     }.background(Theme.panel)
+      .sheet(isPresented: $store.showLoRALibrary) { LoRALibrary().environmentObject(store) }
   }
   func section(_ name: String, scope: AssetScope, expanded: Binding<Bool>, assets: [MediaAsset])
     -> some View
@@ -108,7 +114,11 @@ struct AssetBrowser: View {
         }
         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
           ForEach(
-            assets.filter { search.isEmpty || $0.name.localizedCaseInsensitiveContains(search) }
+            assets.filter { asset in
+              (search.isEmpty || asset.name.localizedCaseInsensitiveContains(search))
+                && (asset.kind != .lora
+                  || asset.loraModel?.supports(store.selectedClip?.engine ?? .movie) == true)
+            }
           ) { asset in
             AssetCard(asset: asset).onTapGesture { store.selectedAssetID = asset.id }.draggable(
               "asset:" + asset.id.uuidString
@@ -152,7 +162,11 @@ struct AssetBrowser: View {
       Button("Audio driver") { store.useAsset(asset, role: .audioDriver) }
       Button("Audio reference · H3") { store.useAsset(asset, role: .reference) }
     }
-    if asset.kind == .lora { Button("Apply LoRA") { store.useAsset(asset, role: .lora) } }
+    if asset.kind == .lora
+      && asset.loraModel?.supports(store.selectedClip?.engine ?? .movie) == true
+    {
+      Button("Apply LoRA") { store.useAsset(asset, role: .lora) }
+    }
     if asset.kind == .text { Button("Use prompt text") { store.useAsset(asset, role: .reference) } }
   }
   func remove(_ asset: MediaAsset) {

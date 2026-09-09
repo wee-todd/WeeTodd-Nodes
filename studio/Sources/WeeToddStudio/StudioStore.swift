@@ -153,6 +153,8 @@ extension Encodable {
   }
   @Published var project = StudioProject()
   @Published var globalAssets: [MediaAsset] = []
+  @Published var loraGroups: [LoRAGroup] = []
+  @Published var showLoRALibrary = false
   @Published var selectedClipID: UUID?
   @Published var selectedAssetID: UUID?
   @Published var selectedTitleID: UUID?
@@ -220,6 +222,7 @@ extension Encodable {
     {
       globalAssets = value
     }
+    loadLoRAGroups()
     let args = CommandLine.arguments
     if let i = args.firstIndex(of: "--project"), args.count > i + 1 {
       load(URL(fileURLWithPath: args[i + 1]))
@@ -439,7 +442,9 @@ extension Encodable {
     guard panel.runModal() == .OK else { return }
     Task { await importURLs(panel.urls, scope: scope, addToTimeline: addToTimeline) }
   }
-  func importURLs(_ urls: [URL], scope: AssetScope, addToTimeline: Bool = false) async {
+  func importURLs(
+    _ urls: [URL], scope: AssetScope, addToTimeline: Bool = false, loraModel: LoRAModel? = nil
+  ) async {
     if scope == .clip && selectedClipID == nil && !addToTimeline {
       error = "Select a clip before importing into its asset store."
       return
@@ -456,6 +461,10 @@ extension Encodable {
         asset.height = info["height"] as? Int ?? 0
         asset.fps = info["fps"] as? Double ?? 0
         asset.text = info["text"] as? String ?? ""
+        if kind == .lora {
+          asset.loraModel =
+            (info["loraModel"] as? String).flatMap(LoRAModel.init(rawValue:)) ?? loraModel
+        }
         if addToTimeline && (kind == .video || kind == .image) {
           var c = Clip(name: asset.name, engine: .movie)
           c.sourcePath = asset.path
@@ -494,6 +503,10 @@ extension Encodable {
     }
     guard selectedClip != nil else {
       error = "Select or create a clip first."
+      return
+    }
+    if role == .lora {
+      applyLoRAMembers([LoRAMember(asset: asset)])
       return
     }
     editClip { c in

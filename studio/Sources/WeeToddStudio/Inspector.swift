@@ -127,7 +127,8 @@ struct ClipInspector: View {
           "Use an asset as a first frame, reference, audio driver or control. Compatible task adapters come from the selected recipe."
         ).font(.system(size: 11)).foregroundStyle(.secondary)
       }
-      ForEach(clip.attachments) { a in AttachmentRow(attachment: a) }
+      ForEach(clip.attachments.filter { $0.role != .lora }) { a in AttachmentRow(attachment: a) }
+      if clip.engine != .movie { ClipLoRAInspector(clip: clip) }
       if !clip.sourcePath.isEmpty {
         HStack {
           Button("Split") { store.split() }
@@ -240,7 +241,8 @@ struct AttachmentRow: View {
       }.font(.system(size: 10))
       Picker(
         "Role", selection: Binding(get: { attachment.role }, set: { v in edit { $0.role = v } })
-      ) { ForEach(MediaRole.allCases) { Text($0.label).tag($0) } }.labelsHidden()
+      ) { ForEach(MediaRole.allCases.filter { $0 != .lora }) { Text($0.label).tag($0) } }
+      .labelsHidden()
       if attachment.role == .keyframe {
         HStack {
           Text("Time (s)")

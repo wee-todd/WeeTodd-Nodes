@@ -89,6 +89,45 @@ and active audio tracks. Clip preview is immediate; movie preview is rebuilt aft
 renders must be generated first. Movie preview omits interpolation/upscaling, which are applied
 in final export. This first build does not provide live multitrack compositing or waveform editing.
 
+## LoRAs and groups
+
+Open **LoRAs & Groups…** in Assets, or **Add / Groups…** in the clip inspector. Import linked
+SafeTensors adapters into the reusable Global library. Select the adapter's **Trained model** before
+importing; recognized checkpoint metadata takes precedence. Older imports without provenance appear
+under **Imports needing a trained model**, where you can classify them explicitly. Filenames are
+never used to infer the training model.
+
+| Selected clip / group model | LoRAs offered |
+| --- | --- |
+| MiniMax H3 | H3 |
+| LTX 2.3 | LTX 2.3 |
+| LTX 2.5 | LTX 2.3 and LTX 2.5, including mixed groups |
+| Movie / Still | None |
+
+Use **New group**, name it, add members from the filtered library, and set each strength. Groups can
+be edited or deleted. **Apply to clip** adds an individual LoRA; **Apply group** adds the group's
+ordered members. Each clip entry has a slider and exact numeric strength field from 0 to 2.
+Remove individual entries or an entire applied group from the inspector. Duplicate file application
+is rejected, including overlap between an individual entry and a group.
+
+Groups are reusable templates stored beside Global assets. Application creates independent linked
+Clip Assets and copies the strengths and group label into the clip. Editing/deleting the template
+does not change existing clips, and clip strength edits do not change the template. Project saves,
+autosave, undo/redo, duplication and splitting preserve applied settings. Movie and clip job exports
+embed the flattened renderer stack, so headless execution does not need the group library.
+Collect Media preserves shared LoRA file paths; it does not copy model weights.
+
+Training versions identify candidates, not a guarantee of compatibility or quality. The shared
+renderer still checks actual projection targets, dimensions, scaling and recipe restrictions before
+weighted work. Specialized IC/control/reference and schedule adapters remain in their task recipes.
+Switching a clip to an incompatible engine retains its settings and marks the clip as needing
+attention until incompatible LoRAs are removed. Rebuild the app and use an updated managed renderer
+source snapshot when upgrading; existing private runtimes retain their installed source.
+
+Validation covers model filtering, mixed groups, independent clip strengths, serialization, duplicate
+rejection, split asset ownership and movie/clip recipe export. The native app was exercised with
+small synthetic header fixtures; these checks do not qualify LoRA visual quality or every adapter.
+
 ## Status and actions
 
 | Clip color | Meaning |
@@ -297,6 +336,6 @@ it becomes an available Motion Fidelity clip option.
   rollback selector yet; do not remove a runtime or render directory still referenced by a project/job.
 
 Run `swift test --package-path studio` and
-`python -m pytest -q tests/test_studio_bridge.py tests/test_studio_packaging.py` before packaging.
+`python -m pytest -q tests/test_studio_bridge.py tests/test_studio_packaging.py tests/test_studio_lora.py` before packaging.
 The packaging tests exercise a source tree without `.agents/`, stale-bundle replacement, and failure
 preservation without downloading Python or installing models.

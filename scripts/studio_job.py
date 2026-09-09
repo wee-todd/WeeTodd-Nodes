@@ -98,6 +98,7 @@ def renderer_fingerprint():
         for name in (
             "render_headless.py",
             "studio_bridge.py",
+            "studio_lora.py",
             "studio_job.py",
             "motion_fidelity.py",
         )

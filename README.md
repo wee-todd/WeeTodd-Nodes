@@ -13,7 +13,9 @@ See [implementation status](STATUS.md) for current capabilities and qualificatio
 
 [WeeTodd Studio](studio/README.md) is the native Swift editor in this repository. It combines generated
 and imported clips, titles, transitions and multiple audio tracks, and exports resumable movie/clip
-jobs for the shared headless renderer. A managed native Python runtime can be installed from Studio
+jobs for the shared headless renderer. Its [LoRA library and groups](studio/README.md#loras-and-groups)
+filter by clip model, support mixed LTX 2.3/2.5 groups for LTX 2.5, and preserve adjustable strengths
+in projects and exported jobs. A managed native Python runtime can be installed from Studio
 Settings. This initial build still requires model recipes and finishing-tool configuration; see the
 Studio guide for build instructions, tested behavior, and consumer-release limitations.
 
@@ -1450,7 +1452,7 @@ ruff check src/wee_todd_nodes tests
 
 `tests/test_readme.py` and `tests/test_workflows.py` are required by the README/workflow commit gate.
 For Studio changes, also run `swift test --package-path studio` and
-`python -m pytest -q tests/test_studio_bridge.py tests/test_studio_packaging.py`, then build the app
+`python -m pytest -q tests/test_studio_bridge.py tests/test_studio_packaging.py tests/test_studio_lora.py`, then build the app
 using the [Studio instructions](studio/README.md). The build verifies its ad-hoc signature before
 replacing the previous bundle.
 

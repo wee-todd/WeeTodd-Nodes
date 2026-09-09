@@ -151,7 +151,9 @@ struct StudioView: View {
     }
     .alert(
       "WeeTodd Studio",
-      isPresented: Binding(get: { store.error != nil }, set: { if !$0 { store.error = nil } })
+      isPresented: Binding(
+        get: { store.error != nil && !store.showLoRALibrary }, set: { if !$0 { store.error = nil } }
+      )
     ) {
       Button("OK") { store.error = nil }
       Button("Show Log") {

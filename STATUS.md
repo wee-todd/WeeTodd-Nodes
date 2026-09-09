@@ -39,6 +39,12 @@ Movie and clip headless-job export embeds generation and finishing plans. `WeeTo
 and resumable render/finishing stages. Studio can install a private native Python/MLX runtime using
 pinned, hash-verified dependencies. It preserves other environments and shared model files.
 
+Studio also has a model-filtered linked LoRA library and reusable named groups. LTX 2.5 groups
+accept both LTX 2.3 and LTX 2.5 members; H3 and LTX 2.3 stay separate. Applying a group snapshots its
+members and strengths into the clip; editing a template cannot mutate existing projects or exported
+jobs. The shared renderer retains authoritative adapter and task checks. GUI validation uses synthetic
+header fixtures and establishes editing/transport behavior, not visual quality.
+
 The app is an initial development build. Model recipes, FFmpeg/FFprobe, and optional RIFE still need
 configuration; automatic model downloads, retail signing/notarization and clean-Mac qualification
 remain release work. MetalFX interpolation is experimental and requires explicit depth/motion/camera
