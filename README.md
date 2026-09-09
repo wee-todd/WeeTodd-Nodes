@@ -246,6 +246,26 @@ includes the paged transformer and Gemma encoder, video/audio VAEs and spatial u
 downloads the prepared components directly; local quantization is optional.
 The same prepared components can be selected by Studio, the headless runner and existing ComfyUI nodes.
 
+### Ready-to-use Q8 downloads
+
+Choose **Set Up… → Download or prepare a model** in Studio and select **Preconverted (Recommended)**.
+Accept the selected repository's access terms on Hugging Face and configure **Hugging Face access**
+in Studio, or use your existing CLI login. Download only the package needed by your chosen engine.
+
+| Package | Download size¹ | Included | Still separate |
+| --- | --- | --- | --- |
+| [H3 Q8 vision encoder](https://huggingface.co/Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged) | 28.22 GB | Q8 language pages, retained vision tower, manifests and support files | Task-compatible H3 transformer, VAEs, tokenizer and processor |
+| [LTX 2.5 distilled Q8](https://huggingface.co/Vayden/LTX-2.5-MLX-Q8-Paged) | 43.49 GB | Q8-paged transformer and Gemma, convolutional video VAE, audio VAE and spatial upscaler | Optional task LoRAs, controls and alternative guided/DFR components |
+
+¹ Decimal download sizes, not RAM requirements. Setup displays required disk space before downloading.
+It pins a verified release and each file's SHA-256. Keep the installed directories and manifests intact.
+
+After downloading, scan the returned folder, resolve component choices, and select **Create Recipe**.
+Use **Use Recipe for Selected Clip** for a compatible Studio clip, then **Prepare clip** before generation.
+CLI users can follow the complete [LTX 2.5 download-to-recipe example](examples/headless/README.md#download-and-create-an-ltx-25-recipe).
+Source conversion is optional and remains available in the catalog. For setup errors or an older
+managed runtime, see [Studio setup troubleshooting](studio/README.md#model-setup-troubleshooting).
+
 Choose a workflow first; install only its dependencies. The supported H3/LTX candidates are
 alternatives, not a requirement to download every checkpoint. Optional control, preview,
 upscaling, and refinement assets are needed only by workflows that use them.
@@ -496,6 +516,20 @@ v1 exports remain supported for T2VA and are rejected for visual conditioning. T
 bounded file copying for the Qwen pages and preserves packed Q8 storage. Hashes are verified by
 default. Conversion does not download weights or change the originals.
 
+**To skip encoder conversion**, download the
+[preconverted Q8 vision encoder](https://huggingface.co/Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged)
+through guided setup or the CLI:
+
+```bash
+python scripts/setup_models.py download h3-qwen-q8-vision-preconverted \
+  --destination /path/to/shared-models
+```
+
+The encoder directory is `/path/to/shared-models/h3-qwen-q8-vision-preconverted`. Select it as the
+text encoder in guided H3 reference setup alongside your genuine Ref2VA transformer and other
+components. This replaces the `convert_paged_text_encoder.py` step below; the two transformer
+preparation commands remain necessary if you do not already have genuine Ref2VA pages.
+
 For manual conversion, the compact source is **`text_encoder.safetensors` plus `config.json`** from
 [ddalcu’s 8-bit bundle](https://huggingface.co/ddalcu/MiniMax-H3-FL2VA-MLX-Serve-8bit/tree/64314cde0ac6d90f132bc94ae58e0c82f77396c6).
 Its FL2VA bundle name does not make its transformer a Ref2VA transformer. The separate full architecture
@@ -559,6 +593,10 @@ paths and conditioning. Model preparation remains an explicit setup step; guided
 can perform catalog preparations.
 
 ## LTX 2.5 model layout
+
+For the distilled baseline, [download the complete preconverted Q8 package](#ready-to-use-q8-downloads)
+and scan it in Studio. Its `transformer/` and `gemma/` directories are directly loadable paged
+components. The BF16 layout below remains useful for source conversion and additional workflows.
 
 Accept the [LTX 2.5 license](https://huggingface.co/Lightricks/LTX-2.5), then place the split files
 in standard ComfyUI folders.

@@ -91,6 +91,8 @@ remain open. Full BF16-versus-Q8 model parity was not run.
 
 ## Source checkpoints
 
+- `e7ddb75`: guided Studio/CLI model setup and both published preconverted Q8 downloads; includes
+  `f3168af` for native setup, model discovery, verified preparation and recipe creation.
 - `e31a27c`: shared headless renderer and conditioned ComfyUI workflows.
 - `4c56ea2`: native Studio editor, managed runtime installation and resumable movie/clip jobs.
 - Publication cleanup: shipped Python preflight no longer depends on ignored agent files. App
@@ -98,6 +100,19 @@ remain open. Full BF16-versus-Q8 model parity was not run.
   macOS metadata are excluded from Git; user data and existing runtimes are preserved.
 
 ## Checkpoint validation and remaining work
+
+Latest model-setup qualification (2026-09-09, `e7ddb75`):
+
+- 431 focused/required Python tests and 30 Swift tests passed; release app rebuilt with both catalogs.
+- All 115 Qwen and 207 LTX release files passed remote size/checksum verification. Both packages
+  installed through the shared setup service using verified existing weights and downloaded support files.
+- The installed Qwen package was recognized as vision-capable. The installed LTX package exposed
+  all five components and produced a validated recipe. Native setup was checked in Light/Dark modes,
+  including the zero-recipes starting state, real model discovery and recipe creation.
+- README/node/workflow checks passed. These setup checks did not include a new generation run,
+  full publisher parity, or qualification on a physical 36 GB Mac.
+
+Earlier checkpoint evidence (retain each figure's original scope):
 
 - 1,304 tests passed and one skipped in the suite excluding optional algorithm-search tests.
 - The focused node/runtime/headless/library/workflow review passed 468 tests.
@@ -117,7 +132,8 @@ remain open. Full BF16-versus-Q8 model parity was not run.
   experimental ComfyUI nodes. The full suite passed 1,345 Python tests with one skipped; all 12
   Swift tests passed. Real H3 generation/refinement, packaged CLI movie assembly/resume, and the
   Studio Enhance/source-comparison action completed. Broad motion/identity quality remains open.
-- Complete retail packaging/model onboarding and qualification on clean, lower-memory Macs.
+- Remaining release work: retail packaging, wider model-setup coverage, and qualification on clean,
+  lower-memory Macs.
 - Qualify additional adapter/task/precision combinations before promoting them in the interface.
 
 Local research and detailed historical reports remain outside version control by project policy.

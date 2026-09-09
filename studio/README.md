@@ -59,8 +59,9 @@ locations. `WEETODD_STUDIO_DATA` selects a separate data directory for isolated 
 **Download or prepare a model** shows compatible catalog items with source terms, download size and
 required space before an explicit download. Prefer the
 [H3 Q8 vision encoder](https://huggingface.co/Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged) or
-[LTX 2.5 distilled Q8 package](https://huggingface.co/Vayden/LTX-2.5-MLX-Q8-Paged) marked **Preconverted
-(Recommended)**. Source conversion remains an alternative. LTX 2.5 source preparation downloads the five official distilled components and
+[LTX 2.5 distilled Q8 package](https://huggingface.co/Vayden/LTX-2.5-MLX-Q8-Paged) marked
+**Preconverted (Recommended)**. Source conversion remains an alternative. LTX 2.5 source preparation
+downloads the five official distilled components and
 converts transformer/Gemma to paged Q8. H3 encoder preparation downloads just the compact Q8 encoder,
 its support files and full Qwen architecture config, then retains the vision page. H3 transformer,
 VAEs and tokenizer/processor remain separate required components.
@@ -94,6 +95,22 @@ After a download, scan the returned directory, choose the components, and create
 users can select those same paths in existing loaders; setup never downloads or converts during a graph.
 The [headless example/schema](../examples/headless/README.md) remains available for direct JSON users.
 
+### Model setup troubleshooting
+
+| Symptom | Next action |
+| --- | --- |
+| LTX clip shows **0 recipes** | Choose its built-in preset in **Studio Settings → Model setup**, scan existing components or download the prepared package, then **Create Recipe** and **Use Recipe for Selected Clip**. Downloading weights alone does not create a recipe. |
+| Built-in presets or preconverted downloads are missing | Use the updated app and renderer. Rebuilding the app updates its bundled source; an existing managed runtime keeps its old source snapshot. Choose **Set Up Managed Renderer** to install the updated snapshot, or connect an updated repository with a compatible Python environment. Existing media and models can be reused. |
+| Download reports denied access / 401 / 403 | Open **Model source**, accept that repository's access terms with your Hugging Face account, and save a read token for the same account under **Hugging Face access**. Review the setup log for the exact failure. |
+| Download was interrupted | Repeat the same download with the same destination. Verified files are reused and partial files resume. A completed package should instead be opened through **Use Existing Models**. |
+| Setup reports insufficient space | Choose a library on a drive with enough free space. Preconverted downloads skip local quantization and its intermediate storage; the displayed download size is not a RAM estimate. |
+| Scan finds several transformer candidates | Select the distilled transformer for the LTX 2.5 distilled preset. Common architecture headers alone cannot prove Dev/distilled training identity; the curated preconverted package removes that ambiguity. |
+| H3 reference clip rejects a text-only encoder | Select the new **H3 Q8 vision encoder · Preconverted (Recommended)** package. The older v1 text-only export remains useful for T2VA but lacks the vision weights needed for image/reference conditioning. |
+
+Setup creates component recipes, while **Prepare clip** validates the final clip's media and settings.
+If a reference/image clip still needs attention, attach the required media and follow its Actions entry.
+For a complete CLI walkthrough, see [download and create an LTX 2.5 recipe](../examples/headless/README.md#download-and-create-an-ltx-25-recipe).
+
 ## H3 reference clips with paged Q8 models
 
 Import a recipe produced by `scripts/prepare_h3_reference_recipe.py`, select **H3 Reference Q8
@@ -104,8 +121,8 @@ The existing text-only Qwen page export cannot encode reference images.
 
 See the [model preparation commands](../README.md#experimental-h3-reference-paging). Choose the
 [preconverted Q8 vision encoder](https://huggingface.co/Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged)
-in guided setup, or prepare it from the compact source encoder. The genuine Ref2VA transformer must be prepared
-separately with the existing bounded-memory conversion commands. Clip/movie headless
+in guided setup, or prepare it from the compact source encoder. The genuine Ref2VA transformer must
+be prepared separately with the existing bounded-memory conversion commands. Clip/movie headless
 export preserves this recipe so Studio can be closed during generation. One-image 640×384 generation measured a 21.70GB complete Comfy process peak on an M3 Ultra
 with 256 GiB. The headless output was byte-identical and peaked at 21.26GB.
 A 36GB physical-device maximum is not yet established; the header-based estimate omits reference-dependent workspace.
