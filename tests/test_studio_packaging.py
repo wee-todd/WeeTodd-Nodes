@@ -2,6 +2,7 @@
 
 import importlib
 import json
+import plistlib
 import shutil
 import subprocess
 import sys
@@ -18,7 +19,7 @@ installer = importlib.import_module("install_studio_runtime")
 
 @pytest.fixture
 def source(tmp_path):
-    for name in ("src", "scripts", "studio/runtime", "studio/.build/release"):
+    for name in ("src", "scripts", "studio/runtime", "studio/Resources", "studio/.build/release"):
         (tmp_path / name).mkdir(parents=True)
     for name in ("WeeToddStudio", "StudioMetal", "WeeToddCLI"):
         (tmp_path / "studio/.build/release" / name).write_text("binary fixture")
@@ -27,6 +28,7 @@ def source(tmp_path):
     (tmp_path / "README.md").write_text("readme fixture")
     shutil.copy2(SCRIPTS / "preflight_python_environment.py", tmp_path / "scripts")
     (tmp_path / "studio/runtime/requirements.lock").write_text("lock fixture")
+    (tmp_path / "studio/Resources/AppIcon.icns").write_bytes(b"icon fixture")
     return tmp_path
 
 
@@ -36,6 +38,10 @@ def test_clean_source_packaging_removes_stale_files(source, monkeypatch):
     (app / "obsolete.py").write_text("stale")
     result = packager.package_app(source, "release")
     assert not (result / "obsolete.py").exists()
+    with (result / "Contents/Info.plist").open("rb") as stream:
+        info = plistlib.load(stream)
+    icon = result / "Contents/Resources" / info["CFBundleIconFile"]
+    assert icon.read_bytes() == b"icon fixture"
     shipped = result / "Contents/Resources/RendererSource"
     assert not (shipped / ".agents").exists()
     probe = subprocess.Popen(

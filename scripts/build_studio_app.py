@@ -21,6 +21,7 @@ def build_bundle(root: Path, configuration: str, app: Path) -> None:
     resources = app / "Contents/Resources"
     source = resources / "RendererSource"
     source.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(root / "studio/Resources/AppIcon.icns", resources / "AppIcon.icns")
     for name in ("src", "scripts"):
         shutil.copytree(
             root / name,
@@ -42,6 +43,7 @@ def build_bundle(root: Path, configuration: str, app: Path) -> None:
         "CFBundleIdentifier": "studio.weetodd.mac",
         "CFBundleName": "WeeTodd Studio",
         "CFBundleDisplayName": "WeeTodd Studio",
+        "CFBundleIconFile": "AppIcon.icns",
         "CFBundlePackageType": "APPL",
         "CFBundleShortVersionString": "0.1.0",
         "CFBundleVersion": "1",

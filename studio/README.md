@@ -21,6 +21,9 @@ hardware support. The build script makes an ad-hoc signed application containing
 app does not install Python dependencies or copy models. All packaging/runtime preflight code is
 tracked; no local agent skills are required. Packaging starts with a fresh bundle, verifies its
 signature, and replaces the previous app only after success, removing obsolete bundled source files.
+The app icon is bundled from `studio/Resources/AppIcon.icns`; `AppIcon.png` retains the supplied
+artwork with only the outer white corners removed. The icon contains transparent standard and
+Retina sizes.
 
 In **Studio Settings**, choose **Set Up Managed Renderer** to download private Python 3.12.13 and
 install pinned, hash-verified native dependencies. The installer verifies arm64, the project Python
