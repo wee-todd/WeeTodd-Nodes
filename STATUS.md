@@ -119,8 +119,11 @@ H3 download completion (2026-09-09):
   component preflight. The published Ref2VA package then passed installation, discovery and recipe
   preflight, including exclusion from the incompatible image preset. The release app was rebuilt
   with all catalog entries. These checks do not establish a new generation or physical 36 GB qualification.
-- The Import/Download controls compiled and passed selection tests; visual verification of the new
-  expand-and-scroll shortcut was unavailable because the validation Mac was locked.
+- After the Mac was unlocked, native UI checks passed in Light and Dark modes: per-component
+  Download expanded/scrolled to the correct package, reference setup excluded the text/image
+  transformer, file/folder Import linked the selected paths, and LTX 2.5 clearly displayed its full
+  component bundle. LTX 2.3 kept Import available with unsupported downloads disabled. The original
+  System appearance was restored. No new download or generation was started during these UI checks.
 
 Earlier model-setup qualification (2026-09-09, `e7ddb75`):
 
