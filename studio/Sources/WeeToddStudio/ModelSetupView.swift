@@ -61,6 +61,8 @@ struct ModelSetupView: View {
   var preset: ModelSetupPreset
   @State private var showLog = false
   @State private var sourceTermsReviewed = false
+  @State private var downloadsExpanded = false
+  @State private var downloadFocus = 0
 
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
@@ -73,53 +75,58 @@ struct ModelSetupView: View {
         Button("Done") { state.selectedPreset = nil }.disabled(bridge.busy)
       }
       Divider()
-      ScrollView {
-        VStack(alignment: .leading, spacing: 18) {
-          existingModels
-          componentChoices
-          memoryPolicy
-          if !compatibleDownloads.isEmpty { downloads }
-          if !state.error.isEmpty {
-            Label(state.error, systemImage: "exclamationmark.triangle")
-              .foregroundStyle(.red).font(.callout).textSelection(.enabled)
-            Text(
-              "Choose a replacement component below its label or add another model folder and scan again."
-            )
-            .font(.caption).foregroundStyle(.secondary)
-          }
-          ForEach(Array(state.warnings.enumerated()), id: \.offset) { _, warning in
-            Label(warning, systemImage: "info.circle").font(.caption).foregroundStyle(.secondary)
-          }
-          if !state.resultPath.isEmpty {
-            Label("Recipe created", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
-            Text(state.resultPath).font(.caption).textSelection(.enabled)
-            if let clip = store.selectedClip, preset.supports(clip) {
-              Button("Use Recipe for Selected Clip") {
-                state.useRecipeForSelectedClip(store: store)
-              }
-              .disabled(bridge.busy || clip.profileID == state.resultPath)
+      ScrollViewReader { proxy in
+        ScrollView {
+          VStack(alignment: .leading, spacing: 18) {
+            existingModels
+            componentChoices
+            memoryPolicy
+            if !compatibleDownloads.isEmpty { downloads.id("modelDownloads") }
+            if !state.error.isEmpty {
+              Label(state.error, systemImage: "exclamationmark.triangle")
+                .foregroundStyle(.red).font(.callout).textSelection(.enabled)
               Text(
-                clip.profileID == state.resultPath
-                  ? "Selected for \(clip.name). Prepare the clip to validate its media and settings."
-                  : "Apply this recipe to \(clip.name)."
+                "Choose a replacement component below its label or add another model folder and scan again."
               )
               .font(.caption).foregroundStyle(.secondary)
-            } else {
-              Text("Select a clip with a compatible engine and media task to use this recipe.")
+            }
+            ForEach(Array(state.warnings.enumerated()), id: \.offset) { _, warning in
+              Label(warning, systemImage: "info.circle").font(.caption).foregroundStyle(.secondary)
+            }
+            if !state.resultPath.isEmpty {
+              Label("Recipe created", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+              Text(state.resultPath).font(.caption).textSelection(.enabled)
+              if let clip = store.selectedClip, preset.supports(clip) {
+                Button("Use Recipe for Selected Clip") {
+                  state.useRecipeForSelectedClip(store: store)
+                }
+                .disabled(bridge.busy || clip.profileID == state.resultPath)
+                Text(
+                  clip.profileID == state.resultPath
+                    ? "Selected for \(clip.name). Prepare the clip to validate its media and settings."
+                    : "Apply this recipe to \(clip.name)."
+                )
                 .font(.caption).foregroundStyle(.secondary)
+              } else {
+                Text("Select a clip with a compatible engine and media task to use this recipe.")
+                  .font(.caption).foregroundStyle(.secondary)
+              }
+              Button("Show recipe in Finder") {
+                NSWorkspace.shared.activateFileViewerSelecting([
+                  URL(fileURLWithPath: state.resultPath)
+                ])
+              }
             }
-            Button("Show recipe in Finder") {
-              NSWorkspace.shared.activateFileViewerSelecting([
-                URL(fileURLWithPath: state.resultPath)
-              ])
+            DisclosureGroup("Setup log", isExpanded: $showLog) {
+              Text(displayLog.isEmpty ? "Setup activity appears here." : displayLog)
+                .font(.system(size: 10, design: .monospaced)).textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-          }
-          DisclosureGroup("Setup log", isExpanded: $showLog) {
-            Text(displayLog.isEmpty ? "Setup activity appears here." : displayLog)
-              .font(.system(size: 10, design: .monospaced)).textSelection(.enabled)
-              .frame(maxWidth: .infinity, alignment: .leading)
-          }
-        }.padding(.trailing, 6)
+          }.padding(.trailing, 6)
+        }
+        .onChange(of: downloadFocus) { _, _ in
+          withAnimation { proxy.scrollTo("modelDownloads", anchor: .top) }
+        }
       }
       Divider()
       HStack(spacing: 12) {
@@ -211,7 +218,7 @@ struct ModelSetupView: View {
           Text(paths.count > 1 ? "Choose from \(paths.count) matches" : "Required")
             .font(.caption).foregroundStyle(.orange)
         }
-        Button("Browse…") {
+        Button("Import…") {
           let panel = NSOpenPanel()
           let accepts = component.accepts ?? ["file", "directory"]
           panel.canChooseDirectories = accepts.contains("directory")
@@ -220,6 +227,23 @@ struct ModelSetupView: View {
           state.selection.components[component.key] = url.path
           state.resultPath = ""
         }
+        .help("Link an existing local model file or folder without copying it.")
+        Button("Download…") {
+          guard
+            let download = compatibleDownloads.first(where: {
+              $0.supports(engine: preset.engine, task: preset.task, component: component.key)
+            })
+          else { return }
+          state.selectedDownloadID = download.id
+          downloadsExpanded = true
+          downloadFocus += 1
+        }
+        .disabled(
+          !compatibleDownloads.contains {
+            $0.supports(engine: preset.engine, task: preset.task, component: component.key)
+          }
+        )
+        .help("Review a compatible download. Some packages include several components.")
       }
       if !choices.isEmpty {
         Picker(
@@ -241,8 +265,9 @@ struct ModelSetupView: View {
           Text(selected).font(.caption2).foregroundStyle(.secondary).textSelection(.enabled)
         }
       } else {
-        Text("Scan a model folder or browse for this component.").font(.caption).foregroundStyle(
-          .secondary)
+        Text("Import an existing component or download a compatible package.").font(.caption)
+          .foregroundStyle(
+            .secondary)
       }
     }
   }
@@ -279,11 +304,11 @@ struct ModelSetupView: View {
   }
 
   private var compatibleDownloads: [ModelSetupDownload] {
-    state.downloads.filter { $0.supports(engine: preset.engine) }
+    state.downloads.filter { $0.supports(engine: preset.engine, task: preset.task) }
   }
 
   private var downloads: some View {
-    DisclosureGroup("Download or prepare a model") {
+    DisclosureGroup("Download or prepare a model", isExpanded: $downloadsExpanded) {
       VStack(alignment: .leading, spacing: 10) {
         Picker("Available model", selection: $state.selectedDownloadID) {
           Text("Choose a model…").tag("")

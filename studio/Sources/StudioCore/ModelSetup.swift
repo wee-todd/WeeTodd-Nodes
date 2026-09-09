@@ -78,9 +78,14 @@ public struct ModelSetupDownload: Codable, Identifiable {
   public var licenseURL: String
   public var outputKind: String
   public var engines: [String]?
+  public var tasks: [String]?
+  public var components: [String]?
   public var licenseNotice: String?
 
-  public func supports(engine: String) -> Bool {
-    engines?.contains(engine) ?? true
+  public func supports(engine: String, task: String? = nil, component: String? = nil) -> Bool {
+    guard engines?.contains(engine) ?? true else { return false }
+    if let task, !(tasks?.contains(task) ?? true) { return false }
+    if let component, !(components?.contains(component) ?? false) { return false }
+    return true
   }
 }

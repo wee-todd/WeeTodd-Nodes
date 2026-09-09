@@ -106,6 +106,29 @@ def test_reference_rejects_wrong_partition_and_text_only_paged_encoder(tmp_path)
     assert not (tmp_path / "profiles").exists()
 
 
+@pytest.mark.parametrize("filename", ["model_identity.json", "setup_provenance.json"])
+@pytest.mark.parametrize(
+    "preset,partition,wrong", [("h3-image", "fl2va", "ref2va"), ("h3-reference", "ref2va", "fl2va")]
+)
+def test_h3_transformer_identity_filters_scanning_and_rejects_wrong_selection(
+    tmp_path, filename, preset, partition, wrong
+):
+    root = _component_tree(tmp_path)
+    transformer = root / "transformer"
+    manifest = json.loads((root / "model_index.json").read_text())
+    manifest["_minimax_h3"] = {"partition": partition, "tasks": [partition]}
+    _json(root / "model_index.json", manifest)
+    _json(transformer / filename, {"engine": "h3", "partition": wrong})
+    report = service().scan_models(preset, [str(transformer)])
+    assert report["candidates"]["transformer"] == []
+    with pytest.raises(ValueError, match="partition"):
+        service().prepare_recipe(preset, h3_components(root), tmp_path / "profiles")
+    assert not (tmp_path / "profiles").exists()
+    _json(transformer / filename, {"engine": "h3", "partition": partition})
+    report = service().scan_models(preset, [str(transformer)])
+    assert report["candidates"]["transformer"] == [str(transformer.resolve())]
+
+
 def test_discovery_uses_headers_not_names_and_deduplicates_cycles(tmp_path):
     root = _component_tree(tmp_path)
     renamed = root / "misleading"

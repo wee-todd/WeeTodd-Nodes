@@ -112,6 +112,31 @@ def _object(value, label):
     return value
 
 
+def _validate_h3_transformer_identity(root, task):
+    # Common H3 tensor shapes cannot distinguish the learned task partitions.
+    # Respect explicit provenance, without guessing from filenames or paths.
+    expected = "ref2va" if task == "ref2va" else "fl2va"
+    for filename in (
+        "config.json",
+        "paged_manifest.json",
+        "model_identity.json",
+        "conversion_provenance.json",
+        "setup_provenance.json",
+    ):
+        if not (root / filename).is_file():
+            continue
+        document = _json(root / filename)
+        records = [document]
+        if "_minimax_h3" in document:
+            records.append(_object(document["_minimax_h3"], "_minimax_h3"))
+        for record in records:
+            if "partition" in record and record["partition"] != expected:
+                raise ValueError(
+                    f"H3 transformer partition must be {expected!r}; "
+                    f"{filename} declares {record['partition']!r}"
+                )
+
+
 def _h3_candidate(key, path, task):
     from wee_todd_nodes.preflight import _component_report, validate_task_partition
 
@@ -131,6 +156,8 @@ def _h3_candidate(key, path, task):
         )
         return
     if path.is_dir():
+        if key == "transformer":
+            _validate_h3_transformer_identity(path, task)
         for name in (
             "paged_manifest.json",
             "paged_text_encoder_manifest.json",

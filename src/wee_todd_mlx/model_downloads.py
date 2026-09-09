@@ -181,6 +181,7 @@ def download_catalog():
             "licenseURL": f"https://huggingface.co/{COMPACT_REPO}/blob/{COMPACT_REVISION}/LICENSE",
             "outputKind": "directory",
             "engines": ["h3"],
+            "components": ["text_encoder"],
             "licenseNotice": "The source bundle includes MiniMax H3 territorial restrictions "
             "(including the U.S., EU, UK and Republic of Korea) and separate "
             "Qwen attribution. Review the upstream terms for your use before download.",
@@ -203,6 +204,13 @@ def download_catalog():
             "Setup uses a Studio Keychain token or your existing Hugging Face login.",
             "outputKind": "directory",
             "engines": ["ltx25"],
+            "components": [
+                "transformer_path",
+                "text_encoder_path",
+                "video_vae_path",
+                "audio_vae_path",
+                "spatial_upscaler_path",
+            ],
         }
     )
     return [dict(item["descriptor"]) for item in PRECONVERTED] + result
@@ -462,6 +470,14 @@ def _validate_preconverted(kind, root):
 
         if not PagedTextEncoderManifest.load(root).supports_vision:
             raise ValueError("Downloaded encoder lacks its required vision page")
+    elif kind in {
+        "h3-transformer-fl2va",
+        "h3-transformer-ref2va",
+        "h3-video-vae",
+        "h3-support-fl2va",
+        "h3-support-ref2va",
+    }:
+        _validate_h3_preconverted(kind, root)
     elif kind == "ltx25":
         from ltx25_mlx.runtime import LTX25ComponentSpec
 
@@ -477,6 +493,49 @@ def _validate_preconverted(kind, root):
         ).validate("distilled")
     else:
         raise ValueError("Unknown preconverted component kind")
+
+
+def _validate_h3_preconverted(kind, root):
+    from .model_library import inspect_safetensors_header
+    from .model_setup import _h3_candidate, _json, _object
+
+    task = "ref2va" if kind.endswith("ref2va") else "fl2va"
+    if kind.startswith("h3-transformer-"):
+        # Shapes identify the shared H3 architecture, not FL2VA/Ref2VA training
+        # identity. Exact payload identity comes from the pinned download catalog.
+        _json(root / "paged_manifest.json")
+        for filename in root.rglob("*.safetensors"):
+            inspect_safetensors_header(filename)
+        _h3_candidate("transformer", root, task)
+    elif kind == "h3-video-vae":
+        filename = root / "video_vae_affine_q8.safetensors"
+        header = inspect_safetensors_header(filename)
+        wrapper = _object(
+            json.loads(header["metadata"].get("minimax_h3_video_vae", "{}")),
+            "video_vae metadata",
+        )
+        if wrapper.get("format") != "minimax-h3-mlx-video-vae":
+            raise ValueError("Downloaded video_vae metadata lacks the native MLX format")
+        _h3_candidate("video_vae", filename, task)
+    else:
+        _h3_candidate("checkpoint", root, task)
+        manifest = _json(root / "model_index.json")
+        required = {
+            "transformer",
+            "text_encoder",
+            "video_vae",
+            "audio_vae",
+            "processor",
+            "tokenizer",
+        }
+        if missing := required - manifest.keys():
+            raise ValueError(
+                "H3 task manifest lacks component declarations: " + ", ".join(sorted(missing))
+            )
+        _json(root / "audio_vae/metadata.json")
+        inspect_safetensors_header(root / "audio_vae/model.safetensors")
+        for key in ("audio_vae", "tokenizer", "processor"):
+            _h3_candidate(key, root / key, task)
 
 
 def _prepare_preconverted(record, files, cache, prepared):
@@ -587,6 +646,14 @@ def prepare_download(download_id, destination, *, progress=None, existing_roots=
                 json.dumps(
                     {
                         "format": "weetodd-model-setup-v1",
+                        **(
+                            {
+                                "engine": "h3",
+                                "partition": preconverted["kind"].removeprefix("h3-transformer-"),
+                            }
+                            if preconverted and preconverted["kind"].startswith("h3-transformer-")
+                            else {}
+                        ),
                         "id": download_id,
                         "sources": [asdict(item) for item in files],
                         "converter": (
@@ -613,7 +680,13 @@ def prepare_download(download_id, destination, *, progress=None, existing_roots=
         return {
             "path": str(final),
             "message": "Model components prepared and verified. "
-            "Source downloads are retained in .weetodd-downloads for reuse.",
+            "Source downloads are retained in .weetodd-downloads for reuse."
+            + (
+                " H3 FL2VA/Ref2VA training identity cannot be inferred from shared tensor "
+                "shapes; this package uses the pinned catalog source and checksums."
+                if preconverted and preconverted["kind"].startswith("h3-transformer-")
+                else ""
+            ),
         }
     finally:
         lock.unlink(missing_ok=True)

@@ -53,6 +53,11 @@ downloads resume; SHA-256 and staged output publication protect existing models.
 preflight remains required for image/reference clips. Published Vayden releases provide the H3 Q8
 vision encoder and complete LTX 2.5 distilled Q8 component set. The catalog pins each release and
 every file checksum; source conversion remains optional and applicable model terms are retained.
+H3 setup also offers the matching text/image or genuine reference transformer, Q8 video VAE and
+official task support files (audio VAE, tokenizer, processor and task manifest). Task-specific downloads
+are filtered, and explicit downloaded transformer provenance is checked during discovery and recipe
+creation. Each model row has **Import…** for a linked local file/folder and **Download…** for a
+compatible package, with size/contents/terms reviewed before transfer.
 
 The app is an initial development build. FFmpeg/FFprobe and optional RIFE still need configuration;
 retail signing/notarization and clean-Mac qualification remain release work. MetalFX interpolation is
@@ -101,7 +106,23 @@ remain open. Full BF16-versus-Q8 model parity was not run.
 
 ## Checkpoint validation and remaining work
 
-Latest model-setup qualification (2026-09-09, `e7ddb75`):
+H3 download completion (2026-09-09):
+
+- The genuine Ref2VA Q8-extended transformer is published under Vayden at
+  `9f339718e571f181b9a4c3043916ec0f2dc24f00`. All 13 native source hashes, 51 page hashes/headers,
+  and 114 remote release files were verified before publication.
+- The expanded catalog includes text/image and reference transformers, the Q8 video VAE, and
+  task support packages. Source terms remain included. Native task/component filtering has focused
+  coverage; downloaded provenance rejects conflicting transformer selection.
+- 464 selected Python tests and 32 Swift tests passed. The existing text/image transformer, video
+  VAE and both support packages passed installation checks; H3 text/image/reference recipes passed
+  component preflight. The published Ref2VA package then passed installation, discovery and recipe
+  preflight, including exclusion from the incompatible image preset. The release app was rebuilt
+  with all catalog entries. These checks do not establish a new generation or physical 36 GB qualification.
+- The Import/Download controls compiled and passed selection tests; visual verification of the new
+  expand-and-scroll shortcut was unavailable because the validation Mac was locked.
+
+Earlier model-setup qualification (2026-09-09, `e7ddb75`):
 
 - 431 focused/required Python tests and 30 Swift tests passed; release app rebuilt with both catalogs.
 - All 115 Qwen and 207 LTX release files passed remote size/checksum verification. Both packages

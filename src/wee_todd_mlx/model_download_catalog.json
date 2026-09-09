@@ -12,6 +12,9 @@
       "outputKind": "directory",
       "engines": [
         "h3"
+      ],
+      "components": [
+        "text_encoder"
       ]
     },
     "kind": "h3-qwen",
@@ -951,6 +954,13 @@
       "outputKind": "directory",
       "engines": [
         "ltx25"
+      ],
+      "components": [
+        "transformer_path",
+        "text_encoder_path",
+        "video_vae_path",
+        "audio_vae_path",
+        "spatial_upscaler_path"
       ]
     },
     "kind": "ltx25",
@@ -2610,6 +2620,1824 @@
         "size": 3342,
         "sha256": "ce446e4bd85cee2dc8577c1745b6a266e842bd1b9f53102a50579011b5a586d0",
         "target": "README.md"
+      }
+    ]
+  },
+  {
+    "descriptor": {
+      "id": "h3-fl2va-q8-preconverted",
+      "name": "H3 text/image transformer Q8 \u00b7 Preconverted (Recommended)",
+      "description": "Ready-to-use FL2VA Q8-extended transformer pages for text, first-frame and first/last-frame clips. Requires H3 text/image support files, Qwen encoder and video VAE. Not a Ref2VA transformer.",
+      "downloadBytes": 33379362020,
+      "requiredDiskBytes": 33647797476,
+      "sourceURL": "https://huggingface.co/Vayden/MiniMax-H3-MLX-q8-extended-paged/tree/84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+      "licenseURL": "https://huggingface.co/Vayden/MiniMax-H3-MLX-q8-extended-paged/blob/84f938f9b481cfa96a32c0dfe2f36a338e23bc78/LICENSE",
+      "licenseNotice": "Retains the MiniMax H3 Community License and its eligibility/use restrictions. Review the source terms and any Hugging Face access requirements before downloading.",
+      "outputKind": "directory",
+      "engines": [
+        "h3"
+      ],
+      "tasks": [
+        "t2v",
+        "fflf"
+      ],
+      "components": [
+        "transformer"
+      ]
+    },
+    "kind": "h3-transformer-fl2va",
+    "files": [
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "LICENSE",
+        "size": 17604,
+        "sha256": "59b99642b95ea21630e311198ddbfffbfe05aadba0c2f5d884cbdf4efcc90f44",
+        "target": "LICENSE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "MODIFICATIONS.md",
+        "size": 516,
+        "sha256": "b117efca0d17e80281e499b2cc54176acb440e29843adda118cc97727c2b247d",
+        "target": "MODIFICATIONS.md"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "NOTICE",
+        "size": 348,
+        "sha256": "2a8fb24e0fb7b3e26fbdf9c9dcf38733b4357e6ab26b46b747074bcf45784d95",
+        "target": "NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "README.md",
+        "size": 4201,
+        "sha256": "b28a3196186eb107d6027446e2121749ab41daa8169fcc41897b724edc3354d9",
+        "target": "README.md"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "config.json",
+        "size": 583,
+        "sha256": "ef054716beebd89f349869a4c17b7eebdccf6d4dbf8aac4312224b83b81161ef",
+        "target": "config.json"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "paged_manifest.json",
+        "size": 10335,
+        "sha256": "952094444179df7b192cdd8c91616494859b3e8c6d0cce1ca8834000c998b9a0",
+        "target": "paged_manifest.json"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "pages/block-000.safetensors",
+        "size": 795886069,
+        "sha256": "c1c02a9b0f853a9c80384b1abb735b5831c9fae5353bd2de244a81e778517c7c",
+        "target": "pages/block-000.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "pages/block-001.safetensors",
+        "size": 795886077,
+        "sha256": "73ddb7f8406440f1258f9cd8043c69a50839f95ab2c1715d8ac906af357b3a67",
+        "target": "pages/block-001.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "pages/block-002.safetensors",
+        "size": 795886069,
+        "sha256": "04f0c2aefc018a8137fa437b3e58469a43b48de78838632f1972307f02e00e52",
+        "target": "pages/block-002.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "pages/block-003.safetensors",
+        "size": 795886069,
+        "sha256": "824bb0b6a85aa7c62a673422145cf11e3121a85b0f3ba7afc39d8b40745c0060",
+        "target": "pages/block-003.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "pages/block-004.safetensors",
+        "size": 795886077,
+        "sha256": "b51737f1298e0472f0d1c7981e634fa24a6687343696977f33e8530522d48124",
+        "target": "pages/block-004.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "pages/block-005.safetensors",
+        "size": 795886085,
+        "sha256": "7dacbf261a69a43203a220d2ff2f3ff6afe60ed36b8c4a7e876da447acaf3602",
+        "target": "pages/block-005.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "pages/block-006.safetensors",
+        "size": 795886085,
+        "sha256": "9acf336ecde17b83b111935d27f3dffb7580d86ac662e7cd7ad3d08b1a3a59b2",
+        "target": "pages/block-006.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "pages/block-007.safetensors",
+        "size": 795886077,
+        "sha256": "ee815f3b73d221430064e47bcab13e3c4f816e2e682b82e379038770cd24b647",
+        "target": "pages/block-007.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "pages/block-008.safetensors",
+        "size": 795886069,
+        "sha256": "5ce7f1eb766ee4d3aeaea8ec367935fdbdd94248a49f2d7117c8513345065e4a",
+        "target": "pages/block-008.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "pages/block-009.safetensors",
+        "size": 795886085,
+        "sha256": "d81ef6cb4e42c950b6e93e28de15bfc28644489da48d62759a1b1e97b781e88c",
+        "target": "pages/block-009.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "pages/block-010.safetensors",
+        "size": 795886079,
+        "sha256": "288f77b378fbdfef19519b202902c34328f0ad151ae15c15a573cde91d2e7b04",
+        "target": "pages/block-010.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "pages/block-011.safetensors",
+        "size": 795886087,
+        "sha256": "8bca3eb3fbad6822547ca5d79862950f5118a3471acc61fc728424d922c6122d",
+        "target": "pages/block-011.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "pages/block-012.safetensors",
+        "size": 795886079,
+        "sha256": "5401739c9efd3b31b7f13b5b1c97f6028889596a6ade3d374cbc083e1206c291",
+        "target": "pages/block-012.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "pages/block-013.safetensors",
+        "size": 795886087,
+        "sha256": "c502578024ca148999e3a9b4021c64aca428e0a63ee2377b10423bdcfefa579c",
+        "target": "pages/block-013.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "pages/block-014.safetensors",
+        "size": 795886079,
+        "sha256": "9774da16a0c76313e2c999db590c861022245e7e22ffb128206dce49ef61618d",
+        "target": "pages/block-014.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "pages/block-015.safetensors",
+        "size": 795886079,
+        "sha256": "fa3a1c0fb41db646c7935cf77b8788e0485f197d9a2f58cadaed6db1d22cde1f",
+        "target": "pages/block-015.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "pages/block-016.safetensors",
+        "size": 795886079,
+        "sha256": "f707e249b976fbd6adad4338cdf376dee82320dc747bbf985e149c163ff444e0",
+        "target": "pages/block-016.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "pages/block-017.safetensors",
+        "size": 795886079,
+        "sha256": "9361819da4bb500b48fd61c9bc796a039d5d2bcde1472c89e8100f006d59d94e",
+        "target": "pages/block-017.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "pages/block-018.safetensors",
+        "size": 795886095,
+        "sha256": "004e3e55c35e84b17885f1c5778d2635859fcae093edce41fbe2905168679c68",
+        "target": "pages/block-018.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "pages/block-019.safetensors",
+        "size": 795886079,
+        "sha256": "057e760c425ebb15f9748e325586a0fb7ce6e7e3c323f5cf908724209dbd6aea",
+        "target": "pages/block-019.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "pages/block-020.safetensors",
+        "size": 795886087,
+        "sha256": "e702bf3bb4a89af0d2ed2c76ac5aa8cd919f5043783d8b5ab2555e2400b41096",
+        "target": "pages/block-020.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "pages/block-021.safetensors",
+        "size": 579126158,
+        "sha256": "dcb353dcdc67304754b631700d78cb2603e56c187c533fdc1f2b9083f0abfa3f",
+        "target": "pages/block-021.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "pages/block-022.safetensors",
+        "size": 579126158,
+        "sha256": "c998e7ad01c8273fb59ebe9b8434b984dc8259a79e6a0b50c2bcc77a8b3e4419",
+        "target": "pages/block-022.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "pages/block-023.safetensors",
+        "size": 579126144,
+        "sha256": "4e7f0346af0d5dde875e5a16ab3654921316c791323ed1ed62118baff9d7c87c",
+        "target": "pages/block-023.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "pages/block-024.safetensors",
+        "size": 579126164,
+        "sha256": "5b46c69a11c5e35124a351f80e5bddcb70cdac45e51d7db088658e85e0eed401",
+        "target": "pages/block-024.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "pages/block-025.safetensors",
+        "size": 579126140,
+        "sha256": "e6195ca80778399934f90f097e32dda023c04271ecabd6e9636670b2507fcc99",
+        "target": "pages/block-025.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "pages/block-026.safetensors",
+        "size": 579126150,
+        "sha256": "08ebc10ad92d7d24810c80f6cc0a01b3c7615915f6c48303f4e44730a3bff432",
+        "target": "pages/block-026.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "pages/block-027.safetensors",
+        "size": 579126156,
+        "sha256": "d49921cb72d15d3322d2158e1c5273ec0ae5f4d5876db4d2439536291e825797",
+        "target": "pages/block-027.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "pages/block-028.safetensors",
+        "size": 579126148,
+        "sha256": "d78603778bacfff174086ac3e49c6dc93e23d63b0ea7098f66d9abd70c03b0ae",
+        "target": "pages/block-028.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "pages/block-029.safetensors",
+        "size": 579126160,
+        "sha256": "30f328503731b72b58bfc10cb625ed42de05ff75b47ceddd38b80a4b7da1e266",
+        "target": "pages/block-029.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "pages/block-030.safetensors",
+        "size": 579126166,
+        "sha256": "233b433e6b892f3340874054f2b18a89ed8db3deb5b20245a88143add4e4ccf6",
+        "target": "pages/block-030.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "pages/block-031.safetensors",
+        "size": 579126156,
+        "sha256": "184581a9d53eedccf8ef5ef2a720d5c075711785fef6eff4eeabc30940bdd121",
+        "target": "pages/block-031.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "pages/block-032.safetensors",
+        "size": 579126156,
+        "sha256": "f03bfa6f3c57a88050f2eb9a0283bcd509da1f127d61dbde5950e8dc91354263",
+        "target": "pages/block-032.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "pages/block-033.safetensors",
+        "size": 579126144,
+        "sha256": "051b2291eb1087e0aa74b4a80937b4d53180c8cce83944ec6d3a002979f9e8c8",
+        "target": "pages/block-033.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "pages/block-034.safetensors",
+        "size": 579126146,
+        "sha256": "9af2aaba239428426f04d70c08e893943ac2ee92a54d2d89603d97297b5f5209",
+        "target": "pages/block-034.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "pages/block-035.safetensors",
+        "size": 579126164,
+        "sha256": "90ed140d837d0a14cd517345500a18dfc04bbe8c4ae10e77e21724ee49cdca75",
+        "target": "pages/block-035.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "pages/block-036.safetensors",
+        "size": 579126152,
+        "sha256": "26a8bd157c601738e1d9b86425999e4ba5152a97dc5f44f993a76b4a0a940d9b",
+        "target": "pages/block-036.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "pages/block-037.safetensors",
+        "size": 579126148,
+        "sha256": "de9b319338abe7e00b66b03b1f9050a70bac62862018a89832efec32744884c7",
+        "target": "pages/block-037.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "pages/block-038.safetensors",
+        "size": 434619702,
+        "sha256": "53896224622f220bb2c06ff959ffb07f23090ff54fc417108a1c150c964d44d1",
+        "target": "pages/block-038.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "pages/block-039.safetensors",
+        "size": 434619698,
+        "sha256": "ad07d5b1b90f3ca655b3b874d5abddefd632d5c2fce3ef3cde81f350adde02e9",
+        "target": "pages/block-039.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "pages/block-040.safetensors",
+        "size": 434619706,
+        "sha256": "fe8280dc1927a1270a20c99eabca26ea9f266199a77253cd900596cf2d41d3ef",
+        "target": "pages/block-040.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "pages/block-041.safetensors",
+        "size": 434619688,
+        "sha256": "6f01b95d53b1278e2b992ec172c8659604ab247bb0e0ad394a73006dfbc3a2ea",
+        "target": "pages/block-041.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "pages/block-042.safetensors",
+        "size": 434619698,
+        "sha256": "35cd4c2fbded0fbbe827fc5db03d94cb71f725ec152a43869c79f6b2aee80a86",
+        "target": "pages/block-042.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "pages/block-043.safetensors",
+        "size": 434619702,
+        "sha256": "3bbe7cbb9eca4ef232db817c5f31b395a13b621e337dbdbdcb0e51dd9f13d5e1",
+        "target": "pages/block-043.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "pages/block-044.safetensors",
+        "size": 434619702,
+        "sha256": "f4bbb7b12657e2188739a01a5422acf84c16d082a539bec0f05bfeba5a5b786d",
+        "target": "pages/block-044.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "pages/block-045.safetensors",
+        "size": 434619702,
+        "sha256": "e0d653f5836b0f4d8a65ed6998f1a0e4505b4d6b4d6855c7596ae59f84d7df65",
+        "target": "pages/block-045.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "pages/block-046.safetensors",
+        "size": 434619694,
+        "sha256": "ab5d8a4aba4c5510b00ab28db5642166cd2b79723fc6c1d8668b3ed7471f64f7",
+        "target": "pages/block-046.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "pages/block-047.safetensors",
+        "size": 434619692,
+        "sha256": "ef6221ace63bb747944738cddee677119c24ca424898cc5d9b4517981113eaea",
+        "target": "pages/block-047.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "pages/block-048.safetensors",
+        "size": 434619706,
+        "sha256": "6151ff6b44d88d5240c6c03750f323bf8f9907eccfc0aeb591edbdfb1b0bd6ef",
+        "target": "pages/block-048.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "pages/block-049.safetensors",
+        "size": 434619696,
+        "sha256": "919eb462d5eed3206d06e8f4b5ec2c3947ac79d4fc04b78cfc0351d8ec3259f3",
+        "target": "pages/block-049.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "pages/fixed.safetensors",
+        "size": 1605136901,
+        "sha256": "03378702c61272feb21623c98e85a953c06120441903c6bf601bbcc34f47cd9b",
+        "target": "pages/fixed.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-MLX-q8-extended-paged",
+        "revision": "84f938f9b481cfa96a32c0dfe2f36a338e23bc78",
+        "filename": "quant_config.json",
+        "size": 2865,
+        "sha256": "72d1368aac751edd3bc55e4a2deaba42ca259689fd01e950d6068e1022cb7968",
+        "target": "quant_config.json"
+      }
+    ]
+  },
+  {
+    "descriptor": {
+      "id": "h3-ref2va-q8-preconverted",
+      "name": "H3 reference transformer Q8 \u00b7 Preconverted (Recommended)",
+      "description": "Ready-to-use genuine native Ref2VA Q8-extended transformer pages. Requires reference support files, vision-capable Qwen encoder and video VAE. This is a distinct transformer from the text/image model.",
+      "downloadBytes": 58260426747,
+      "requiredDiskBytes": 58528862203,
+      "sourceURL": "https://huggingface.co/Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged/tree/9f339718e571f181b9a4c3043916ec0f2dc24f00",
+      "licenseURL": "https://huggingface.co/Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged/blob/9f339718e571f181b9a4c3043916ec0f2dc24f00/LICENSE",
+      "licenseNotice": "Retains the MiniMax H3 Community License and its eligibility/use restrictions. Review the source terms and accept access on Hugging Face before downloading.",
+      "outputKind": "directory",
+      "engines": [
+        "h3"
+      ],
+      "tasks": [
+        "ref2va"
+      ],
+      "components": [
+        "transformer"
+      ]
+    },
+    "kind": "h3-transformer-ref2va",
+    "files": [
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/fixed.safetensors",
+        "size": 1723249715,
+        "sha256": "d95dc0e3ce237a0e846fd83adafb75606856e85b8b65849b1e7a5d660c95b7b4",
+        "target": "pages/fixed.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-000.safetensors",
+        "size": 1291144704,
+        "sha256": "03327149108cb860a0cfd528fd312bf79c1856dd37e818380561075d1e56f5de",
+        "target": "pages/block-000.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-001.safetensors",
+        "size": 1291144708,
+        "sha256": "0d43720dce0cad61283f015726cb2758746a4bea3e106dc0348fac47f31354b6",
+        "target": "pages/block-001.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-002.safetensors",
+        "size": 1291144700,
+        "sha256": "811154259781b194cb3aff4f78287dc12b564b1d851bd8979986de6c355b8895",
+        "target": "pages/block-002.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-003.safetensors",
+        "size": 1291144700,
+        "sha256": "f0f5449d16e8128b42624c0b8fa525fc8decccf5f9f6d86346f930165dd4d7f5",
+        "target": "pages/block-003.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-004.safetensors",
+        "size": 1291144708,
+        "sha256": "f30a4f8b14d35f6be27c4ab20a2cd26977d5dc00c91722ca8d3377c941217975",
+        "target": "pages/block-004.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-005.safetensors",
+        "size": 1291144720,
+        "sha256": "8cbb07df84bf388b5684b3bef53a8aa1c70e9bb40f9ad089f7b97e4ef150c94f",
+        "target": "pages/block-005.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-006.safetensors",
+        "size": 1291144718,
+        "sha256": "525496196f943c84ba47b3d725de053cf65aac79550ce261bd881c097232d755",
+        "target": "pages/block-006.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-007.safetensors",
+        "size": 1291144708,
+        "sha256": "c433979b9e89fc1fa6a3e3b4bd7d4a907e439cadfbc58908751cb8f845d6feba",
+        "target": "pages/block-007.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-008.safetensors",
+        "size": 1291144700,
+        "sha256": "7a5b4170d90d5830f962c2b37b3d8506ac5526c68be87e7f4c6d332c5854b815",
+        "target": "pages/block-008.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-009.safetensors",
+        "size": 1291144720,
+        "sha256": "e5bc97bc7a5d2cc3648d78c5d6f0b914024c534f561c076685f6c7a3b061d698",
+        "target": "pages/block-009.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-010.safetensors",
+        "size": 1291144710,
+        "sha256": "4ec08c78f7b082b8e3c60489a251d9506577fc6a4203683b04f2b213d6a2b7b2",
+        "target": "pages/block-010.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-011.safetensors",
+        "size": 1291144720,
+        "sha256": "057aa5d2afa5623f41f25a13b2e780a05a7b2eda2f68dbd98d991c0fd0ce006d",
+        "target": "pages/block-011.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-012.safetensors",
+        "size": 1291144716,
+        "sha256": "8e0afabb403a9bd7b20688024cb47f971cc23738f446723a8e59f5d65abdedbe",
+        "target": "pages/block-012.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-013.safetensors",
+        "size": 1291144720,
+        "sha256": "485b20232ba20cb61f9b16f12ce9de5a2a05303f98c4d992e66fd47c65f2f1a8",
+        "target": "pages/block-013.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-014.safetensors",
+        "size": 1291144708,
+        "sha256": "1b3088c495d0d838d50782c0b615d2b74496916ebf0d07a9b97416d080c34e5c",
+        "target": "pages/block-014.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-015.safetensors",
+        "size": 1291144710,
+        "sha256": "669b9c7d36a6f8738f9ce672ebdc631012b93ff19865f034c3e9c7f7fb3359ba",
+        "target": "pages/block-015.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-016.safetensors",
+        "size": 1291144710,
+        "sha256": "389370b25d1de8c0ed42b4a452143d9fb24fe158523855dd9ea610fa65917528",
+        "target": "pages/block-016.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-017.safetensors",
+        "size": 1291144708,
+        "sha256": "eacfb712484fc213796792b4b44d0154b19532e7c3a1e74d4dff3e3846244e89",
+        "target": "pages/block-017.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-018.safetensors",
+        "size": 1291144716,
+        "sha256": "13b0fe4dbfd484cab578f69a3979022c3c85c780bcda8ba6fb4ad8212f056f96",
+        "target": "pages/block-018.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-019.safetensors",
+        "size": 1291144712,
+        "sha256": "94ad5756cc7d5b7f25bfeadf0acb1f6450a8e26ba787328c801b7c9788efe941",
+        "target": "pages/block-019.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-020.safetensors",
+        "size": 1291144724,
+        "sha256": "1867b03b4d8ec6a4fafed4b891d9a550b9fe7a885878937bdd71e608dd4b3225",
+        "target": "pages/block-020.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-021.safetensors",
+        "size": 1074384789,
+        "sha256": "41ed2e28dd7cdf5880ad1a6234084a56e24df2cf37aacf53157ad86a605966bd",
+        "target": "pages/block-021.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-022.safetensors",
+        "size": 1074384789,
+        "sha256": "f199d0c866bbba185d515ae0f28d3dca5e0ca1bd2cefaae869c745ea4f39a48e",
+        "target": "pages/block-022.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-023.safetensors",
+        "size": 1074384779,
+        "sha256": "940c8b41a92b18746a45d6825c4ee34c9edc90055598ec5a5eec8a4f662e041e",
+        "target": "pages/block-023.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-024.safetensors",
+        "size": 1074384799,
+        "sha256": "0b860175902378ed6e0036984686e68bef75906c289fd32b0f28e5282ca61261",
+        "target": "pages/block-024.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-025.safetensors",
+        "size": 1074384769,
+        "sha256": "e6dbd9f8fdd7f554cbd92e2ddc0489f0b4c5a1d5a2bd293db72e82ffaddb579d",
+        "target": "pages/block-025.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-026.safetensors",
+        "size": 1074384803,
+        "sha256": "d7133a958521d186b799914f221c1fe26c2c2c186598e9ca054b848c84abf57c",
+        "target": "pages/block-026.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-027.safetensors",
+        "size": 1074384789,
+        "sha256": "d36ea346486d90a9cd12706136e6fc4515e50b0a77c43def955e5108b3fde49f",
+        "target": "pages/block-027.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-028.safetensors",
+        "size": 1074384781,
+        "sha256": "525fe9fc48592d30247408f7f8a8824bdb017d02a829ecd2b420aa193bf48b91",
+        "target": "pages/block-028.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-029.safetensors",
+        "size": 1074384789,
+        "sha256": "06f566840f75a42e8f5b4087fd9e8d3592dea726634d88493ade2e86eda2560e",
+        "target": "pages/block-029.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-030.safetensors",
+        "size": 1074384801,
+        "sha256": "743d6f6f6c3f3d896f6500b28498c84352731693f0d6f1e09117442c9894a623",
+        "target": "pages/block-030.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-031.safetensors",
+        "size": 1074384785,
+        "sha256": "66af4725ae9c9753bc3c2109eedaf9c43485eb4a50a42ea1abf81cbbe06ce03f",
+        "target": "pages/block-031.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-032.safetensors",
+        "size": 1074384789,
+        "sha256": "d75b133b18e0ee2ea23f4773a7f523a4f726367b3c0351beab77a05ad8401c78",
+        "target": "pages/block-032.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-033.safetensors",
+        "size": 1074384777,
+        "sha256": "65fca13a40d9d4fd71865a04c95762ec3b84a9bdc740103cab833febc464e4f3",
+        "target": "pages/block-033.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-034.safetensors",
+        "size": 1074384803,
+        "sha256": "45ad254840203d742ce220323e466eb70f22b442d3b0887c6cca7c44cbbfe0a4",
+        "target": "pages/block-034.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-035.safetensors",
+        "size": 1074384797,
+        "sha256": "eca1617efb691a47d735207b1dd9ba4f7c631e3383e7ebe9f51a4e864efc2cde",
+        "target": "pages/block-035.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-036.safetensors",
+        "size": 1074384781,
+        "sha256": "61d2b81255a7d70ec410a9c39c0006115f9b99bb5954a9985a15b0f649dcc836",
+        "target": "pages/block-036.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-037.safetensors",
+        "size": 1074384779,
+        "sha256": "df8efaafecffe8435b5e9e22399284359ba9c4781ab352fcccef36877b0b9031",
+        "target": "pages/block-037.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-038.safetensors",
+        "size": 929878330,
+        "sha256": "4eeeaef078b286595d9e85099cd014a1b3918a25e3cd76e320e9a035a5889cbe",
+        "target": "pages/block-038.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-039.safetensors",
+        "size": 929878326,
+        "sha256": "7aca2204583233ab4f443860a099959c29068c9108e8f989be800ecb7e5f401e",
+        "target": "pages/block-039.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-040.safetensors",
+        "size": 929878334,
+        "sha256": "9c295b4b8605672005d9b9b2eabb5eb560b09c52e19dcb651cc3b81f1bc1392b",
+        "target": "pages/block-040.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-041.safetensors",
+        "size": 929878316,
+        "sha256": "25357c091b669c80c5d2bd1f811411dbceff4976543c8c8ee412c388bccf0da7",
+        "target": "pages/block-041.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-042.safetensors",
+        "size": 929878326,
+        "sha256": "0762da863ed0e6142ad69726c84263cccb6afff211e22519aa369cbae4ac077d",
+        "target": "pages/block-042.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-043.safetensors",
+        "size": 929878330,
+        "sha256": "07c940133f42561f24e74f4983ab280b5b48d16b39f26492fd6cb6b04fcdf865",
+        "target": "pages/block-043.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-044.safetensors",
+        "size": 929878330,
+        "sha256": "b163e3f61d5ba21d3b134eeb1e82a707471517f47b0bce31caa2aca5dcadb1c3",
+        "target": "pages/block-044.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-045.safetensors",
+        "size": 929878330,
+        "sha256": "9c6c79dbb7ea7ee1144408b6827bd222cf8e491b263749be5dfdda76d6d098d4",
+        "target": "pages/block-045.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-046.safetensors",
+        "size": 929878322,
+        "sha256": "5bb20b37d75b46a13b67ccd2c569a655cfd43abb28d93665e550c61981633f0e",
+        "target": "pages/block-046.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-047.safetensors",
+        "size": 929878320,
+        "sha256": "f53afc22a7ef7cb6e4d618e986b79b20b97a173564300da4b4280ad561af4d87",
+        "target": "pages/block-047.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-048.safetensors",
+        "size": 929878334,
+        "sha256": "f309b7ef3c55982da2b83aece34264b2558011d161685164f0cd660eb70ddbe2",
+        "target": "pages/block-048.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-049.safetensors",
+        "size": 929878324,
+        "sha256": "7ca58f358b05d9f416e5bd31babd4afa541d39f23007cb2bd70123077ac2c52f",
+        "target": "pages/block-049.safetensors"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "config.json",
+        "size": 604,
+        "sha256": "7c6f51e162fc264b78e25cdb2ec350552d00ea4144d851f394ab0cf80b4c7261",
+        "target": "config.json"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "quant_config.json",
+        "size": 4932,
+        "sha256": "0fca3af8c87a69d4115b1768bb3b59ac2b2a3a86b6d1143ec65e789488a12bc3",
+        "target": "quant_config.json"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "paged_manifest.json",
+        "size": 10380,
+        "sha256": "8971c7f7f2071ad085cdb16842f99dc4890da2852d021a395562cb97e54e1473",
+        "target": "paged_manifest.json"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/fixed.safetensors.NOTICE",
+        "size": 276,
+        "sha256": "0a7a935a25408289c7a7c1a0d103da850da42f86aa4c44c622dc4b7731586bb9",
+        "target": "pages/fixed.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-000.safetensors.NOTICE",
+        "size": 276,
+        "sha256": "0a7a935a25408289c7a7c1a0d103da850da42f86aa4c44c622dc4b7731586bb9",
+        "target": "pages/block-000.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-001.safetensors.NOTICE",
+        "size": 276,
+        "sha256": "0a7a935a25408289c7a7c1a0d103da850da42f86aa4c44c622dc4b7731586bb9",
+        "target": "pages/block-001.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-002.safetensors.NOTICE",
+        "size": 276,
+        "sha256": "0a7a935a25408289c7a7c1a0d103da850da42f86aa4c44c622dc4b7731586bb9",
+        "target": "pages/block-002.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-003.safetensors.NOTICE",
+        "size": 276,
+        "sha256": "0a7a935a25408289c7a7c1a0d103da850da42f86aa4c44c622dc4b7731586bb9",
+        "target": "pages/block-003.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-004.safetensors.NOTICE",
+        "size": 276,
+        "sha256": "0a7a935a25408289c7a7c1a0d103da850da42f86aa4c44c622dc4b7731586bb9",
+        "target": "pages/block-004.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-005.safetensors.NOTICE",
+        "size": 276,
+        "sha256": "0a7a935a25408289c7a7c1a0d103da850da42f86aa4c44c622dc4b7731586bb9",
+        "target": "pages/block-005.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-006.safetensors.NOTICE",
+        "size": 276,
+        "sha256": "0a7a935a25408289c7a7c1a0d103da850da42f86aa4c44c622dc4b7731586bb9",
+        "target": "pages/block-006.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-007.safetensors.NOTICE",
+        "size": 276,
+        "sha256": "0a7a935a25408289c7a7c1a0d103da850da42f86aa4c44c622dc4b7731586bb9",
+        "target": "pages/block-007.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-008.safetensors.NOTICE",
+        "size": 276,
+        "sha256": "0a7a935a25408289c7a7c1a0d103da850da42f86aa4c44c622dc4b7731586bb9",
+        "target": "pages/block-008.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-009.safetensors.NOTICE",
+        "size": 276,
+        "sha256": "0a7a935a25408289c7a7c1a0d103da850da42f86aa4c44c622dc4b7731586bb9",
+        "target": "pages/block-009.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-010.safetensors.NOTICE",
+        "size": 276,
+        "sha256": "0a7a935a25408289c7a7c1a0d103da850da42f86aa4c44c622dc4b7731586bb9",
+        "target": "pages/block-010.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-011.safetensors.NOTICE",
+        "size": 276,
+        "sha256": "0a7a935a25408289c7a7c1a0d103da850da42f86aa4c44c622dc4b7731586bb9",
+        "target": "pages/block-011.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-012.safetensors.NOTICE",
+        "size": 276,
+        "sha256": "0a7a935a25408289c7a7c1a0d103da850da42f86aa4c44c622dc4b7731586bb9",
+        "target": "pages/block-012.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-013.safetensors.NOTICE",
+        "size": 276,
+        "sha256": "0a7a935a25408289c7a7c1a0d103da850da42f86aa4c44c622dc4b7731586bb9",
+        "target": "pages/block-013.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-014.safetensors.NOTICE",
+        "size": 276,
+        "sha256": "0a7a935a25408289c7a7c1a0d103da850da42f86aa4c44c622dc4b7731586bb9",
+        "target": "pages/block-014.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-015.safetensors.NOTICE",
+        "size": 276,
+        "sha256": "0a7a935a25408289c7a7c1a0d103da850da42f86aa4c44c622dc4b7731586bb9",
+        "target": "pages/block-015.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-016.safetensors.NOTICE",
+        "size": 276,
+        "sha256": "0a7a935a25408289c7a7c1a0d103da850da42f86aa4c44c622dc4b7731586bb9",
+        "target": "pages/block-016.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-017.safetensors.NOTICE",
+        "size": 276,
+        "sha256": "0a7a935a25408289c7a7c1a0d103da850da42f86aa4c44c622dc4b7731586bb9",
+        "target": "pages/block-017.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-018.safetensors.NOTICE",
+        "size": 276,
+        "sha256": "0a7a935a25408289c7a7c1a0d103da850da42f86aa4c44c622dc4b7731586bb9",
+        "target": "pages/block-018.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-019.safetensors.NOTICE",
+        "size": 276,
+        "sha256": "0a7a935a25408289c7a7c1a0d103da850da42f86aa4c44c622dc4b7731586bb9",
+        "target": "pages/block-019.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-020.safetensors.NOTICE",
+        "size": 276,
+        "sha256": "0a7a935a25408289c7a7c1a0d103da850da42f86aa4c44c622dc4b7731586bb9",
+        "target": "pages/block-020.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-021.safetensors.NOTICE",
+        "size": 276,
+        "sha256": "0a7a935a25408289c7a7c1a0d103da850da42f86aa4c44c622dc4b7731586bb9",
+        "target": "pages/block-021.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-022.safetensors.NOTICE",
+        "size": 276,
+        "sha256": "0a7a935a25408289c7a7c1a0d103da850da42f86aa4c44c622dc4b7731586bb9",
+        "target": "pages/block-022.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-023.safetensors.NOTICE",
+        "size": 276,
+        "sha256": "0a7a935a25408289c7a7c1a0d103da850da42f86aa4c44c622dc4b7731586bb9",
+        "target": "pages/block-023.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-024.safetensors.NOTICE",
+        "size": 276,
+        "sha256": "0a7a935a25408289c7a7c1a0d103da850da42f86aa4c44c622dc4b7731586bb9",
+        "target": "pages/block-024.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-025.safetensors.NOTICE",
+        "size": 276,
+        "sha256": "0a7a935a25408289c7a7c1a0d103da850da42f86aa4c44c622dc4b7731586bb9",
+        "target": "pages/block-025.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-026.safetensors.NOTICE",
+        "size": 276,
+        "sha256": "0a7a935a25408289c7a7c1a0d103da850da42f86aa4c44c622dc4b7731586bb9",
+        "target": "pages/block-026.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-027.safetensors.NOTICE",
+        "size": 276,
+        "sha256": "0a7a935a25408289c7a7c1a0d103da850da42f86aa4c44c622dc4b7731586bb9",
+        "target": "pages/block-027.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-028.safetensors.NOTICE",
+        "size": 276,
+        "sha256": "0a7a935a25408289c7a7c1a0d103da850da42f86aa4c44c622dc4b7731586bb9",
+        "target": "pages/block-028.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-029.safetensors.NOTICE",
+        "size": 276,
+        "sha256": "0a7a935a25408289c7a7c1a0d103da850da42f86aa4c44c622dc4b7731586bb9",
+        "target": "pages/block-029.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-030.safetensors.NOTICE",
+        "size": 276,
+        "sha256": "0a7a935a25408289c7a7c1a0d103da850da42f86aa4c44c622dc4b7731586bb9",
+        "target": "pages/block-030.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-031.safetensors.NOTICE",
+        "size": 276,
+        "sha256": "0a7a935a25408289c7a7c1a0d103da850da42f86aa4c44c622dc4b7731586bb9",
+        "target": "pages/block-031.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-032.safetensors.NOTICE",
+        "size": 276,
+        "sha256": "0a7a935a25408289c7a7c1a0d103da850da42f86aa4c44c622dc4b7731586bb9",
+        "target": "pages/block-032.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-033.safetensors.NOTICE",
+        "size": 276,
+        "sha256": "0a7a935a25408289c7a7c1a0d103da850da42f86aa4c44c622dc4b7731586bb9",
+        "target": "pages/block-033.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-034.safetensors.NOTICE",
+        "size": 276,
+        "sha256": "0a7a935a25408289c7a7c1a0d103da850da42f86aa4c44c622dc4b7731586bb9",
+        "target": "pages/block-034.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-035.safetensors.NOTICE",
+        "size": 276,
+        "sha256": "0a7a935a25408289c7a7c1a0d103da850da42f86aa4c44c622dc4b7731586bb9",
+        "target": "pages/block-035.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-036.safetensors.NOTICE",
+        "size": 276,
+        "sha256": "0a7a935a25408289c7a7c1a0d103da850da42f86aa4c44c622dc4b7731586bb9",
+        "target": "pages/block-036.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-037.safetensors.NOTICE",
+        "size": 276,
+        "sha256": "0a7a935a25408289c7a7c1a0d103da850da42f86aa4c44c622dc4b7731586bb9",
+        "target": "pages/block-037.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-038.safetensors.NOTICE",
+        "size": 276,
+        "sha256": "0a7a935a25408289c7a7c1a0d103da850da42f86aa4c44c622dc4b7731586bb9",
+        "target": "pages/block-038.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-039.safetensors.NOTICE",
+        "size": 276,
+        "sha256": "0a7a935a25408289c7a7c1a0d103da850da42f86aa4c44c622dc4b7731586bb9",
+        "target": "pages/block-039.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-040.safetensors.NOTICE",
+        "size": 276,
+        "sha256": "0a7a935a25408289c7a7c1a0d103da850da42f86aa4c44c622dc4b7731586bb9",
+        "target": "pages/block-040.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-041.safetensors.NOTICE",
+        "size": 276,
+        "sha256": "0a7a935a25408289c7a7c1a0d103da850da42f86aa4c44c622dc4b7731586bb9",
+        "target": "pages/block-041.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-042.safetensors.NOTICE",
+        "size": 276,
+        "sha256": "0a7a935a25408289c7a7c1a0d103da850da42f86aa4c44c622dc4b7731586bb9",
+        "target": "pages/block-042.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-043.safetensors.NOTICE",
+        "size": 276,
+        "sha256": "0a7a935a25408289c7a7c1a0d103da850da42f86aa4c44c622dc4b7731586bb9",
+        "target": "pages/block-043.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-044.safetensors.NOTICE",
+        "size": 276,
+        "sha256": "0a7a935a25408289c7a7c1a0d103da850da42f86aa4c44c622dc4b7731586bb9",
+        "target": "pages/block-044.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-045.safetensors.NOTICE",
+        "size": 276,
+        "sha256": "0a7a935a25408289c7a7c1a0d103da850da42f86aa4c44c622dc4b7731586bb9",
+        "target": "pages/block-045.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-046.safetensors.NOTICE",
+        "size": 276,
+        "sha256": "0a7a935a25408289c7a7c1a0d103da850da42f86aa4c44c622dc4b7731586bb9",
+        "target": "pages/block-046.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-047.safetensors.NOTICE",
+        "size": 276,
+        "sha256": "0a7a935a25408289c7a7c1a0d103da850da42f86aa4c44c622dc4b7731586bb9",
+        "target": "pages/block-047.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-048.safetensors.NOTICE",
+        "size": 276,
+        "sha256": "0a7a935a25408289c7a7c1a0d103da850da42f86aa4c44c622dc4b7731586bb9",
+        "target": "pages/block-048.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "pages/block-049.safetensors.NOTICE",
+        "size": 276,
+        "sha256": "0a7a935a25408289c7a7c1a0d103da850da42f86aa4c44c622dc4b7731586bb9",
+        "target": "pages/block-049.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "config.json.NOTICE",
+        "size": 276,
+        "sha256": "0a7a935a25408289c7a7c1a0d103da850da42f86aa4c44c622dc4b7731586bb9",
+        "target": "config.json.NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "quant_config.json.NOTICE",
+        "size": 276,
+        "sha256": "0a7a935a25408289c7a7c1a0d103da850da42f86aa4c44c622dc4b7731586bb9",
+        "target": "quant_config.json.NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "paged_manifest.json.NOTICE",
+        "size": 276,
+        "sha256": "0a7a935a25408289c7a7c1a0d103da850da42f86aa4c44c622dc4b7731586bb9",
+        "target": "paged_manifest.json.NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "LICENSE",
+        "size": 17604,
+        "sha256": "59b99642b95ea21630e311198ddbfffbfe05aadba0c2f5d884cbdf4efcc90f44",
+        "target": "LICENSE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "MODIFICATIONS.md",
+        "size": 1182,
+        "sha256": "9f73060a2e36e7ec1c40bdcdf9a8770fc5cc44c33bdeb5f6a3135e664f752ae8",
+        "target": "MODIFICATIONS.md"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "NOTICE",
+        "size": 360,
+        "sha256": "c724683aa004c5219c7f3e4ee22da997382ceae2fc2d3e05e3363c7358f973cb",
+        "target": "NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "PROVENANCE.json",
+        "size": 3225,
+        "sha256": "857bac0649d1175f73c6dc1677a07c1dc526b15f93866cdbeb2d067ba00e1c80",
+        "target": "PROVENANCE.json"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "README.md",
+        "size": 3396,
+        "sha256": "a477e6b8a08f833b4d6069709c6fe0369804c4c514e27dc593c88ac7ac44fbe3",
+        "target": "README.md"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged",
+        "revision": "9f339718e571f181b9a4c3043916ec0f2dc24f00",
+        "filename": "model_identity.json",
+        "size": 184,
+        "sha256": "29900c340da0ffc1afcc18fd89d40ec1f8ddb291ebd10fc05b1295782a410eff",
+        "target": "model_identity.json"
+      }
+    ]
+  },
+  {
+    "descriptor": {
+      "id": "h3-video-vae-q8-preconverted",
+      "name": "H3 video VAE Q8 \u00b7 Preconverted (Recommended)",
+      "description": "Ready-to-use Q8 video VAE for H3 text, image and reference clips. Audio VAE is included in the separate task support files.",
+      "downloadBytes": 2942936331,
+      "requiredDiskBytes": 3211371787,
+      "sourceURL": "https://huggingface.co/Vayden/MiniMax-H3-Video-VAE-MLX-Q8/tree/3dc1f97d587a3e263dabdf9e30deb79ee5fddefc",
+      "licenseURL": "https://huggingface.co/Vayden/MiniMax-H3-Video-VAE-MLX-Q8/blob/3dc1f97d587a3e263dabdf9e30deb79ee5fddefc/LICENSE",
+      "licenseNotice": "Retains the MiniMax H3 Community License and its eligibility/use restrictions. Review the source terms and any Hugging Face access requirements before downloading.",
+      "outputKind": "directory",
+      "engines": [
+        "h3"
+      ],
+      "components": [
+        "video_vae"
+      ]
+    },
+    "kind": "h3-video-vae",
+    "files": [
+      {
+        "repo": "Vayden/MiniMax-H3-Video-VAE-MLX-Q8",
+        "revision": "3dc1f97d587a3e263dabdf9e30deb79ee5fddefc",
+        "filename": "LICENSE",
+        "size": 17604,
+        "sha256": "59b99642b95ea21630e311198ddbfffbfe05aadba0c2f5d884cbdf4efcc90f44",
+        "target": "LICENSE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Video-VAE-MLX-Q8",
+        "revision": "3dc1f97d587a3e263dabdf9e30deb79ee5fddefc",
+        "filename": "MODIFICATIONS.md",
+        "size": 443,
+        "sha256": "153f3853e60c0118e401488e2c8a245f0dd0d7e54a24ffa0cea21e37695b3a7c",
+        "target": "MODIFICATIONS.md"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Video-VAE-MLX-Q8",
+        "revision": "3dc1f97d587a3e263dabdf9e30deb79ee5fddefc",
+        "filename": "NOTICE",
+        "size": 318,
+        "sha256": "6093f5d4288f9736df81e59d7b967b19883291905caf27c402e13a486b66704b",
+        "target": "NOTICE"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Video-VAE-MLX-Q8",
+        "revision": "3dc1f97d587a3e263dabdf9e30deb79ee5fddefc",
+        "filename": "README.md",
+        "size": 3585,
+        "sha256": "d943eca686a28e95d7f9cfbd7e2ea9d733897160b9bde0b0f89e3bad978fa7e8",
+        "target": "README.md"
+      },
+      {
+        "repo": "Vayden/MiniMax-H3-Video-VAE-MLX-Q8",
+        "revision": "3dc1f97d587a3e263dabdf9e30deb79ee5fddefc",
+        "filename": "video_vae_affine_q8.safetensors",
+        "size": 2942914381,
+        "sha256": "53544746b0e1bc70298574ba549d1c97495c31a446343c8e5a638620b2b5b87f",
+        "target": "video_vae_affine_q8.safetensors"
+      }
+    ]
+  },
+  {
+    "descriptor": {
+      "id": "h3-fl2va-support",
+      "name": "H3 text/image support files \u00b7 Ready to use (Recommended)",
+      "description": "Official FL2VA task manifest, audio VAE, tokenizer and processor. Use with the text/image transformer, Qwen encoder and video VAE; no local conversion.",
+      "downloadBytes": 628440565,
+      "requiredDiskBytes": 896876021,
+      "sourceURL": "https://huggingface.co/MiniMaxAI/MiniMax-H3/tree/42ed227ee7df40d41602854ae760620d6eb651fe",
+      "licenseURL": "https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/42ed227ee7df40d41602854ae760620d6eb651fe/LICENSE",
+      "licenseNotice": "Retains the MiniMax H3 Community License and its eligibility/use restrictions. Review the source terms and any Hugging Face access requirements before downloading.",
+      "outputKind": "directory",
+      "engines": [
+        "h3"
+      ],
+      "tasks": [
+        "t2v",
+        "fflf"
+      ],
+      "components": [
+        "checkpoint",
+        "audio_vae",
+        "tokenizer",
+        "processor"
+      ]
+    },
+    "kind": "h3-support-fl2va",
+    "files": [
+      {
+        "repo": "MiniMaxAI/MiniMax-H3",
+        "revision": "42ed227ee7df40d41602854ae760620d6eb651fe",
+        "filename": "FL2VA/audio_vae/config.json",
+        "size": 1973,
+        "sha256": "d8f3bcc62e23c7e9806970fa63cca6139c06faa3797cf9c94034f60db8512771",
+        "target": "audio_vae/config.json"
+      },
+      {
+        "repo": "MiniMaxAI/MiniMax-H3",
+        "revision": "42ed227ee7df40d41602854ae760620d6eb651fe",
+        "filename": "FL2VA/audio_vae/config.yaml",
+        "size": 91,
+        "sha256": "259f675c9f71eedc24ca4f23965cd32a1b3878fc894f56664c40328d99831a5e",
+        "target": "audio_vae/config.yaml"
+      },
+      {
+        "repo": "MiniMaxAI/MiniMax-H3",
+        "revision": "42ed227ee7df40d41602854ae760620d6eb651fe",
+        "filename": "FL2VA/audio_vae/metadata.json",
+        "size": 440,
+        "sha256": "755d0529d43b2b5c83590f6f44ca659bc68e6a21b01d5669c93e8b2965749bff",
+        "target": "audio_vae/metadata.json"
+      },
+      {
+        "repo": "MiniMaxAI/MiniMax-H3",
+        "revision": "42ed227ee7df40d41602854ae760620d6eb651fe",
+        "filename": "FL2VA/audio_vae/model.safetensors",
+        "size": 605429308,
+        "sha256": "37dddc2f3e6d5d5139d823d5ea283bbf304dadcb885b1ccda818aa13dade5ea2",
+        "target": "audio_vae/model.safetensors"
+      },
+      {
+        "repo": "MiniMaxAI/MiniMax-H3",
+        "revision": "42ed227ee7df40d41602854ae760620d6eb651fe",
+        "filename": "FL2VA/model_index.json",
+        "size": 719,
+        "sha256": "d1113e0f123c69f79cd0de35ca1771606ebc3ec924270d257b771f96f584aa6b",
+        "target": "model_index.json"
+      },
+      {
+        "repo": "MiniMaxAI/MiniMax-H3",
+        "revision": "42ed227ee7df40d41602854ae760620d6eb651fe",
+        "filename": "FL2VA/processor/chat_template.json",
+        "size": 5499,
+        "sha256": "5c72a170d2a4a1a3bc5adad2e689ae28138a9700e5b8c96c0266331e86c0acce",
+        "target": "processor/chat_template.json"
+      },
+      {
+        "repo": "MiniMaxAI/MiniMax-H3",
+        "revision": "42ed227ee7df40d41602854ae760620d6eb651fe",
+        "filename": "FL2VA/processor/merges.txt",
+        "size": 1671839,
+        "sha256": "599bab54075088774b1733fde865d5bd747cbcc7a547c5bc12610e874e26f5e3",
+        "target": "processor/merges.txt"
+      },
+      {
+        "repo": "MiniMaxAI/MiniMax-H3",
+        "revision": "42ed227ee7df40d41602854ae760620d6eb651fe",
+        "filename": "FL2VA/processor/preprocessor_config.json",
+        "size": 390,
+        "sha256": "27225450ac9c6529872ee1924fcb0962ff5634834f817040f444118116f4e516",
+        "target": "processor/preprocessor_config.json"
+      },
+      {
+        "repo": "MiniMaxAI/MiniMax-H3",
+        "revision": "42ed227ee7df40d41602854ae760620d6eb651fe",
+        "filename": "FL2VA/processor/tokenizer.json",
+        "size": 7032403,
+        "sha256": "a5d85b6dcc535e6b93115a9ef287e6132fdbf30270da6218194ba742261173c7",
+        "target": "processor/tokenizer.json"
+      },
+      {
+        "repo": "MiniMaxAI/MiniMax-H3",
+        "revision": "42ed227ee7df40d41602854ae760620d6eb651fe",
+        "filename": "FL2VA/processor/tokenizer_config.json",
+        "size": 11003,
+        "sha256": "a07e942ac874baa13758de8d1fbdb186683cc03416b5589e1b6671c6b3057c68",
+        "target": "processor/tokenizer_config.json"
+      },
+      {
+        "repo": "MiniMaxAI/MiniMax-H3",
+        "revision": "42ed227ee7df40d41602854ae760620d6eb651fe",
+        "filename": "FL2VA/processor/video_preprocessor_config.json",
+        "size": 385,
+        "sha256": "7768af27c1fafa9cc9011c1dc20067e03f8915e03b63504550e11d5066986d13",
+        "target": "processor/video_preprocessor_config.json"
+      },
+      {
+        "repo": "MiniMaxAI/MiniMax-H3",
+        "revision": "42ed227ee7df40d41602854ae760620d6eb651fe",
+        "filename": "FL2VA/processor/vocab.json",
+        "size": 2776833,
+        "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910",
+        "target": "processor/vocab.json"
+      },
+      {
+        "repo": "MiniMaxAI/MiniMax-H3",
+        "revision": "42ed227ee7df40d41602854ae760620d6eb651fe",
+        "filename": "FL2VA/tokenizer/merges.txt",
+        "size": 1671839,
+        "sha256": "599bab54075088774b1733fde865d5bd747cbcc7a547c5bc12610e874e26f5e3",
+        "target": "tokenizer/merges.txt"
+      },
+      {
+        "repo": "MiniMaxAI/MiniMax-H3",
+        "revision": "42ed227ee7df40d41602854ae760620d6eb651fe",
+        "filename": "FL2VA/tokenizer/tokenizer.json",
+        "size": 7032403,
+        "sha256": "a5d85b6dcc535e6b93115a9ef287e6132fdbf30270da6218194ba742261173c7",
+        "target": "tokenizer/tokenizer.json"
+      },
+      {
+        "repo": "MiniMaxAI/MiniMax-H3",
+        "revision": "42ed227ee7df40d41602854ae760620d6eb651fe",
+        "filename": "FL2VA/tokenizer/tokenizer_config.json",
+        "size": 11003,
+        "sha256": "a07e942ac874baa13758de8d1fbdb186683cc03416b5589e1b6671c6b3057c68",
+        "target": "tokenizer/tokenizer_config.json"
+      },
+      {
+        "repo": "MiniMaxAI/MiniMax-H3",
+        "revision": "42ed227ee7df40d41602854ae760620d6eb651fe",
+        "filename": "FL2VA/tokenizer/vocab.json",
+        "size": 2776833,
+        "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910",
+        "target": "tokenizer/vocab.json"
+      },
+      {
+        "repo": "MiniMaxAI/MiniMax-H3",
+        "revision": "42ed227ee7df40d41602854ae760620d6eb651fe",
+        "filename": "LICENSE",
+        "size": 17604,
+        "sha256": "59b99642b95ea21630e311198ddbfffbfe05aadba0c2f5d884cbdf4efcc90f44",
+        "target": "LICENSE"
+      }
+    ]
+  },
+  {
+    "descriptor": {
+      "id": "h3-ref2va-support",
+      "name": "H3 reference support files \u00b7 Ready to use (Recommended)",
+      "description": "Official genuine Ref2VA task manifest, audio VAE, tokenizer and processor. Use with the Ref2VA transformer, vision-capable Qwen encoder and video VAE; no local conversion.",
+      "downloadBytes": 628440553,
+      "requiredDiskBytes": 896876009,
+      "sourceURL": "https://huggingface.co/MiniMaxAI/MiniMax-H3/tree/42ed227ee7df40d41602854ae760620d6eb651fe",
+      "licenseURL": "https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/42ed227ee7df40d41602854ae760620d6eb651fe/LICENSE",
+      "licenseNotice": "Retains the MiniMax H3 Community License and its eligibility/use restrictions. Review the source terms and any Hugging Face access requirements before downloading.",
+      "outputKind": "directory",
+      "engines": [
+        "h3"
+      ],
+      "tasks": [
+        "ref2va"
+      ],
+      "components": [
+        "checkpoint",
+        "audio_vae",
+        "tokenizer",
+        "processor"
+      ]
+    },
+    "kind": "h3-support-ref2va",
+    "files": [
+      {
+        "repo": "MiniMaxAI/MiniMax-H3",
+        "revision": "42ed227ee7df40d41602854ae760620d6eb651fe",
+        "filename": "LICENSE",
+        "size": 17604,
+        "sha256": "59b99642b95ea21630e311198ddbfffbfe05aadba0c2f5d884cbdf4efcc90f44",
+        "target": "LICENSE"
+      },
+      {
+        "repo": "MiniMaxAI/MiniMax-H3",
+        "revision": "42ed227ee7df40d41602854ae760620d6eb651fe",
+        "filename": "Ref2VA/audio_vae/config.json",
+        "size": 1973,
+        "sha256": "d8f3bcc62e23c7e9806970fa63cca6139c06faa3797cf9c94034f60db8512771",
+        "target": "audio_vae/config.json"
+      },
+      {
+        "repo": "MiniMaxAI/MiniMax-H3",
+        "revision": "42ed227ee7df40d41602854ae760620d6eb651fe",
+        "filename": "Ref2VA/audio_vae/config.yaml",
+        "size": 91,
+        "sha256": "259f675c9f71eedc24ca4f23965cd32a1b3878fc894f56664c40328d99831a5e",
+        "target": "audio_vae/config.yaml"
+      },
+      {
+        "repo": "MiniMaxAI/MiniMax-H3",
+        "revision": "42ed227ee7df40d41602854ae760620d6eb651fe",
+        "filename": "Ref2VA/audio_vae/metadata.json",
+        "size": 440,
+        "sha256": "755d0529d43b2b5c83590f6f44ca659bc68e6a21b01d5669c93e8b2965749bff",
+        "target": "audio_vae/metadata.json"
+      },
+      {
+        "repo": "MiniMaxAI/MiniMax-H3",
+        "revision": "42ed227ee7df40d41602854ae760620d6eb651fe",
+        "filename": "Ref2VA/audio_vae/model.safetensors",
+        "size": 605429308,
+        "sha256": "37dddc2f3e6d5d5139d823d5ea283bbf304dadcb885b1ccda818aa13dade5ea2",
+        "target": "audio_vae/model.safetensors"
+      },
+      {
+        "repo": "MiniMaxAI/MiniMax-H3",
+        "revision": "42ed227ee7df40d41602854ae760620d6eb651fe",
+        "filename": "Ref2VA/model_index.json",
+        "size": 707,
+        "sha256": "b160b13700bf08aea7fce1bc3dd0d3a49ea15036298c50082ec107f87843b90c",
+        "target": "model_index.json"
+      },
+      {
+        "repo": "MiniMaxAI/MiniMax-H3",
+        "revision": "42ed227ee7df40d41602854ae760620d6eb651fe",
+        "filename": "Ref2VA/processor/chat_template.json",
+        "size": 5499,
+        "sha256": "5c72a170d2a4a1a3bc5adad2e689ae28138a9700e5b8c96c0266331e86c0acce",
+        "target": "processor/chat_template.json"
+      },
+      {
+        "repo": "MiniMaxAI/MiniMax-H3",
+        "revision": "42ed227ee7df40d41602854ae760620d6eb651fe",
+        "filename": "Ref2VA/processor/merges.txt",
+        "size": 1671839,
+        "sha256": "599bab54075088774b1733fde865d5bd747cbcc7a547c5bc12610e874e26f5e3",
+        "target": "processor/merges.txt"
+      },
+      {
+        "repo": "MiniMaxAI/MiniMax-H3",
+        "revision": "42ed227ee7df40d41602854ae760620d6eb651fe",
+        "filename": "Ref2VA/processor/preprocessor_config.json",
+        "size": 390,
+        "sha256": "27225450ac9c6529872ee1924fcb0962ff5634834f817040f444118116f4e516",
+        "target": "processor/preprocessor_config.json"
+      },
+      {
+        "repo": "MiniMaxAI/MiniMax-H3",
+        "revision": "42ed227ee7df40d41602854ae760620d6eb651fe",
+        "filename": "Ref2VA/processor/tokenizer.json",
+        "size": 7032403,
+        "sha256": "a5d85b6dcc535e6b93115a9ef287e6132fdbf30270da6218194ba742261173c7",
+        "target": "processor/tokenizer.json"
+      },
+      {
+        "repo": "MiniMaxAI/MiniMax-H3",
+        "revision": "42ed227ee7df40d41602854ae760620d6eb651fe",
+        "filename": "Ref2VA/processor/tokenizer_config.json",
+        "size": 11003,
+        "sha256": "a07e942ac874baa13758de8d1fbdb186683cc03416b5589e1b6671c6b3057c68",
+        "target": "processor/tokenizer_config.json"
+      },
+      {
+        "repo": "MiniMaxAI/MiniMax-H3",
+        "revision": "42ed227ee7df40d41602854ae760620d6eb651fe",
+        "filename": "Ref2VA/processor/video_preprocessor_config.json",
+        "size": 385,
+        "sha256": "7768af27c1fafa9cc9011c1dc20067e03f8915e03b63504550e11d5066986d13",
+        "target": "processor/video_preprocessor_config.json"
+      },
+      {
+        "repo": "MiniMaxAI/MiniMax-H3",
+        "revision": "42ed227ee7df40d41602854ae760620d6eb651fe",
+        "filename": "Ref2VA/processor/vocab.json",
+        "size": 2776833,
+        "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910",
+        "target": "processor/vocab.json"
+      },
+      {
+        "repo": "MiniMaxAI/MiniMax-H3",
+        "revision": "42ed227ee7df40d41602854ae760620d6eb651fe",
+        "filename": "Ref2VA/tokenizer/merges.txt",
+        "size": 1671839,
+        "sha256": "599bab54075088774b1733fde865d5bd747cbcc7a547c5bc12610e874e26f5e3",
+        "target": "tokenizer/merges.txt"
+      },
+      {
+        "repo": "MiniMaxAI/MiniMax-H3",
+        "revision": "42ed227ee7df40d41602854ae760620d6eb651fe",
+        "filename": "Ref2VA/tokenizer/tokenizer.json",
+        "size": 7032403,
+        "sha256": "a5d85b6dcc535e6b93115a9ef287e6132fdbf30270da6218194ba742261173c7",
+        "target": "tokenizer/tokenizer.json"
+      },
+      {
+        "repo": "MiniMaxAI/MiniMax-H3",
+        "revision": "42ed227ee7df40d41602854ae760620d6eb651fe",
+        "filename": "Ref2VA/tokenizer/tokenizer_config.json",
+        "size": 11003,
+        "sha256": "a07e942ac874baa13758de8d1fbdb186683cc03416b5589e1b6671c6b3057c68",
+        "target": "tokenizer/tokenizer_config.json"
+      },
+      {
+        "repo": "MiniMaxAI/MiniMax-H3",
+        "revision": "42ed227ee7df40d41602854ae760620d6eb651fe",
+        "filename": "Ref2VA/tokenizer/vocab.json",
+        "size": 2776833,
+        "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910",
+        "target": "tokenizer/vocab.json"
       }
     ]
   }

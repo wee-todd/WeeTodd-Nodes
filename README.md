@@ -249,12 +249,19 @@ The same prepared components can be selected by Studio, the headless runner and 
 ### Ready-to-use Q8 downloads
 
 Choose **Set Up… → Download or prepare a model** in Studio and select **Preconverted (Recommended)**.
+You can also click **Download…** beside an individual component to select its compatible package.
+**Import…** beside it links a model already on disk. Some downloads include several components;
+review the displayed package contents before starting.
 Accept the selected repository's access terms on Hugging Face and configure **Hugging Face access**
 in Studio, or use your existing CLI login. Download only the package needed by your chosen engine.
 
 | Package | Download size¹ | Included | Still separate |
 | --- | --- | --- | --- |
-| [H3 Q8 vision encoder](https://huggingface.co/Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged) | 28.22 GB | Q8 language pages, retained vision tower, manifests and support files | Task-compatible H3 transformer, VAEs, tokenizer and processor |
+| [H3 Q8 vision encoder](https://huggingface.co/Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged) | 28.22 GB | Q8 language pages, retained vision tower, manifests and support files | Matching H3 transformer, video VAE and task support downloads below |
+| [H3 text/image Q8 transformer](https://huggingface.co/Vayden/MiniMax-H3-MLX-q8-extended-paged) | 33.38 GB | Paged Q8-extended FL2VA transformer | Qwen encoder, video VAE and text/image support files |
+| [H3 reference Q8 transformer](https://huggingface.co/Vayden/MiniMax-H3-Ref2VA-MLX-q8-extended-paged) | 58.26 GB | Genuine native Ref2VA transformer, paged Q8-extended | Vision-capable Qwen encoder, video VAE and reference support files |
+| [H3 Q8 video VAE](https://huggingface.co/Vayden/MiniMax-H3-Video-VAE-MLX-Q8) | 2.94 GB | Directly loadable video VAE | Shared by both H3 component sets |
+| H3 text/image or reference support files | 0.63 GB each | Official task manifest, audio VAE, tokenizer and processor | Choose the support package matching your transformer/task |
 | [LTX 2.5 distilled Q8](https://huggingface.co/Vayden/LTX-2.5-MLX-Q8-Paged) | 43.49 GB | Q8-paged transformer and Gemma, convolutional video VAE, audio VAE and spatial upscaler | Optional task LoRAs, controls and alternative guided/DFR components |
 
 ¹ Decimal download sizes, not RAM requirements. Setup displays required disk space before downloading.
@@ -265,6 +272,13 @@ Use **Use Recipe for Selected Clip** for a compatible Studio clip, then **Prepar
 CLI users can follow the complete [LTX 2.5 download-to-recipe example](examples/headless/README.md#download-and-create-an-ltx-25-recipe).
 Source conversion is optional and remains available in the catalog. For setup errors or an older
 managed runtime, see [Studio setup troubleshooting](studio/README.md#model-setup-troubleshooting).
+
+For H3, download four items: **the matching transformer + matching support files + Qwen vision
+encoder + Q8 video VAE**. Studio filters task-specific downloads for the selected preset. Scan all
+four installed directories together and create the recipe. The encoder and video VAE can be shared
+between text/image and reference clips. The support packages use pinned files directly from
+[MiniMaxAI/MiniMax-H3](https://huggingface.co/MiniMaxAI/MiniMax-H3); they do not fetch the complete
+BF16 checkpoint or execute downloaded Python code. See the [H3 CLI setup commands](examples/headless/README.md#download-h3-components).
 
 Choose a workflow first; install only its dependencies. The supported H3/LTX candidates are
 alternatives, not a requirement to download every checkpoint. Optional control, preview,
@@ -527,8 +541,9 @@ python scripts/setup_models.py download h3-qwen-q8-vision-preconverted \
 
 The encoder directory is `/path/to/shared-models/h3-qwen-q8-vision-preconverted`. Select it as the
 text encoder in guided H3 reference setup alongside your genuine Ref2VA transformer and other
-components. This replaces the `convert_paged_text_encoder.py` step below; the two transformer
-preparation commands remain necessary if you do not already have genuine Ref2VA pages.
+components. Download `h3-ref2va-q8-preconverted`, `h3-ref2va-support` and
+`h3-video-vae-q8-preconverted` through the same command to complete the set. All conversion commands
+below are optional when using these prepared downloads; retain them for users preparing their own files.
 
 For manual conversion, the compact source is **`text_encoder.safetensors` plus `config.json`** from
 [ddalcu’s 8-bit bundle](https://huggingface.co/ddalcu/MiniMax-H3-FL2VA-MLX-Serve-8bit/tree/64314cde0ac6d90f132bc94ae58e0c82f77396c6).

@@ -43,6 +43,42 @@ the preflight/render commands below with that file. The lower-memory policy enab
 savings; it is not a measured 36 GB fit guarantee. Reference/control tasks need their additional
 media and compatible adapters; the distilled base package does not include those adapters.
 
+## Download H3 components
+
+Use the same compatible Python environment and Hugging Face access described above. For text,
+first-frame or first/last-frame clips, download the FL2VA transformer and its support package:
+
+```bash
+python scripts/setup_models.py download h3-fl2va-q8-preconverted --destination /path/to/shared-models
+python scripts/setup_models.py download h3-fl2va-support --destination /path/to/shared-models
+```
+
+For reference clips, choose the genuine Ref2VA pair instead:
+
+```bash
+python scripts/setup_models.py download h3-ref2va-q8-preconverted --destination /path/to/shared-models
+python scripts/setup_models.py download h3-ref2va-support --destination /path/to/shared-models
+```
+
+Both use the shared encoder and video VAE:
+
+```bash
+python scripts/setup_models.py download h3-qwen-q8-vision-preconverted --destination /path/to/shared-models
+python scripts/setup_models.py download h3-video-vae-q8-preconverted --destination /path/to/shared-models
+python scripts/setup_models.py scan h3-reference /path/to/shared-models
+```
+
+Use `h3-text` or `h3-image` instead of `h3-reference` when scanning for those tasks. In Studio,
+select the corresponding preset and scan the same library. Set **H3 task manifest** to the matching
+support package root, **Audio VAE** to its `audio_vae/` folder, and tokenizer/processor to its
+`tokenizer/` and `processor/` folders. Select the transformer and Qwen package roots and the
+`video_vae_affine_q8.safetensors` file inside the video VAE package. **Create Recipe** validates the
+component set; attach required media before full clip preflight.
+
+Keep manifests and support files with their weights. Downloads preserve original model terms and
+hash-verify reused files. The FL2VA transformer cannot replace genuine Ref2VA weights. Optional
+Turbo LoRAs and control adapters are not part of these base component downloads.
+
 ## Shared recipe format
 
 - `format`: `weetodd-headless-v2`.

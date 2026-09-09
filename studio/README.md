@@ -46,7 +46,11 @@ locations. `WEETODD_STUDIO_DATA` selects a separate data directory for isolated 
 2. Choose **Set Up… → Use Existing Models**, select model folders (including an existing ComfyUI
    `models` folder), then scan. Inspection reads bounded headers and manifests, never model tensors.
    A single candidate is selected automatically; multiple candidates require your choice. Missing
-   components have a browse control and validation explains incompatible architecture or task support.
+   components have **Import…** and **Download…** controls beside their labels. Import links a local
+   file/folder without copying it. Download selects a compatible package and opens its size, contents,
+   source terms and destination for review; it does not immediately start the transfer. Components
+   without a catalog download can still be imported. Validation explains incompatible architecture
+   or task support.
 3. Use **Automatic** to select a lower-memory policy on Macs with 64 GB or less, **Lower Memory** to
    request supported memory-saving settings, or **Custom** to retain the preset policy for later
    advanced adjustment. Memory information is advisory and does not promise fit, allocate RAM, or
@@ -63,8 +67,14 @@ required space before an explicit download. Prefer the
 **Preconverted (Recommended)**. Source conversion remains an alternative. LTX 2.5 source preparation
 downloads the five official distilled components and
 converts transformer/Gemma to paged Q8. H3 encoder preparation downloads just the compact Q8 encoder,
-its support files and full Qwen architecture config, then retains the vision page. H3 transformer,
-VAEs and tokenizer/processor remain separate required components.
+its support files and full Qwen architecture config, then retains the vision page.
+
+For H3, choose four downloads in the same library: the **text/image or reference Q8 transformer**,
+its matching **support files**, the **Q8 vision encoder**, and the **Q8 video VAE**. The support files
+include the official task manifest, audio VAE, tokenizer and processor. Downloads specific to another
+task are hidden; the encoder and video VAE can be reused across tasks. After installation, scan the
+downloaded folders, choose the components and create the recipe. No H3 weight conversion is required
+for these prepared sets. Optional Turbo/control LoRAs remain separate.
 
 Selected existing roots are checked for exact source checksums before downloading replacements.
 Same-volume source files are reused through links; cross-volume source references remain linked,
@@ -121,8 +131,10 @@ The existing text-only Qwen page export cannot encode reference images.
 
 See the [model preparation commands](../README.md#experimental-h3-reference-paging). Choose the
 [preconverted Q8 vision encoder](https://huggingface.co/Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged)
-in guided setup, or prepare it from the compact source encoder. The genuine Ref2VA transformer must
-be prepared separately with the existing bounded-memory conversion commands. Clip/movie headless
+in guided setup, together with **H3 reference transformer Q8**, **H3 reference support files** and
+**H3 video VAE Q8**. Alternatively, prepare your own files with the bounded-memory conversion
+commands. Select the genuine Ref2VA transformer; the text/image transformer is a different model.
+Clip/movie headless
 export preserves this recipe so Studio can be closed during generation. One-image 640×384 generation measured a 21.70GB complete Comfy process peak on an M3 Ultra
 with 256 GiB. The headless output was byte-identical and peaked at 21.26GB.
 A 36GB physical-device maximum is not yet established; the header-based estimate omits reference-dependent workspace.
