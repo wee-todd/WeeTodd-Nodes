@@ -1,5 +1,33 @@
 # Headless recipe examples
 
+## Draw Things portable jobs
+
+The `drawthings_image.json` and `drawthings_video.json` files show the secret-free portion of a
+Studio job v3 export. Select a connection and a model discovered from that exact endpoint, then
+export from Studio to create an executable job with its project, runtime, and manifest hash. Model
+IDs are endpoint identifiers and paths are local files; relocating either does not rewrite the
+other. Credentials are read only at execution through `credentialRef` (the examples use an
+environment variable). Never put a token value in a job.
+
+Self-hosted gRPC jobs require their server to remain running with cloud offload disabled and
+explicitly confirmed in the exported connection. Direct Cloud jobs do not require the Draw Things
+app. DT+ App Bridge generation is blocked because its free-only billing route is unverified. Every
+new request refreshes discovery, capability, CU, and billing eligibility before submission. Completed
+artifacts are reused by hash with `--resume`. A submission interrupted after it may have reached
+the endpoint is recorded as ambiguous and is not automatically retried.
+
+These JSON files are documentation fragments, not directly executable jobs. Direct Cloud requires
+verified remaining free requests, explicit PAYG-disabled status, and an estimate strictly below the
+current per-job CU limit. Unknown allowance blocks submission. Fixture tests cover the shared job
+runner; real Draw Things model and authenticated Cloud generation remain unqualified. See the
+[Studio qualification table](../../studio/README.md#headless-jobs-and-qualification).
+
+`drawthings_image_then_video.json` documents the dependency ordering contract. Its
+`inputBindings.first` value names the prior image job. After that image completes, the runner
+verifies its hash and resolves an absolute `{role, path, sha256, frameIndex, strength}` first-frame
+input before video preparation and submission. Other generated conditioning roles are rejected
+until their endpoint and helper contracts are implemented.
+
 Studio’s **Model setup** creates validated recipes from existing components without JSON editing.
 The [LTX 2.5 distilled Q8 example](ltx25_distilled_q8_t2v.json) also documents the direct format.
 Replace every `/REPLACE/WITH/YOUR/MODELS/` value and supply your prompt before use. These placeholders

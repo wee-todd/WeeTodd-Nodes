@@ -90,6 +90,7 @@ struct PromptEditor: View {
           }.padding(28).frame(minWidth: 520, maxWidth: .infinity)
           VStack(alignment: .leading, spacing: 16) {
             SmallLabel(text: "Shot context")
+            if clip.engine == .drawThings { DrawThingsCUStatus(clip: clip) }
             HStack {
               Text(clip.engine.label).font(.headline)
               Spacer()
@@ -146,11 +147,11 @@ struct PromptActions: View {
         Text(bridge.message).font(.caption)
         Button("Cancel") { bridge.cancel() }
       } else {
-        Image(systemName: store.preparedRecipe == nil ? "checklist" : "checkmark.circle.fill")
-          .foregroundStyle(store.preparedRecipe == nil ? Color.secondary : Color.green)
+        Image(systemName: !store.canGenerateSelected ? "checklist" : "checkmark.circle.fill")
+          .foregroundStyle(!store.canGenerateSelected ? Color.secondary : Color.green)
         Text(
-          store.preparedRecipe == nil
-            ? "Prepare → review → render" : "Preflight passed. This exact recipe will run."
+          !store.canGenerateSelected
+            ? "Prepare → review → render" : "Preflight passed. Generate uses these settings."
         ).font(.caption).foregroundStyle(.secondary)
       }
       Spacer()
@@ -160,7 +161,7 @@ struct PromptActions: View {
         Task { await store.renderPrepared() }
       } label: {
         Label("Generate clip", systemImage: "play.fill")
-      }.buttonStyle(.borderedProminent).disabled(bridge.busy || store.preparedRecipe == nil)
+      }.buttonStyle(.borderedProminent).disabled(bridge.busy || !store.canGenerateSelected)
     }
   }
 }

@@ -23,7 +23,8 @@ do {
   }
   let url = URL(fileURLWithPath: arguments[index + 1])
   guard let job = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any],
-    ["weetodd-studio-job-v1", "weetodd-studio-job-v2"].contains(job["format"] as? String ?? ""),
+    ["weetodd-studio-job-v1", "weetodd-studio-job-v2", "weetodd-studio-job-v3"].contains(
+      job["format"] as? String ?? ""),
     let runtime = job["runtime"] as? [String: Any], let python = runtime["pythonPath"] as? String,
     let root = runtime["root"] as? String,
     FileManager.default.isExecutableFile(atPath: python),

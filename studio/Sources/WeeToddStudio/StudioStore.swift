@@ -14,6 +14,7 @@ struct RuntimeSettings: Codable {
   var rifePath = ""
   var rifeWeights = ""
   var metalPath = ""
+  var drawThingsHelperPath: String?
   static func defaults() -> Self {
     let root =
       ProcessInfo.processInfo.environment["WEETODD_ROOT"] ?? Bundle.main.object(
@@ -24,6 +25,7 @@ struct RuntimeSettings: Codable {
       profilesDirectory: support.appendingPathComponent("Profiles").path)
     value.metalPath =
       Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/StudioMetal").path
+    value.drawThingsHelperPath = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/WeeToddDrawThings").path
     return value
   }
 }
@@ -59,6 +61,11 @@ struct ModelProfile: Identifiable {
     var env = ProcessInfo.processInfo.environment
     if command == "setup-download" {
       env = try ModelDownloadToken.environment(env, savedToken: ModelDownloadToken.read())
+    }
+    if command.hasPrefix("dt-"), let connection = payload["connection"] as? [String: Any],
+      let reference = connection["credentialRef"] as? String,
+      let secret = try DrawThingsCredential.read(reference) {
+      env["WEETODD_DT_CREDENTIAL"] = secret
     }
     env["PYTHONUNBUFFERED"] = "1"
     let input = StudioStore.supportDirectory.appendingPathComponent(
@@ -170,6 +177,15 @@ extension Encodable {
   @Published var showPrompt = false
   @Published var showMotionPrompt = false
   @Published var showRuntime = false
+  @Published var showDrawThings = false
+  @Published var drawThingsConnections: [DrawThingsConnection] = []
+  @Published var drawThingsCatalogs: [String: [String: Any]] = [:]
+  @Published var drawThingsLoRAGroups: [DrawThingsLoRAGroup] = []
+  @Published var imageDraft: DrawThingsImageDraft?
+  @Published var imageEstimate: [String: Any]?
+  @Published var imagePreviewPath: String?
+  @Published var drawThingsClipEstimates: [UUID: [String: Any]] = [:]
+  var preparedDrawThingsClip: PreparedDrawThingsClip?
   @Published var showProjectSettings = false
   @Published var showLog = false
   @Published var showActions = false
@@ -226,6 +242,8 @@ extension Encodable {
       globalAssets = value
     }
     loadLoRAGroups()
+    loadDrawThingsConnections()
+    loadDrawThingsLoRAGroups()
     let args = CommandLine.arguments
     if let i = args.firstIndex(of: "--project"), args.count > i + 1 {
       load(URL(fileURLWithPath: args[i + 1]))
@@ -274,6 +292,7 @@ extension Encodable {
     change(undoGroup: undoGroup) { body(&$0.clips[i]) }
   }
   func changed() {
+    preparedDrawThingsClip = nil
     validationErrors.removeAll()
     if previewMode == "Movie" {
       previewMode = "Clip"
@@ -311,6 +330,7 @@ extension Encodable {
     refreshPreview()
   }
   func select(_ id: UUID) {
+    preparedDrawThingsClip = nil
     lastUndoGroup = nil
     selectedClipID = id
     selectedTitleID = nil
@@ -321,7 +341,11 @@ extension Encodable {
     refreshPreview()
   }
   func addClip(_ engine: Engine = .ltx25) {
-    let c = Clip(name: "Shot \(project.clips.count + 1)", engine: engine)
+    var c = Clip(name: "Shot \(project.clips.count + 1)", engine: engine)
+    if engine == .drawThings {
+      c.drawThings = DrawThingsSelection(profileID: drawThingsConnections.first?.id ?? "",
+        modelID: "", modelFamily: "", configuration: ["steps": .integer(8)])
+    }
     change { $0.clips.append(c) }
     select(c.id)
   }
@@ -627,11 +651,11 @@ extension Encodable {
       NSWorkspace.shared.activateFileViewerSelecting([target])
     } catch { self.error = error.localizedDescription }
   }
-  func saveRuntime() {
+  func saveRuntime(reloadProfiles: Bool = true) {
     do {
       try JSONEncoder().encode(runtime).write(
         to: Self.supportDirectory.appendingPathComponent("runtime.json"), options: .atomic)
-      Task { await reloadProfiles() }
+      if reloadProfiles { Task { await self.reloadProfiles() } }
     } catch { self.error = error.localizedDescription }
   }
   func reloadProfiles() async {
@@ -677,6 +701,7 @@ extension Encodable {
   }
   func prepareSelected() async {
     guard selectedClip != nil else { return }
+    if selectedClip?.engine == .drawThings { await prepareDrawThingsClip(); return }
     do {
       let snapshot = signature(for: selectedClip!)
       let destination = Self.supportDirectory.appendingPathComponent(
@@ -704,6 +729,7 @@ extension Encodable {
     }
   }
   func renderPrepared() async {
+    if selectedClip?.engine == .drawThings { await renderDrawThingsClip(); return }
     guard let path = preparedRecipe, let c = selectedClip else { return }
     do {
       guard signature(for: c) == preparedFingerprint else {

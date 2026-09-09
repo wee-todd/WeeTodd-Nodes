@@ -44,6 +44,9 @@ locations. `WEETODD_STUDIO_DATA` selects a separate data directory for isolated 
 
 ## Guided model setup
 
+For remote generation, see [Draw Things](#draw-things--experimental). Local model recipes below
+configure the native MLX engines.
+
 1. Open **Studio Settings → Model setup**. Built-in presets appear independently of installed recipe
    count once the renderer is configured. Choose H3 text/image/reference or LTX 2.3/2.5 text/image.
 2. Choose **Set Up… → Use Existing Models**, select model folders (including an existing ComfyUI
@@ -377,7 +380,7 @@ and jobs, returning a movie path and JSON analysis report. No paid workflow or e
 is required. The settings node's optional **evaluations** input uses 0 for the existing automatic
 behavior, or 1–64 for a fixed count. Headless motion settings use `"evaluations": 14` for a fixed
 count; omission or `null` keeps the automatic behavior. A change invalidates enhancement only,
-while the original generation remains reusable. The existing 42 shipped workflows are unchanged.
+while the original generation remains reusable. Existing workflow contracts remain compatible.
 
 Validation includes a real native MLX partial-denoise render, exact 73-frame recovery at 24 fps,
 32 kHz source-audio remuxing, mixed audio holds, optional bypass, old project decoding and separate
@@ -428,3 +431,121 @@ Run `swift test --package-path studio` and
 `python -m pytest -q tests/test_studio_bridge.py tests/test_studio_packaging.py tests/test_studio_lora.py` before packaging.
 The packaging tests exercise a source tree without `.agents/`, stale-bundle replacement, and failure
 preservation without downloading Python or installing models.
+
+## Draw Things — experimental
+
+Draw Things is an optional clip provider alongside native H3/LTX and imported movies. The shared
+Python adapter invokes a separately built Swift gRPC helper; it does not import ComfyUI or load
+native MLX generation weights. Native projects and v1/v2 headless jobs remain readable.
+
+### Build the optional connection runtime
+
+```bash
+python3 scripts/build_drawthings_client.py
+python3 scripts/build_studio_app.py --configuration release \
+  --drawthings-distribution studio/.build/drawthings
+open "studio/.build/WeeTodd Studio.app"
+```
+
+The helper uses a pinned official MediaGenerationKit release and requires Swift 6 on Apple Silicon.
+Building it downloads software dependencies, not model weights. The distribution includes the helper,
+its hash manifest, licenses within a complete dependency-source archive, and instructions for
+rebuilding with modified libraries. Studio lets users import a replacement executable. The synthetic
+fixture server is a development test target and is never bundled with Studio.
+
+A normal Studio build can omit this optional distribution. Existing native generation still works;
+Draw Things Connections then requires importing a helper executable. Python and FFmpeg remain
+necessary for the shared job/finishing bridge.
+
+### Connections, allowance, and CU
+
+Open **Movie → Draw Things Connections** and save a connection:
+
+- **Self-hosted gRPC:** enter the Draw Things server host/port, TLS choice, and optional shared
+  secret. Confirm that this server has cloud offload disabled. A local-looking address alone does
+  not establish that generation is self-hosted. The server must stay running.
+- **Draw Things Cloud API:** create an API key in the Draw Things dashboard and enter it in Studio.
+  The helper uses fixed official HTTPS/gRPC endpoints with TLS verification. It first obtains an
+  authentication session and reads billing/free-request status; it does not change billing settings.
+  Preparation requires explicit PAYG-disabled status, remaining free requests, a fresh monthly
+  record, and a current per-job CU limit. Missing fields remain unknown and block generation.
+- **DT+ App Bridge:** discovery can be configured, but free-only generation is unavailable. The
+  current bridge protocol does not expose a verifiable account/allowance/no-paid-fallback policy.
+  Draw Things being open or subscribed to Plus is not sufficient evidence.
+
+**CU measures the estimated work of one generation.** It is separate from the remaining monthly
+request count and is not a currency balance. Studio shows the estimate for the resolved settings.
+Cloud preflight currently uses the lower advertised CU threshold until generation authorization
+confirms account class. A request equal to or above that limit is refused. Reduce dimensions,
+duration, or steps and prepare again. Limits and allowance are rechecked at generation time.
+
+This release supports `freeOnly`; it neither selects PAYG/Boost nor silently falls back to them.
+Generation authorization is performed only after local files, model availability, connection, and
+output creation pass. An interrupted authorization/submission may already have consumed a request;
+there is no automatic retry. Real API-key allowance responses still require live qualification.
+
+Credentials stay in Keychain, or in an explicitly selected runtime environment variable for CLI and
+ComfyUI use. They are never embedded in project requests or job JSON. An exported credential reference
+identifies how to supply a secret; it does not include that secret. The Python runner accepts
+`WEETODD_DT_CREDENTIAL` or a profile `credentialRef` of `env:VARIABLE_NAME`. Treat exported project
+prompts and media paths as private even though credentials are excluded.
+
+### Images, clips, and LoRAs
+
+Use the **+ → Generate Image…** action on Global, Project, or Clip Assets. The whole-window prompt
+editor provides model selection, dimensions, steps, advanced settings, CU preparation, preview, and
+headless image-job export. Images are added to the captured destination store without changing the
+timeline. A removed destination clip cannot silently redirect the completed image to another clip.
+
+Use the timeline **+ → Draw Things** to create a video clip. Refresh models, select an exact server
+model, write its prompt, and prepare it. Native MLX recipe files are not needed for this provider.
+Dimensions use a 64-pixel grid. Generation FPS must be an integer; LTX frame counts round upward to
+`8n+1` to cover the requested duration. Movie finishing applies the project/clip output settings.
+Generation adds an audiovisual movie to version history and Clip Assets. A changed clip is not
+marked current by an older render finishing later.
+
+The pinned helper recognizes selected FLUX, Qwen Image, and Z-Image model families for images, and
+LTX 2/2.3 for video. Only exact endpoint IDs advertised by both the helper and server appear. This
+is not a claim of remote H3 or LTX 2.5 support; those remain available through the native engines.
+
+One **First Frame** image is supported for LTX video. Its full file hash participates in preparation
+and request identity, and the helper rechecks it before submission. Orientation is respected and the
+image is center-cropped to generation dimensions. Last/keyframes, generic references, audio drivers,
+control hints, and native clip extensions are rejected explicitly in this initial remote adapter.
+
+Server LoRAs are filtered by exact remote model compatibility. Strength ranges from 0 to 2. Named
+remote groups copy their members/strengths to a clip and remain separate from the native LoRA library.
+Only ordinary LoRAs with matching SDK model family are advertised; specialized modifiers, alternate
+decoders, and unverified variants are excluded. Importing local SafeTensors as a remote LoRA is not
+supported: this adapter has no verified converter/upload workflow.
+
+### Headless jobs and qualification
+
+Movie/clip exports containing Draw Things work use `weetodd-studio-job-v3`. Image jobs can be exported
+from the image prompt editor. Jobs remain sequential and refresh eligibility before each request.
+Image-to-video dependencies bind a completed image as the first frame before the video is estimated.
+See [headless examples and credential setup](../examples/headless/README.md).
+
+Resume reuses only verified artifact hashes. A recorded submitted/completed remote request whose
+artifact is unavailable is never automatically regenerated; create a deliberate new job/output after
+checking the earlier attempt. Closing Studio is supported. Self-hosted jobs still require their server;
+Cloud API jobs do not require the Draw Things app.
+
+| Path | Qualification |
+| --- | --- |
+| gRPC discovery/image transfer | Synthetic server and Studio image UI tested |
+| Video + separate audio | Synthetic gRPC, Studio clip UI, and real FFmpeg timing/publication tested |
+| First frame / LoRA contracts | Automated mapping, compatibility, hash, and failure tests |
+| CLI image-to-video and movie assembly | Synthetic server with Studio closed; real FFmpeg clip, dissolve, title, and supplementary-audio assembly tested |
+| Completed-job resume | With fixture server stopped, reused both remote artifacts and the same final movie hash |
+| ComfyUI image/video/estimate workflows | Saved, fixture-bound API graphs executed in isolated ComfyUI; repeated estimates refreshed and image output saved |
+| Packaged Studio | Bundled helper discovery, connection test, prompt CU, project reload, and light/dark appearance checked |
+| Helper corresponding source | Distributed archive extracted and rebuilt against its supplied editable dependencies |
+| Native project/job compatibility | Focused regression tests |
+| Real Draw Things model generation | Pending endpoint-bound acceptance |
+| Direct Cloud free-tier generation | Pending authenticated live acceptance; missing allowance fails closed |
+| DT+ App Bridge generation | Unavailable pending verifiable billing policy |
+
+Fixture tests establish software behavior, not output quality or a promise that a particular remote
+model will fit a free-tier allowance. Retail signing/notarization and clean-Mac qualification remain
+separate release work.

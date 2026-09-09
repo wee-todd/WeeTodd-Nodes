@@ -51,6 +51,7 @@ import SwiftUI
         Button("Add Audio Track") { store.addAudioTrack() }
         Button("Add Title") { store.addTitle() }
         Button("Export Movie…") { store.exportMovie() }.keyboardShortcut("e")
+        Button("Draw Things Connections…") { store.showDrawThings = true }
         Button("Runtime Settings…") { store.showRuntime = true }.keyboardShortcut(",")
       }
     }
@@ -70,6 +71,7 @@ enum Theme {
     case .h3: return .orange
     case .ltx23: return .cyan
     case .ltx25: return violet
+    case .drawThings: return .purple
     case .movie: return mint
     }
   }
@@ -114,7 +116,8 @@ struct StudioView: View {
           AssetBrowser().frame(minWidth: 245, idealWidth: 290, maxWidth: 370)
         }
       }
-      .disabled(store.showPrompt || store.showMotionPrompt)
+      .disabled(store.showPrompt || store.showMotionPrompt || store.imageDraft != nil)
+      if store.imageDraft != nil { ImageGenerationEditor().transition(.opacity).zIndex(10) }
       if store.showPrompt { PromptEditor().transition(.opacity).zIndex(10) }
       if store.showMotionPrompt {
         MotionPromptEditor().transition(.opacity).zIndex(10)
@@ -134,6 +137,7 @@ struct StudioView: View {
         )
       }.padding(24).frame(width: 480)
     }
+    .sheet(isPresented: $store.showDrawThings) { DrawThingsSettings().environmentObject(store) }
     .sheet(isPresented: $store.showRuntime) { RuntimeView().environmentObject(store) }
     .sheet(isPresented: $store.showLog) {
       VStack(alignment: .leading) {

@@ -93,11 +93,12 @@ struct AssetBrowser: View {
           }
         }.buttonStyle(.plain)
         Spacer()
-        Button {
-          store.chooseImports(scope: scope)
+        Menu {
+          Button("Import…") { store.chooseImports(scope: scope) }
+          Button("Generate Image…") { store.beginImageGeneration(scope: scope) }
         } label: {
           Image(systemName: "plus").font(.system(size: 11))
-        }.buttonStyle(.borderless).help("Import into \(name) store").disabled(
+        }.buttonStyle(.borderless).help("Add to \(name) store").disabled(
           scope == .clip && store.selectedClip == nil)
       }
       if expanded.wrappedValue {

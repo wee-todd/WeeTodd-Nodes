@@ -44,6 +44,7 @@ CATEGORY_NAMES = {
     "WeeTodd/MLX preprocessors/segmentation": "MLX preprocessors — Segmentation",
     "WeeTodd/MLX preprocessors": "MLX preprocessors — Lifecycle",
     "WeeTodd/CorridorKey": "CorridorKey — Keying",
+    "WeeTodd/Draw Things": "Draw Things — Remote generation",
 }
 
 RECOMMENDED = {
@@ -58,6 +59,12 @@ RECOMMENDED = {
     "WeeToddLTX23Preflight",
 }
 EXPERIMENTAL = {
+    "WeeToddDrawThingsConnection",
+    "WeeToddDrawThingsDiscover",
+    "WeeToddDrawThingsRequest",
+    "WeeToddDrawThingsEstimate",
+    "WeeToddDrawThingsGenerateImage",
+    "WeeToddDrawThingsGenerateVideo",
     "WeeToddH3MotionSettings",
     "WeeToddH3MotionRefine",
     "WeeToddLTX23ICLoRALoader",

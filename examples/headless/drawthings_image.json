@@ -1,0 +1,14 @@
+{
+  "format": "weetodd-studio-job-v3",
+  "portableExample": true,
+  "remoteJobs": [{
+    "id": "image-1", "kind": "image", "dependsOn": [],
+    "connection": {"id": "drawthings-profile", "name": "Draw Things", "route": "dtCloud", "host": "", "port": 443, "tls": true, "credentialRef": "env:WEETODD_DT_CREDENTIAL"},
+    "request": {
+      "schema": "weetodd-drawthings-request-v1", "requestID": "replace-on-export", "operation": "image",
+      "profileID": "drawthings-profile", "modelID": "DISCOVER_MODEL_ID", "prompt": "A red cube on a gray surface",
+      "negativePrompt": "", "configuration": {"width": 512, "height": 512, "steps": 4, "seed": 42},
+      "inputs": [], "loras": [], "billingPolicy": "freeOnly"
+    }
+  }]
+}

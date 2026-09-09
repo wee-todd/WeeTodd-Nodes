@@ -20,6 +20,7 @@ CORE_NODES = {
     "Note",
     "PreviewImage",
     "PreviewAny",
+    "SaveImage",
     "SaveVideo",
     "Video Slice",
 }

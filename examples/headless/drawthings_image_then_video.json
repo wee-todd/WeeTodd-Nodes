@@ -1,0 +1,28 @@
+{
+  "format": "weetodd-studio-job-v3",
+  "portableExample": true,
+  "remoteJobs": [
+    {
+      "id": "image-1", "kind": "image", "dependsOn": [],
+      "connection": {"id": "drawthings-profile", "name": "Draw Things", "route": "dtCloud", "host": "", "port": 443, "tls": true, "credentialRef": "env:WEETODD_DT_CREDENTIAL"},
+      "request": {
+        "schema": "weetodd-drawthings-request-v1", "requestID": "replace-image-on-export", "operation": "image",
+        "profileID": "drawthings-profile", "modelID": "DISCOVER_IMAGE_MODEL_ID", "prompt": "A red cube on a gray surface",
+        "negativePrompt": "", "configuration": {"width": 768, "height": 512, "steps": 4, "seed": 42},
+        "inputs": [], "loras": [], "billingPolicy": "freeOnly"
+      }
+    },
+    {
+      "id": "clip-1", "kind": "clip", "clipID": "timeline-clip-id",
+      "dependsOn": ["image-1"], "inputBindings": {"first": "image-1"},
+      "connection": {"id": "drawthings-profile", "name": "Draw Things", "route": "dtCloud", "host": "", "port": 443, "tls": true, "credentialRef": "env:WEETODD_DT_CREDENTIAL"},
+      "request": {
+        "schema": "weetodd-drawthings-request-v1", "requestID": "replace-video-on-export", "operation": "video",
+        "profileID": "drawthings-profile", "modelID": "DISCOVER_VIDEO_MODEL_ID", "prompt": "The cube slowly rotates while the camera remains locked",
+        "negativePrompt": "", "configuration": {"width": 768, "height": 512, "numFrames": 121, "fps": 24, "steps": 8, "seed": 42},
+        "inputs": [], "loras": [], "billingPolicy": "freeOnly"
+      }
+    }
+  ],
+  "status": "bind-discovered-models-before-export"
+}

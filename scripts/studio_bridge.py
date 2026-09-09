@@ -1180,6 +1180,7 @@ def main():
     parser.add_argument(
         "command",
         choices=[
+            "dt-discover", "dt-estimate", "dt-generate-image", "dt-prepare-clip", "dt-generate-clip",
             "setup-catalog",
             "setup-scan",
             "setup-create",
@@ -1203,7 +1204,12 @@ def main():
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     request = json.loads(args.request.read_text())
-    if args.command == "setup-catalog":
+    if args.command.startswith("dt-"):
+        from studio_drawthings import dispatch
+
+        result = dispatch(args.command, request, args.output,
+                          progress=lambda event: emit(event="progress", message="Draw Things generating…"))
+    elif args.command == "setup-catalog":
         from wee_todd_mlx.model_setup import setup_catalog
 
         result = {"presets": setup_catalog()}

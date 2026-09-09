@@ -1,0 +1,14 @@
+{
+  "format": "weetodd-studio-job-v3",
+  "portableExample": true,
+  "remoteJobs": [{
+    "id": "clip-1", "kind": "clip", "clipID": "timeline-clip-id", "dependsOn": [],
+    "connection": {"id": "drawthings-profile", "name": "Draw Things", "route": "grpc", "host": "127.0.0.1", "port": 7859, "tls": false, "credentialRef": "env:WEETODD_DT_CREDENTIAL"},
+    "request": {
+      "schema": "weetodd-drawthings-request-v1", "requestID": "replace-on-export", "operation": "video",
+      "profileID": "drawthings-profile", "modelID": "DISCOVER_MODEL_ID", "prompt": "A locked camera watches clouds cross a mountain",
+      "negativePrompt": "", "configuration": {"width": 768, "height": 512, "numFrames": 121, "fps": 24, "steps": 8, "seed": 42},
+      "inputs": [], "loras": [], "billingPolicy": "freeOnly"
+    }
+  }]
+}

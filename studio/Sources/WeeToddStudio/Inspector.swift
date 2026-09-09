@@ -56,9 +56,14 @@ struct ClipInspector: View {
       if clip.engine != .movie {
         field("ENGINE") {
           Picker("Engine", selection: binding(\.engine)) {
-            ForEach(Engine.allCases.filter { $0 != .movie }) { Text($0.label).tag($0) }
+            ForEach(Engine.allCases.filter { $0 != .movie }) {
+              Text($0.label).tag($0)
+            }
           }.labelsHidden()
         }
+        if clip.engine == .drawThings {
+          DrawThingsClipInspector(clip: clip)
+        } else {
         field("MODEL RECIPE") {
           Picker("Model recipe", selection: binding(\.profileID)) {
             Text("Automatic · match media roles").tag("auto")
@@ -68,6 +73,7 @@ struct ClipInspector: View {
           }.labelsHidden()
           Button("Set up or repair models…") { store.showRuntime = true }
             .font(.caption)
+        }
         }
         Button {
           store.showPrompt = true
@@ -126,11 +132,13 @@ struct ClipInspector: View {
       }
       if clip.attachments.isEmpty {
         Text(
-          "Use an asset as a first frame, reference, audio driver or control. Compatible task adapters come from the selected recipe."
+          clip.engine == .drawThings
+            ? "Use one image asset as the First Frame. It is center-cropped to the clip dimensions. Other media roles are not yet supported by this connection."
+            : "Use an asset as a first frame, reference, audio driver or control. Compatible task adapters come from the selected recipe."
         ).font(.system(size: 11)).foregroundStyle(.secondary)
       }
       ForEach(clip.attachments.filter { $0.role != .lora }) { a in AttachmentRow(attachment: a) }
-      if clip.engine != .movie { ClipLoRAInspector(clip: clip) }
+      if clip.engine != .movie && clip.engine != .drawThings { ClipLoRAInspector(clip: clip) }
       if !clip.sourcePath.isEmpty {
         HStack {
           Button("Split") { store.split() }
@@ -138,10 +146,10 @@ struct ClipInspector: View {
           Menu("Extend") {
             Button("After") { store.extend("after") }
             Button("Before · LTX 2.3") { store.extend("before") }.disabled(clip.engine != .ltx23)
-          }
+          }.disabled(clip.engine == .drawThings)
         }.controlSize(.small)
       }
-      MotionFidelityInspector(clip: clip)
+      if clip.engine != .drawThings { MotionFidelityInspector(clip: clip) }
       DisclosureGroup("Advanced generation") {
         VStack(alignment: .leading, spacing: 10) {
           if clip.engine != .movie {

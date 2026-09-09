@@ -2,13 +2,14 @@ import CryptoKit
 import Foundation
 
 public enum Engine: String, Codable, CaseIterable, Identifiable {
-  case h3, ltx23, ltx25, movie
+  case h3, ltx23, ltx25, drawThings, movie
   public var id: String { rawValue }
   public var label: String {
     switch self {
     case .h3: return "MiniMax H3"
     case .ltx23: return "LTX 2.3"
     case .ltx25: return "LTX 2.5"
+    case .drawThings: return "Draw Things"
     case .movie: return "Movie / Still"
     }
   }
@@ -46,6 +47,7 @@ public struct MediaAsset: Codable, Identifiable, Equatable {
   public var thumbnail: String = ""
   public var text: String = ""
   public var loraModel: LoRAModel?
+  public var generation: ImageGeneration?
   public init(
     name: String, kind: AssetKind, path: String = "", scope: AssetScope = .project,
     owner: UUID? = nil
@@ -161,6 +163,7 @@ public struct Clip: Codable, Identifiable, Equatable {
   public var renderedSignature = ""
   public var validatedSignature = ""
   public var extensionClipID: UUID?
+  public var drawThings: DrawThingsSelection?
   public init(name: String = "Untitled clip", engine: Engine = .ltx25) {
     self.name = name
     self.engine = engine

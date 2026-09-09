@@ -7,9 +7,16 @@ and audio as one synchronized latent contract. Weighted components load only whe
 and can unload between Qwen3-VL, transformer, video VAE, and audio VAE stages.
 
 - 55 composable nodes under `WeeTodd/H3`
-- 121 registered nodes across all engines and media utilities; 43 shipped UI workflows
+- 127 registered nodes across all engines and media utilities; 46 shipped UI workflows
 
 See [implementation status](STATUS.md) for current capabilities and qualification limits.
+
+An optional [Draw Things integration](studio/README.md#draw-things--experimental) adds remote image
+assets and audiovisual clips to Studio, portable headless jobs, and ComfyUI through a shared gRPC
+adapter. It displays estimated CU and verifies free-only eligibility before submission. Self-hosted
+transport is fixture-tested; real Draw Things/DT+ account and generation qualification is pending.
+The pinned remote SDK supports selected image models and LTX 2/2.3 video; native H3/LTX 2.5 support
+remains separate. DT+ App Bridge generation is unavailable until its billing route can be verified.
 
 [WeeTodd Studio](studio/README.md) is the native Swift editor in this repository. It combines generated
 and imported clips, titles, transitions and multiple audio tracks, and exports resumable movie/clip
@@ -82,6 +89,24 @@ images, video, or audio after loading the workflow.
 
 `fflf2va` covers first frame, last frame, and combined first/last-frame conditioning. Use **H3
 Frames** when the graph needs numbered middle frames.
+
+### Draw Things workflows · experimental
+
+Build the [optional transport helper](studio/README.md#build-the-optional-connection-runtime),
+configure a connection, and use **Draw Things Discover** to obtain an exact compatible server model
+ID. Replace the placeholder in **Draw Things Request** before queuing. For a self-hosted endpoint,
+confirm that cloud offload is disabled before enabling its confirmation control. The examples are
+portable starting graphs; they do not establish a working endpoint or free-tier allowance.
+
+| Workflow | API example | Behavior |
+| --- | --- | --- |
+| [Estimate only](workflows/balance/t2v/drawthings_estimate_only.json) | [API](examples/drawthings_estimate_only_api.json) | Refresh capability, CU estimate, and billing eligibility without generation. |
+| [Image asset](workflows/balance/t2v/drawthings_image.json) | [API](examples/drawthings_image_api.json) | Prepare and generate one image through the shared adapter. |
+| [Video + audio](workflows/balance/t2v/drawthings_video.json) | [API](examples/drawthings_video_api.json) | Prepare and generate an audiovisual clip, then finish it with FFmpeg. |
+
+Credentials are supplied through runtime environment references. Generated files use ComfyUI's
+configured output directory. Direct Cloud remains subject to strict free-only checks and pending
+live qualification; DT+ App Bridge generation is blocked. See [connection policies and limits](studio/README.md#connections-allowance-and-cu).
 
 ### LTX workflows
 
@@ -460,6 +485,35 @@ this generic loader. Files can come from any source, but they must match support
 projection and scaling contracts; this is not a promise that arbitrary LoRAs or arbitrary model
 families are interchangeable.
 
+### LTX 2.3 model bundle
+
+The shipped two-stage workflow selects an existing MLX bundle at `ComfyUI/models/LTX-2.3/q8`
+or the equivalent shared model root. Its current preflight requires these bundle entries:
+
+```text
+LTX-2.3/q8/
+├── connector.safetensors
+├── vae_encoder.safetensors
+├── vae_decoder.safetensors
+├── audio_vae.safetensors
+├── vocoder.safetensors
+├── transformer-dev.safetensors
+├── ltx-2.3-22b-distilled-lora-384.safetensors
+├── spatial_upscaler_x2_v1_1.safetensors
+└── spatial_upscaler_x2_v1_1_config.json
+```
+
+The transformer, distilled LoRA, and spatial-upscaler entries also accept matching
+`<stem>-*-of-*.safetensors` shards. Keep all shards together. Distilled mode instead requires
+`transformer-distilled.safetensors` and does not require the development transformer or distilled
+LoRA. Other modes have their own component checks. These names describe the supported MLX bundle;
+renaming arbitrary source checkpoints does not convert their tensors into that layout.
+
+Install the Gemma encoder separately before execution. The default
+`mlx-community/gemma-3-12b-it-4bit` must resolve to a complete local Hugging Face cache snapshot,
+or select an existing local encoder directory. Nodes do not download it during a graph. Run
+**LTX 2.3 Preflight** after selecting the bundle and generation mode.
+
 ## H3 model layout
 
 The component loader searches every ComfyUI model root, including shared roots from
@@ -513,7 +567,7 @@ Reference model sources (select only what your workflow needs):
 - [drbaph v4 step-600 Turbo LoRA](https://huggingface.co/drbaph/MiniMax-H3-Turbo-Lora-ComfyUI)
 - [H3 tiny preview decoder](https://github.com/madebyollin/taehv/blob/main/safetensors/taeh3.safetensors)
 
-Use the genuine Ref2VA partition for Ref2VA workflows. The shipped graphs do not enable the FL2VA
+Use the genuine Ref2VA partition for Ref2VA workflows. The profiled UI graphs do not enable the FL2VA
 compatibility override.
 
 ## Experimental H3 reference paging
@@ -1293,9 +1347,12 @@ selected existing copy. No weights are downloaded or rewritten automatically.
 
 ## Live H3 previews
 
-Every shipped H3 workflow routes components through **H3 Model Preview Override** before sampling.
+Every shipped H3 UI workflow routes components through **H3 Model Preview Override** before sampling.
 The node publishes a true-color contact sheet during sampling and releases the tiny decoder after
 success, failure, or cancellation.
+
+Historical API examples retain their individual wiring; some omit this optional preview node.
+Inspect the saved API prompt and run its live preflight before an expensive render.
 
 The default `auto` backend uses the optional Core ML package on macOS and otherwise falls back to
 MLX. Core ML uses CPU and Neural Engine compute units, which avoids adding preview convolution to
@@ -1492,6 +1549,12 @@ This table is generated from the registered node contracts. Run
 | Unload Florence-2 (MLX) | Release Florence-2 MLX state without changing CorridorKey, H3, or LTX state. | MLX preprocessors — Segmentation | Experimental |
 | H3 Motion Fidelity Settings (Experimental) | Experimental adaptive or uniform temporal expansion, partial-denoise strength, optional independent refinement evaluations, seed and frame budget. | H3 — Sampling and acceleration | Experimental |
 | H3 Motion Fidelity Refine (Experimental) | Analyze or refine a native 24 fps H3 movie in an isolated process; retain original audio and recover original frame timing. Optional standard full-schedule repair LoRA. | H3 — Output | Experimental |
+| Draw Things Connection | Configure route, endpoint, helper, and an environment-variable credential reference; no connection occurs here. | Draw Things — Remote generation | Experimental |
+| Draw Things Discover | Explicitly refresh the server catalog without generating media; INPUT_TYPES never contacts the endpoint. | Draw Things — Remote generation | Experimental |
+| Draw Things Request | Build a free-only canonical request; model IDs must be copied exactly from explicit discovery. | Draw Things — Remote generation | Experimental |
+| Draw Things Estimate | Estimate CU and refresh eligibility only. Use the estimate-only workflow to avoid generation. | Draw Things — Remote generation | Experimental |
+| Draw Things GenerateImage | Generate an image through the shared adapter and load only the returned image into an IMAGE tensor. | Draw Things — Remote generation | Experimental |
+| Draw Things GenerateVideo | Generate video and finish it to a file; frames stay on disk for low-memory graphs. | Draw Things — Remote generation | Experimental |
 <!-- END GENERATED NODE CATALOG -->
 
 ## Troubleshooting

@@ -41,6 +41,7 @@ packages = [
   "src/ltx25_mlx",
   "src/mlx_preprocessors",
   "src/wee_todd_mlx",
+  "src/wee_todd_remote",
 ]
 
 [tool.hatch.metadata]

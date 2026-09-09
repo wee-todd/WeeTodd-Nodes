@@ -15,6 +15,111 @@ from pathlib import Path
 
 import studio_bridge as bridge
 
+SUPPORTED_JOB_FORMATS = {
+    "weetodd-studio-job-v1", "weetodd-studio-job-v2", "weetodd-studio-job-v3"
+}
+_SECRET_FIELDS = {
+    "apikey", "token", "authorization", "sharedsecret", "password", "clientsecret",
+    "accesstoken", "refreshtoken", "privatekey", "authtoken", "bearertoken", "secretkey",
+    "credentials",
+}
+
+
+def _reject_secrets(value, location="remote job"):
+    if isinstance(value, dict):
+        for key, child in value.items():
+            normalized = "".join(c for c in str(key).lower() if c.isalnum())
+            if normalized in _SECRET_FIELDS:
+                raise ValueError(f"{location} contains prohibited secret field {key}")
+            _reject_secrets(child, location)
+    elif isinstance(value, list):
+        for child in value:
+            _reject_secrets(child, location)
+
+
+def validate_remote_jobs(values, project):
+    from wee_todd_remote.jobs import validate_job_dependencies
+
+    ordered = validate_job_dependencies(values)
+    indexed = {job["id"]: job for job in ordered}
+    destinations = set()
+    for job in ordered:
+        _reject_secrets(job)
+        if job.get("kind") not in {"image", "clip"}:
+            raise ValueError(f"remote job {job['id']} kind must be image or clip")
+        connection = job.get("connection")
+        if not isinstance(connection, dict) or connection.get("id") != job["request"]["profileID"]:
+            raise ValueError(f"remote job {job['id']} connection must match profileID")
+        bindings = job.get("inputBindings", {})
+        if not isinstance(bindings, dict):
+            raise ValueError(f"remote job {job['id']} inputBindings must be an object")
+        unsupported = set(bindings) - {"first"}
+        if unsupported:
+            raise ValueError(
+                f"remote job {job['id']} has unsupported dependency conditioning role "
+                f"{sorted(unsupported)[0]}"
+            )
+        if bindings:
+            if job.get("kind") != "clip":
+                raise ValueError("only video jobs can bind generated conditioning")
+            dependency_id = bindings.get("first")
+            if not isinstance(dependency_id, str) or dependency_id not in job["dependsOn"]:
+                raise ValueError("first input binding must name a declared dependency")
+            if job["request"].get("inputs"):
+                raise ValueError("a bound first-frame request must not contain another input")
+        operation = job["request"]["operation"]
+        if operation != ("image" if job["kind"] == "image" else "video"):
+            raise ValueError(f"remote job {job['id']} operation does not match its kind")
+        if bindings and indexed[bindings["first"]].get("kind") != "image":
+            raise ValueError("first input binding must name an image job")
+        if job["kind"] == "clip":
+            clip_id = job.get("clipID")
+            if not isinstance(clip_id, str) or not clip_id:
+                raise ValueError(f"Draw Things job {job['id']} requires a destination clipID")
+            matches = [
+                clip for clip in project.get("clips", [])
+                if isinstance(clip, dict) and clip.get("id") == clip_id
+            ]
+            if len(matches) != 1 or matches[0].get("engine") != "drawThings":
+                raise ValueError(
+                    f"Draw Things job {job['id']} must target exactly one Draw Things clip"
+                )
+            if clip_id in destinations:
+                raise ValueError(f"Draw Things clip {clip_id} has duplicate remote jobs")
+            destinations.add(clip_id)
+            selection = matches[0].get("drawThings")
+            if not isinstance(selection, dict) or any(
+                selection.get(field) != job["request"][field]
+                for field in ("profileID", "modelID")
+            ):
+                raise ValueError(
+                    f"Draw Things job {job['id']} profileID/modelID must match its clip selection"
+                )
+    return ordered
+
+
+def bind_remote_inputs(remote, results):
+    """Resolve verified dependency artifacts into the canonical request."""
+    request = copy.deepcopy(remote["request"])
+    bindings = remote.get("inputBindings", {})
+    if not bindings:
+        return request
+    dependency_id = bindings["first"]
+    dependency = results.get(dependency_id)
+    if not isinstance(dependency, dict):
+        raise ValueError(f"dependency {dependency_id} has not completed")
+    path = Path(dependency.get("path", ""))
+    expected = dependency.get("sha256")
+    if not path.is_file() or not isinstance(expected, str) or file_hash(path) != expected:
+        raise ValueError(f"dependency {dependency_id} output is missing or changed")
+    request["inputs"] = [{
+        "role": "first", "path": str(path.resolve()), "sha256": expected,
+        "frameIndex": 0, "strength": 1,
+    }]
+    from wee_todd_remote.contracts import validate_request
+
+    return validate_request(request)
+
 
 def digest(value):
     return hashlib.sha256(
@@ -112,11 +217,31 @@ def export_job(request, target):
     request = copy.deepcopy(request)
     if request.get("clipOnly"):
         request["project"] = clip_project(request["project"], request["clipID"])
-    if not request["project"]["clips"]:
+    image_jobs = copy.deepcopy(request.get("drawThingsImageJobs", []))
+    if not request["project"]["clips"] and not image_jobs:
         raise ValueError("Add a clip before exporting a job.")
     recipes = {}
+    remote_jobs = image_jobs
+    connections = {
+        value.get("id"): value for value in request.get("drawThingsConnections", [])
+        if isinstance(value, dict)
+    }
     for clip in request["project"]["clips"]:
         if clip["engine"] == "movie" or clip["id"] not in request.get("generateIDs", []):
+            continue
+        if clip["engine"] == "drawThings":
+            from wee_todd_remote.studio import compose_drawthings_request
+
+            canonical = compose_drawthings_request(
+                request["project"], clip["id"],
+                request.get("globalAssets", []) + request["project"].get("assets", []),
+            )
+            connection = connections.get(canonical["profileID"])
+            if not connection:
+                raise ValueError(f"No exported Draw Things profile for {canonical['profileID']}")
+            remote_jobs.append({"id": "clip-" + clip["id"], "kind": "clip",
+                                "clipID": clip["id"], "request": canonical,
+                                "connection": copy.deepcopy(connection), "dependsOn": []})
             continue
         current = dict(request, clipID=clip["id"])
         recipe, report = bridge.compose_recipe(current)
@@ -127,14 +252,17 @@ def export_job(request, target):
             motion_recipes[clip["id"]] = bridge.motion_request(dict(request, clipID=clip["id"]))[
                 "recipe"
             ]
+    remote_jobs = validate_remote_jobs(remote_jobs, request["project"]) if remote_jobs else []
     job = {
-        "format": "weetodd-studio-job-v2" if motion_recipes else "weetodd-studio-job-v1",
+        "format": ("weetodd-studio-job-v3" if remote_jobs else
+                   "weetodd-studio-job-v2" if motion_recipes else "weetodd-studio-job-v1"),
         "scope": "clip" if request.get("clipOnly") else "movie",
         "project": request["project"],
         "globalAssets": request.get("globalAssets", []),
         "runtime": request["runtime"],
         "recipes": recipes,
         **({"motionRecipes": motion_recipes} if motion_recipes else {}),
+        **({"remoteJobs": remote_jobs} if remote_jobs else {}),
         "execution": {
             "parallelGenerations": 1,
             "rendererSHA256": renderer_fingerprint(),
@@ -142,6 +270,8 @@ def export_job(request, target):
             "finishingOrder": ["upscale", "interpolate", "assemble"],
         },
     }
+    if job["format"] == "weetodd-studio-job-v3":
+        _reject_secrets(job, "v3 job")
     job["manifestSHA256"] = digest(job)
     target.parent.mkdir(parents=True, exist_ok=True)
     atomic_json(target, job)
@@ -172,7 +302,7 @@ def export_job(request, target):
     return {
         "job": str(target),
         "instructions": str(instructions),
-        "generations": len(recipes),
+        "generations": len(recipes) + len(remote_jobs),
         "clips": len(job["project"]["clips"]),
     }
 
@@ -218,6 +348,7 @@ def inputs_fingerprint(job):
     walk(job["project"])
     walk(job["recipes"])
     walk(job.get("motionRecipes", {}))
+    walk(job.get("remoteJobs", []))
     walk(job.get("globalAssets", []))
     walk(job["runtime"])
     observations = []
@@ -229,13 +360,30 @@ def inputs_fingerprint(job):
     return digest(observations)
 
 
-def preflight(job, output):
+def preflight(job, output, *, prepare_remote=True):
     expected = job.get("execution", {}).get("rendererSHA256")
     if expected and expected != renderer_fingerprint():
         raise ValueError(
             "The renderer version changed. Run this job with its original runtime or re-export it."
         )
     output.mkdir(parents=True, exist_ok=True)
+    remote_jobs = validate_remote_jobs(job.get("remoteJobs", []), job["project"])
+    remote_clip_ids = {
+        remote.get("clipID") for remote in remote_jobs if remote.get("kind") == "clip"
+    }
+    for remote in remote_jobs:
+        if not prepare_remote or remote.get("inputBindings"):
+            # Dependency media does not exist yet. Execution prepares the resolved canonical
+            # request immediately after the dependency completes and before submission.
+            continue
+        from studio_drawthings import adapter_for
+
+        adapter = adapter_for({"connection": remote["connection"], "runtime": job["runtime"]})
+        prepared = adapter.prepare(remote["request"])
+        if prepared.get("eligibility") != "allowed":
+            issues = prepared.get("issues") or []
+            detail = issues[0].get("message") if issues and isinstance(issues[0], dict) else None
+            raise ValueError(detail or f"Draw Things job {remote['id']} is not eligible")
     for clip in job["project"]["clips"]:
         bridge.preflight_finishing(job["project"], clip, job["runtime"])
         record = job["recipes"].get(clip["id"])
@@ -259,7 +407,7 @@ def preflight(job, output):
                     "--preflight-only",
                 ]
             )
-        else:
+        elif clip["id"] not in remote_clip_ids:
             media = bridge.inspect_media(clip["sourcePath"], job["runtime"])
             if (
                 media["kind"] != "image"
@@ -329,7 +477,96 @@ def _execute_locked(job, output, resume):
     project = copy.deepcopy(job["project"])
     atomic_json(state_path, state)
     try:
-        preflight(job, output / "preflight")
+        preflight(job, output / "preflight", prepare_remote=False)
+        remote_results = {}
+        for remote in validate_remote_jobs(job.get("remoteJobs", []), job["project"]):
+            key = "remote-" + remote["id"]
+            previous = state["completed"].get(key)
+            artifact = (
+                Path(previous["path"])
+                if isinstance(previous, dict) and previous.get("path")
+                else None
+            )
+            if (
+                artifact is not None
+                and artifact.exists()
+                and artifact_hash(artifact) == previous.get("sha256")
+            ):
+                result = previous
+                bridge.emit(event="resume", message=f"Reusing Draw Things output {remote['id']}")
+            else:
+                attempt = state.setdefault("remoteAttempts", {}).get(key)
+                if attempt and attempt.get("status") in {"submitted", "completed"}:
+                    raise ValueError(
+                        f"Draw Things job {remote['id']} has a prior remote attempt but its "
+                        "verified artifact is unavailable; it will not be retried automatically. "
+                        "Export a deliberate new job or choose a new output directory"
+                    )
+                import uuid
+                folder = output / "remote" / remote["id"] / uuid.uuid4().hex
+                folder.mkdir(parents=True)
+                from studio_drawthings import adapter_for
+                adapter = adapter_for(
+                    {"connection": remote["connection"], "runtime": job["runtime"]}
+                )
+                canonical = bind_remote_inputs(remote, remote_results)
+                prepared = adapter.prepare(canonical)
+                if prepared.get("eligibility") != "allowed":
+                    raise ValueError(f"Draw Things job {remote['id']} is not eligible")
+                state.setdefault("remoteAttempts", {})[key] = {"status": "submitted"}
+                atomic_json(state_path, state)
+                if remote["kind"] == "clip":
+                    from wee_todd_remote.studio import render_drawthings_clip
+                    ffmpeg = job["runtime"].get("ffmpegPath")
+                    if not ffmpeg:
+                        raise ValueError("Draw Things video jobs require runtime.ffmpegPath")
+                    rendered = render_drawthings_clip(
+                        canonical, adapter, folder, Path(ffmpeg), lambda: False,
+                        lambda event: bridge.emit(event="progress", message=str(event)),
+                    )
+                    artifact = Path(rendered["video"])
+                else:
+                    completed = None
+                    for event in adapter.generate(
+                        canonical,
+                        output_directory=folder / "media",
+                        cancelled=lambda: False,
+                    ):
+                        if event.get("type") == "result":
+                            completed = event.get("value")
+                        else:
+                            bridge.emit(event="progress", message=str(event))
+                    paths = (
+                        completed.get("media", {}).get("imagePaths")
+                        if isinstance(completed, dict)
+                        else None
+                    )
+                    if not isinstance(paths, list) or len(paths) != 1:
+                        raise RuntimeError(
+                            "Draw Things image job returned no single validated image"
+                        )
+                    artifact = Path(paths[0])
+                result = {"path": str(artifact), "sha256": artifact_hash(artifact),
+                          "requestSHA256": digest(canonical)}
+                state["completed"][key] = result
+                state["remoteAttempts"][key] = {"status": "completed"}
+                atomic_json(state_path, state)
+            remote_results[remote["id"]] = result
+            if remote["kind"] == "clip":
+                clip = next(
+                    (
+                        value
+                        for value in project["clips"]
+                        if value["id"] == remote.get("clipID")
+                    ),
+                    None,
+                )
+                if clip is None:
+                    raise ValueError(
+                        f"Draw Things remote job {remote['id']} references a missing clip"
+                    )
+                clip["sourcePath"] = result["path"]
+                clip["sourceIn"] = 0
         for i, clip in enumerate(project["clips"]):
             record = job["recipes"].get(clip["id"])
             if not record:
@@ -416,6 +653,11 @@ def _execute_locked(job, output, resume):
             clip["sourcePath"] = result["video"]
             clip["sourceIn"] = result.get("sourceIn", 0)
             clip["motionFidelity"]["enabled"] = False  # already resolved for finishing
+        if not project["clips"]:
+            state["status"] = "success"
+            state["remoteResults"] = remote_results
+            atomic_json(state_path, state)
+            return {"remoteResults": remote_results}
         format_name = project["settings"].get("format", "mp4")
         name = (
             "movie-frames"
@@ -469,7 +711,7 @@ def main():
     parser.add_argument("--preflight-only", action="store_true")
     args = parser.parse_args()
     job = json.loads(args.job.read_text())
-    if job.get("format") not in {"weetodd-studio-job-v1", "weetodd-studio-job-v2"}:
+    if job.get("format") not in SUPPORTED_JOB_FORMATS:
         parser.error("Unsupported job format")
     body = dict(job)
     expected = body.pop("manifestSHA256", None)

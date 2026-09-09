@@ -6,6 +6,7 @@ import plistlib
 import shutil
 import subprocess
 import sys
+import tarfile
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,7 @@ sys.path.insert(0, str(SCRIPTS))
 packager = importlib.import_module("build_studio_app")
 preflight = importlib.import_module("preflight_python_environment")
 installer = importlib.import_module("install_studio_runtime")
+dt_packager = importlib.import_module("build_drawthings_client")
 
 
 @pytest.fixture
@@ -67,6 +69,41 @@ def test_failed_signature_preserves_previous_bundle(source, monkeypatch):
         packager.package_app(source, "release")
     assert (app / "working").read_text() == "previous build"
     assert not list(app.parent.glob(".studio-package-*"))
+
+
+def test_optional_drawthings_distribution_includes_editable_source_and_verifies_hashes(
+    source, monkeypatch
+):
+    package = source / "integrations/drawthings-client"
+    package.mkdir(parents=True)
+    (package / "Package.swift").write_text("// fixture package")
+    (package / "Package.resolved").write_text(
+        json.dumps({"pins": [{"identity": "fixture-dependency"}]})
+    )
+    scratch = source / "sdk-build"
+    dependency = scratch / "checkouts/fixture-dependency"
+    dependency.mkdir(parents=True)
+    (dependency / "Package.swift").write_text("// editable source")
+    (dependency / "LICENSE").write_text("fixture license")
+    (dependency / ".git").mkdir()
+    (dependency / ".git/config").write_text("must not ship")
+    (scratch / "release").mkdir()
+    (scratch / "release/WeeToddDrawThings").write_text("helper fixture")
+    distribution = dt_packager.package_helper(source, scratch, source / "distribution")
+    with tarfile.open(distribution / "DrawThings-Corresponding-Source.tar.gz") as archive:
+        names = archive.getnames()
+        assert "dependencies/fixture-dependency/LICENSE" in names
+        assert "helper/Package.swift" in names
+        assert "rebuild.py" in names
+        assert not any(".git" in Path(name).parts for name in names)
+    monkeypatch.setattr(packager.subprocess, "run", lambda *args, **kwargs: None)
+    app = packager.package_app(source, "release", distribution)
+    assert (app / "Contents/MacOS/WeeToddDrawThings").read_text() == "helper fixture"
+    assert (app / "Contents/Resources/DrawThings/DrawThings-Notices.txt").is_file()
+    (distribution / "WeeToddDrawThings").write_text("modified after manifest")
+    with pytest.raises(ValueError, match="hash mismatch"):
+        packager.package_app(source, "release", distribution)
+    assert (app / "Contents/MacOS/WeeToddDrawThings").read_text() == "helper fixture"
 
 
 def test_installer_runs_shipped_preflight_before_creating_runtime(source, monkeypatch):

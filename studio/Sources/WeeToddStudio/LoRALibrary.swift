@@ -24,7 +24,9 @@ struct LoRALibrary: View {
       }
       if store.selectedClip == nil {
         Picker("Model", selection: $browsingEngine) {
-          ForEach(Engine.allCases.filter { $0 != .movie }) { Text($0.label).tag($0) }
+          ForEach(Engine.allCases.filter { $0 != .movie && $0 != .drawThings }) {
+            Text($0.label).tag($0)
+          }
         }.onChange(of: browsingEngine) { _, value in
           draft = nil
           importModel = LoRAModel(rawValue: value.rawValue) ?? .ltx25

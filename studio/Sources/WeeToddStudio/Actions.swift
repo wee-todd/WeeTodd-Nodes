@@ -35,6 +35,22 @@ enum ClipState: String {
 @MainActor extension StudioStore {
   func signature(for clip: Clip) -> String {
     var parts = [clip.generationFingerprint]
+    if clip.engine == .drawThings {
+      if let connection = drawThingsConnections.first(where: { $0.id == clip.drawThings?.profileID }) {
+        parts.append("\(connection.route)|\(connection.host)|\(connection.port)|\(connection.useTLS)")
+      }
+      if clip.drawThings?.configuration["fps"] == nil {
+        parts.append("generationFPS:\(clip.settings(in: project).fps)")
+      }
+      for attachment in clip.attachments.sorted(by: { $0.id.uuidString < $1.id.uuidString }) {
+        guard let asset = allAssets.first(where: { $0.id == attachment.assetID }),
+          let data = FileManager.default.contents(atPath: asset.path) else { continue }
+        let hash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        parts.append("\(attachment.role.rawValue)|\(asset.path)|\(hash)")
+      }
+      return SHA256.hash(data: Data(parts.joined(separator: "\n").utf8))
+        .map { String(format: "%02x", $0) }.joined()
+    }
     var paths = clip.attachments.compactMap { attachment in
       allAssets.first { $0.id == attachment.assetID }?.path
     }
@@ -64,6 +80,40 @@ enum ClipState: String {
     if let message = validationErrors[clip.id] { result.append(message) }
     if clip.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
       result.append("Add a prompt")
+    }
+    if clip.engine == .drawThings {
+      if clip.generationWidth < 64 || clip.generationHeight < 64
+        || clip.generationWidth % 64 != 0 || clip.generationHeight % 64 != 0 {
+        result.append("Choose Draw Things dimensions on the 64-pixel grid")
+      }
+      if !clip.duration.isFinite || clip.duration <= 0 { result.append("Set a positive duration") }
+      if !drawThingsConnections.contains(where: { $0.id == clip.drawThings?.profileID }) {
+        result.append("Choose a Draw Things connection")
+      }
+      if clip.drawThings?.modelID.isEmpty != false { result.append("Choose a Draw Things video model") }
+      if !FileManager.default.isExecutableFile(atPath: runtime.drawThingsHelperPath ?? "") {
+        result.append("Connect the Draw Things transport helper")
+      }
+      let first = clip.attachments.filter { $0.role == .first }
+      let unsupported = clip.attachments.filter { $0.role != .first }
+      if first.count > 1 { result.append("Use only one Draw Things first-frame image") }
+      if !unsupported.isEmpty { result.append("Remove unsupported Draw Things attachment roles") }
+      if let attachment = first.first {
+        guard let asset = allAssets.first(where: { $0.id == attachment.assetID }) else {
+          result.append("Relink the Draw Things first-frame image"); return Array(Set(result)).sorted()
+        }
+        if asset.kind != .image { result.append("Use an image for the Draw Things first frame") }
+        if !FileManager.default.fileExists(atPath: asset.path) { result.append("Relink the Draw Things first-frame image") }
+        if attachment.strength != 1 { result.append("Set Draw Things first-frame strength to 1") }
+      }
+      if !(clip.extensionDirection).isEmpty { result.append("Remove native clip extension settings") }
+      if clip.motionFidelity?.enabled == true { result.append("Disable native Motion Fidelity for this Draw Things clip") }
+      if let estimate = drawThingsClipEstimates[clip.id],
+        estimate["studioSignature"] as? String == signature(for: clip),
+        estimate["eligibility"] as? String != "allowed" {
+        result.append("Review Draw Things CU and connection eligibility")
+      }
+      return Array(Set(result)).sorted()
     }
     if clip.generationWidth % 32 != 0 || clip.generationHeight % 32 != 0
       || clip.generationWidth < 64 || clip.generationHeight < 64
@@ -146,7 +196,7 @@ enum ClipState: String {
           id: "runtime", priority: 0, title: "Connect the MLX renderer",
           detail: "Choose the repository and Python environment.", destination: "runtime"))
     }
-    if profiles.isEmpty {
+    if profiles.isEmpty && project.clips.contains(where: { $0.engine != .movie && $0.engine != .drawThings }) {
       items.append(
         ActionItem(
           id: "profiles", priority: 0, title: "Set up models",
@@ -160,7 +210,7 @@ enum ClipState: String {
           ActionItem(
             id: c.id.uuidString + "-\(i)", priority: 0, title: c.name + " · " + text,
             detail: "Resolve before generation or export.", clipID: c.id,
-            destination: text.contains("recipe")
+            destination: c.engine == .drawThings ? "drawThings" : text.contains("recipe")
               || text.localizedCaseInsensitiveContains("checkpoint")
               || text.localizedCaseInsensitiveContains("model")
               || text.localizedCaseInsensitiveContains("encoder")
@@ -233,6 +283,7 @@ enum ClipState: String {
       return
     }
     switch item.destination {
+    case "drawThings": showDrawThings = true
     case "project": showProjectSettings = true
     case "runtime": showRuntime = true
     case "prompt": showPrompt = true
@@ -260,6 +311,7 @@ enum ClipState: String {
     Task {
       do {
         var body = try payload()
+        body["drawThingsConnections"] = try drawThingsConnections.map { try $0.object() }
         body["clipOnly"] = clipOnly
         body["generateIDs"] = project.clips.filter {
           $0.engine != .movie

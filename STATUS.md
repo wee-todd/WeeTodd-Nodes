@@ -7,7 +7,7 @@ Reconciled 2026-09-09 against the local source and saved acceptance evidence.
 The shared Python/MLX backend runs through ComfyUI or `scripts/render_headless.py`.
 The headless process blocks ComfyUI and node-catalog imports. It accepts versioned JSON
 recipes and records resolved assets, effective conditioning, results, and runtime unloading.
-The catalog contains 121 nodes and 43 UI workflows. Static validation establishes portable
+The catalog contains 127 nodes and 46 UI workflows. Static validation establishes portable
 contracts; it does not establish that every workflow has local models and selected input media.
 
 | Engine | Implemented | Qualification limits |
@@ -29,6 +29,26 @@ Explicit guided setup now discovers supported component layouts and handles pinn
 and selected conversions outside graph execution.
 
 ## Standalone graphical interface
+
+Draw Things integration is experimental. Studio includes saved gRPC/cloud connections, Keychain
+credentials, image generation into the existing asset stores, a Draw Things clip type, CU preflight,
+first-frame image inputs, and compatible server-resident LoRAs/groups. One shared adapter serves
+Studio, v3 headless jobs, and ComfyUI. The transport preserves separate video/audio tensors and
+refuses silent completion for audiovisual models. Headless jobs run sequentially, verify completed
+artifact hashes, and require a deliberate new attempt after an uncertain remote submission or loss
+of an already-generated artifact.
+
+Synthetic gRPC image and audiovisual generation passed through Studio's native interface. Real
+FFmpeg tests establish transport, timing, failure handling, and media publication. A CLI job with
+Studio closed also completed image-to-first-frame video generation and movie assembly with an
+existing clip, dissolve, title, and supplementary audio. These fixture-based checks do not establish
+model quality or live account compatibility. Offline resume reused both remote artifacts and the
+same final movie hash after the fixture server stopped. Direct Cloud uses
+a read-only free-request/PAYG check and fresh CU policy; unknown allowance stays blocked. The DT+
+App Bridge has no verified free-only billing contract and cannot generate in this implementation.
+Advanced reference/control/audio conditioning and local LoRA conversion/upload remain unsupported.
+The optional helper distribution includes dependency source and rebuild/replacement instructions.
+See [Draw Things setup and qualification](studio/README.md#draw-things--experimental).
 
 WeeTodd Studio now lives in `studio/` as a native Swift macOS application around the shared
 renderer. It includes the requested editor layout, full-window prompt editor, native Light/Dark

@@ -1,0 +1,6 @@
+{
+  "1": {"class_type": "WeeToddDrawThingsConnection", "inputs": {"route": "grpc", "host": "127.0.0.1", "port": 7859, "use_tls": false, "helper_path": "integrations/drawthings-client/.build/release/WeeToddDrawThings", "credential_env": "", "self_hosted_confirmed": false}},
+  "2": {"class_type": "WeeToddDrawThingsRequest", "inputs": {"operation": "image", "model_id": "paste-exact-server-model-id", "prompt": "A red cube on a gray studio surface", "negative_prompt": "", "width": 512, "height": 512, "steps": 4, "seed": 42, "num_frames": 1, "fps": 24.0, "settings_json": "{}", "inputs_json": "[]", "loras_json": "[]"}},
+  "3": {"class_type": "WeeToddDrawThingsGenerateImage", "inputs": {"connection": ["1", 0], "request": ["2", 0]}},
+  "5": {"class_type": "SaveImage", "inputs": {"images": ["3", 0], "filename_prefix": "WeeTodd/DrawThings/image"}}
+}

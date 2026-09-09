@@ -5336,3 +5336,14 @@ from .motion_nodes import (  # noqa: E402
 
 NODE_CLASS_MAPPINGS.update(MOTION_NODE_CLASS_MAPPINGS)
 NODE_DISPLAY_NAME_MAPPINGS.update(MOTION_NODE_DISPLAY_NAME_MAPPINGS)
+
+# Draw Things wrappers defer adapter, network, media, and tensor imports until execution.
+from .drawthings_nodes import (  # noqa: E402
+    NODE_CLASS_MAPPINGS as DRAWTHINGS_NODE_CLASS_MAPPINGS,
+)
+from .drawthings_nodes import (  # noqa: E402
+    NODE_DISPLAY_NAME_MAPPINGS as DRAWTHINGS_NODE_DISPLAY_NAME_MAPPINGS,
+)
+
+NODE_CLASS_MAPPINGS.update(DRAWTHINGS_NODE_CLASS_MAPPINGS)
+NODE_DISPLAY_NAME_MAPPINGS.update(DRAWTHINGS_NODE_DISPLAY_NAME_MAPPINGS)
