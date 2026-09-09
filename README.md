@@ -241,6 +241,9 @@ hashes, reuse checksum-matching files from selected roots, and prepare outputs i
 The [preconverted Q8 vision encoder](https://huggingface.co/Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged)
 avoids local conversion and is the recommended H3 encoder download. It retains source terms and
 requires Hugging Face access. Source conversion remains available as an alternative.
+For LTX 2.5, the [preconverted distilled Q8 package](https://huggingface.co/Vayden/LTX-2.5-MLX-Q8-Paged)
+includes the paged transformer and Gemma encoder, video/audio VAEs and spatial upscaler. Guided setup
+downloads the prepared components directly; local quantization is optional.
 The same prepared components can be selected by Studio, the headless runner and existing ComfyUI nodes.
 
 Choose a workflow first; install only its dependencies. The supported H3/LTX candidates are

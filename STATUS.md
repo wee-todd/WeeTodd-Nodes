@@ -50,8 +50,9 @@ header fixtures and establishes editing/transport behavior, not visual quality.
 Guided setup now provides seven built-in H3/LTX presets, header-based existing-model reuse, validated
 recipe creation, memory-policy advisories and explicit pinned downloads/preparation. Interrupted
 downloads resume; SHA-256 and staged output publication protect existing models. Final media
-preflight remains required for image/reference clips. Preconverted Q8 distribution is handled through
-versioned source releases with their applicable model terms.
+preflight remains required for image/reference clips. Published Vayden releases provide the H3 Q8
+vision encoder and complete LTX 2.5 distilled Q8 component set. The catalog pins each release and
+every file checksum; source conversion remains optional and applicable model terms are retained.
 
 The app is an initial development build. FFmpeg/FFprobe and optional RIFE still need configuration;
 retail signing/notarization and clean-Mac qualification remain release work. MetalFX interpolation is

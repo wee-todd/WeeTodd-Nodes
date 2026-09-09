@@ -937,5 +937,1680 @@
         "target": "provenance/SOURCE_MODIFICATIONS.md"
       }
     ]
+  },
+  {
+    "descriptor": {
+      "id": "ltx25-distilled-q8-preconverted",
+      "name": "LTX 2.5 distilled Q8 \u00b7 Preconverted (Recommended)",
+      "description": "Download the ready-to-use paged Q8 distilled transformer and Gemma encoder, convolutional video VAE, audio VAE and spatial upscaler. No local conversion.",
+      "downloadBytes": 43486034259,
+      "requiredDiskBytes": 43754469715,
+      "sourceURL": "https://huggingface.co/Vayden/LTX-2.5-MLX-Q8-Paged/tree/445f3d7e46fd850884750c32b49eb5e629c3b686",
+      "licenseURL": "https://huggingface.co/Vayden/LTX-2.5-MLX-Q8-Paged/blob/445f3d7e46fd850884750c32b49eb5e629c3b686/LICENSE",
+      "licenseNotice": "Retains the LTX-2.x Community License, its use restrictions and separate Gemma attribution. Review the complete source terms and accept access on Hugging Face.",
+      "outputKind": "directory",
+      "engines": [
+        "ltx25"
+      ]
+    },
+    "kind": "ltx25",
+    "files": [
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/fixed.safetensors",
+        "size": 4887339007,
+        "sha256": "404f2814616d69f0dd1466c98f65a4c5c187e531528e024afbf3432346f4cf2b",
+        "target": "transformer/pages/fixed.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-000.safetensors",
+        "size": 411256296,
+        "sha256": "d10b0b4fb1e5844be8ac493c6e3889de36bb486fd56d379ab6d50ecb6cff73be",
+        "target": "transformer/pages/layer-000.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-001.safetensors",
+        "size": 411256302,
+        "sha256": "46d5a0fc684753b6412a937c59c164fa5ea95e3f27de867d639f864e50951e33",
+        "target": "transformer/pages/layer-001.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-002.safetensors",
+        "size": 411256264,
+        "sha256": "9c8bcb6310ce89947aa7aae7eed49cf09ee7d9bcd295a78937107fdc95d56e31",
+        "target": "transformer/pages/layer-002.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-003.safetensors",
+        "size": 411256292,
+        "sha256": "37fe3f1747356d439e896633db6293fb814b04dbf5b95984887474516bb191b0",
+        "target": "transformer/pages/layer-003.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-004.safetensors",
+        "size": 411256272,
+        "sha256": "af884b137ac2d97c9ce4a4f51178033ef50f59931d99d05749f540adcb232027",
+        "target": "transformer/pages/layer-004.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-005.safetensors",
+        "size": 411256296,
+        "sha256": "6e8f004c2a7d834fa1bae379730efd139022d76d7a159537b4942e7fb6e0a44a",
+        "target": "transformer/pages/layer-005.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-006.safetensors",
+        "size": 411256234,
+        "sha256": "fd6500a925cdefa612e3b4f209a921b05b4faa4a8d746b33e08f9e75ac662f50",
+        "target": "transformer/pages/layer-006.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-007.safetensors",
+        "size": 411256284,
+        "sha256": "650b02f49481c861defb2d3e79de2d26e2d67ab23392da17df0f2d09699c7d1a",
+        "target": "transformer/pages/layer-007.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-008.safetensors",
+        "size": 411256232,
+        "sha256": "f71f96b38cc4bb7e96b40052fc3c1e63635a17277aaa2d18f93b41bf524696ce",
+        "target": "transformer/pages/layer-008.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-009.safetensors",
+        "size": 411256316,
+        "sha256": "8e9461c5aae0a2745fe205601a58fdd7074064aa077ca1bf77afb0c520c7397e",
+        "target": "transformer/pages/layer-009.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-010.safetensors",
+        "size": 411256398,
+        "sha256": "583753552ba863c34a36961a8fe9a7ba22a068b3e5d69d8cfbc86b82a70986ab",
+        "target": "transformer/pages/layer-010.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-011.safetensors",
+        "size": 411256426,
+        "sha256": "edb1132fe2ad271489bc1faea2b7ef0db56c91565f762e96e8f53b63d8098892",
+        "target": "transformer/pages/layer-011.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-012.safetensors",
+        "size": 411256442,
+        "sha256": "312fe1fb39b6b1e22c0ccdd169fbb3e2cfab5c38b40019a9f4c580d23c1af2e3",
+        "target": "transformer/pages/layer-012.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-013.safetensors",
+        "size": 411256450,
+        "sha256": "c65c79aeb3c73d5b8990437b3e2a3ff5255a4072462e19be319d2614c72f0228",
+        "target": "transformer/pages/layer-013.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-014.safetensors",
+        "size": 411256414,
+        "sha256": "b4740548e26009c6ed73fb04626fb8be9f64b8add7e7f22be2fb0075b5988cd7",
+        "target": "transformer/pages/layer-014.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-015.safetensors",
+        "size": 411256394,
+        "sha256": "398114aea159abdb53e3beb918e853387a3dac6417948782b00bbaf3726d21c4",
+        "target": "transformer/pages/layer-015.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-016.safetensors",
+        "size": 411256424,
+        "sha256": "6948ca486fbf3737a1830aa3796aa83a494ec3fcd0e5af21ca6744ed448497e1",
+        "target": "transformer/pages/layer-016.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-017.safetensors",
+        "size": 411256458,
+        "sha256": "a2345b328c11b16911acf0ca9fcfd4c8cf1f77e841692278c829639c8369b595",
+        "target": "transformer/pages/layer-017.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-018.safetensors",
+        "size": 411256402,
+        "sha256": "a28ea01735612b12e64726d9618790cb18ab3fd2f3fa21078b45c4722ccea76b",
+        "target": "transformer/pages/layer-018.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-019.safetensors",
+        "size": 411256370,
+        "sha256": "4d8f754810dfcdb72567b209f637eaa0dfa28256d94ffb7439002c41553abe47",
+        "target": "transformer/pages/layer-019.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-020.safetensors",
+        "size": 411256450,
+        "sha256": "bc974a77b48c9d5ee2512ba098453e8057c899e078a791d0d278a58ae728c47f",
+        "target": "transformer/pages/layer-020.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-021.safetensors",
+        "size": 411256454,
+        "sha256": "0f3544724d44c8323dd5a8e2c73935062510bd19243a9e61ee7dbb8a05725a1a",
+        "target": "transformer/pages/layer-021.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-022.safetensors",
+        "size": 411256368,
+        "sha256": "8e5437938b06898bb2e77035e5ad399251e2b2166656b12418037470939760bb",
+        "target": "transformer/pages/layer-022.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-023.safetensors",
+        "size": 411256454,
+        "sha256": "986833f78665b6d282482ee26e27bdf522ced593f680e39c75684f5f19afaeb5",
+        "target": "transformer/pages/layer-023.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-024.safetensors",
+        "size": 411256398,
+        "sha256": "d27f4e8feef814799846212579fc6646b6b7887442a2961d038238011d5b7a40",
+        "target": "transformer/pages/layer-024.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-025.safetensors",
+        "size": 411256428,
+        "sha256": "f57e80b6a31224cf743faf260834a7c1c99ce6fcd7cf0585992dcbbdccf8580a",
+        "target": "transformer/pages/layer-025.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-026.safetensors",
+        "size": 411256404,
+        "sha256": "edaf57c89365bfb5d0cb08c03b08be22205f44b966e11d155d4035fbeda9031a",
+        "target": "transformer/pages/layer-026.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-027.safetensors",
+        "size": 411256436,
+        "sha256": "c63940eefb41ee4acc2cfeddb0f0d7302e719dadf6e92069a5defc8500bd1273",
+        "target": "transformer/pages/layer-027.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-028.safetensors",
+        "size": 411256456,
+        "sha256": "cb0d1a06415aea45e09831c3e4e5d45e8db3779dd1770040c30b021c3a3dbce5",
+        "target": "transformer/pages/layer-028.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-029.safetensors",
+        "size": 411256478,
+        "sha256": "5be4722faebe204a21624630ed166092be55832a058d4e65277bf504da1c1f15",
+        "target": "transformer/pages/layer-029.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-030.safetensors",
+        "size": 411256462,
+        "sha256": "41a5e30ee0ffabd84eaaecea58c871e130f9d4c1d0fe8ddd3db55f75b1196355",
+        "target": "transformer/pages/layer-030.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-031.safetensors",
+        "size": 411256446,
+        "sha256": "c31efb5bfbc8968dea761f0b5a9da65be6a1cbef78f8aac051e37d52efa3b698",
+        "target": "transformer/pages/layer-031.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-032.safetensors",
+        "size": 411256438,
+        "sha256": "73c73b8dc1975fad6b8908b451f53304f97922465459d0dcc2ec428a570031f3",
+        "target": "transformer/pages/layer-032.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-033.safetensors",
+        "size": 411256444,
+        "sha256": "6965c431e527345f36880c7015e4af3f69e418dc587b951fa64bf7de189a098b",
+        "target": "transformer/pages/layer-033.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-034.safetensors",
+        "size": 411256402,
+        "sha256": "d6f9aa014509fdfb5e0dfab9ea5d58bdc81f144ec8a2536c8d04492691ac3668",
+        "target": "transformer/pages/layer-034.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-035.safetensors",
+        "size": 411256460,
+        "sha256": "5dcdae4a2c55c4d45260b45382724d447e5be5caed7c2d3a9749680c4eac40f6",
+        "target": "transformer/pages/layer-035.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-036.safetensors",
+        "size": 411256456,
+        "sha256": "d5158da49732a40e63e33f40165542033a4ea90a232a2ffdf287bd2adf3b9d12",
+        "target": "transformer/pages/layer-036.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-037.safetensors",
+        "size": 411256456,
+        "sha256": "9af351a47bf9ffce39916104095578f781cabad8310cedea846f9add0c4b17dd",
+        "target": "transformer/pages/layer-037.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-038.safetensors",
+        "size": 411256436,
+        "sha256": "902740c00b4feeb42dcb9f857b958f6e7f80a99699c3ef12ee4a735f85b1461d",
+        "target": "transformer/pages/layer-038.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-039.safetensors",
+        "size": 411256362,
+        "sha256": "a8310f4acbbc12ea970dcb312c88408ff4389dfcdb7602f99ea7b5cea6b2d611",
+        "target": "transformer/pages/layer-039.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-040.safetensors",
+        "size": 411256428,
+        "sha256": "4555e27c040476a22b27890bfc9e3d3558e2399db10da0bf94087cfa906eb2ad",
+        "target": "transformer/pages/layer-040.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-041.safetensors",
+        "size": 411256418,
+        "sha256": "0c92d343a14e689b34d3ce1c7db39a64be0523eac369ecad1dd6c31bf00480b8",
+        "target": "transformer/pages/layer-041.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-042.safetensors",
+        "size": 411256374,
+        "sha256": "f6ebf486b511fd165c7035831c67fbf8c4399e41ea8eaff7912d1e89790dbe03",
+        "target": "transformer/pages/layer-042.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-043.safetensors",
+        "size": 411256410,
+        "sha256": "8df75a4c855349394a2def6e2da9c7ba0488e39a275cd1b2c50fa5b1b5c06325",
+        "target": "transformer/pages/layer-043.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-044.safetensors",
+        "size": 411256438,
+        "sha256": "762c79cc2e62cd5fd90ceca9518cd1bbd91f634c2b76a1ced9ed60103365c1b1",
+        "target": "transformer/pages/layer-044.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-045.safetensors",
+        "size": 411256448,
+        "sha256": "63887c8005eaae9ec25998587e62676b3a0de9de3ab089f7275495d6204ca1e0",
+        "target": "transformer/pages/layer-045.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-046.safetensors",
+        "size": 411256418,
+        "sha256": "553f3c768b4a8c978407a00af306747cf82f58681ef9aea0d25788cd18d35cfb",
+        "target": "transformer/pages/layer-046.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-047.safetensors",
+        "size": 411256402,
+        "sha256": "8fd894a4a2538ecaa852f5a6486d8188e2eaefc85e1c3ae20ebf242d2dda6b7f",
+        "target": "transformer/pages/layer-047.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/paged_manifest.json",
+        "size": 48373,
+        "sha256": "1adc3e111be2d07de493093dbee38f27cc1cba65e363be8a1c519dd5882b9017",
+        "target": "transformer/paged_manifest.json"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/fixed.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "transformer/pages/fixed.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-000.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "transformer/pages/layer-000.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-001.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "transformer/pages/layer-001.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-002.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "transformer/pages/layer-002.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-003.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "transformer/pages/layer-003.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-004.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "transformer/pages/layer-004.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-005.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "transformer/pages/layer-005.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-006.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "transformer/pages/layer-006.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-007.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "transformer/pages/layer-007.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-008.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "transformer/pages/layer-008.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-009.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "transformer/pages/layer-009.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-010.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "transformer/pages/layer-010.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-011.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "transformer/pages/layer-011.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-012.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "transformer/pages/layer-012.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-013.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "transformer/pages/layer-013.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-014.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "transformer/pages/layer-014.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-015.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "transformer/pages/layer-015.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-016.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "transformer/pages/layer-016.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-017.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "transformer/pages/layer-017.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-018.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "transformer/pages/layer-018.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-019.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "transformer/pages/layer-019.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-020.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "transformer/pages/layer-020.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-021.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "transformer/pages/layer-021.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-022.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "transformer/pages/layer-022.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-023.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "transformer/pages/layer-023.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-024.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "transformer/pages/layer-024.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-025.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "transformer/pages/layer-025.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-026.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "transformer/pages/layer-026.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-027.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "transformer/pages/layer-027.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-028.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "transformer/pages/layer-028.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-029.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "transformer/pages/layer-029.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-030.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "transformer/pages/layer-030.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-031.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "transformer/pages/layer-031.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-032.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "transformer/pages/layer-032.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-033.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "transformer/pages/layer-033.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-034.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "transformer/pages/layer-034.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-035.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "transformer/pages/layer-035.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-036.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "transformer/pages/layer-036.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-037.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "transformer/pages/layer-037.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-038.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "transformer/pages/layer-038.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-039.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "transformer/pages/layer-039.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-040.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "transformer/pages/layer-040.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-041.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "transformer/pages/layer-041.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-042.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "transformer/pages/layer-042.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-043.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "transformer/pages/layer-043.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-044.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "transformer/pages/layer-044.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-045.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "transformer/pages/layer-045.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-046.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "transformer/pages/layer-046.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "transformer/pages/layer-047.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "transformer/pages/layer-047.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/fixed.safetensors",
+        "size": 4462351857,
+        "sha256": "a1346c6939270340158b50764ae39339a030d9ed123bbe9fed5ef283767c3769",
+        "target": "gemma/pages/fixed.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-000.safetensors",
+        "size": 238176303,
+        "sha256": "955adbe5a2edd7d2e2fe401bc6d3afe702d49cdb2329aebfcac7bfccff484604",
+        "target": "gemma/pages/layer-000.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-001.safetensors",
+        "size": 238176317,
+        "sha256": "18c939897a5c190941bec2666caee53060f917275c41247ad0ce14898470f403",
+        "target": "gemma/pages/layer-001.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-002.safetensors",
+        "size": 238176321,
+        "sha256": "5545ce76bcafe1da432456fab217d269f63135a65f22bdaa4b01a53281306b6b",
+        "target": "gemma/pages/layer-002.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-003.safetensors",
+        "size": 238176293,
+        "sha256": "d6bf9247da97761356ffa4805b8c4d161098de8a60eff4f9ed58a85cd5f698af",
+        "target": "gemma/pages/layer-003.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-004.safetensors",
+        "size": 238176299,
+        "sha256": "0912b01c1b896708fc72b021cde3422148f6ca528092a7bd0732775fea51f509",
+        "target": "gemma/pages/layer-004.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-005.safetensors",
+        "size": 256977653,
+        "sha256": "51c93ddf0c4def75b086e236599bdc6de22defd99505f18b94b3cf8c3c04220c",
+        "target": "gemma/pages/layer-005.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-006.safetensors",
+        "size": 238176303,
+        "sha256": "603c263624d23c3f6169ee9ff2e8938a5f47cd9d83912f138161c64208a6c92e",
+        "target": "gemma/pages/layer-006.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-007.safetensors",
+        "size": 238176307,
+        "sha256": "5507c126fd202c83e7bf1d9ef833dc3266474882a264f939563ebb9d5460eacb",
+        "target": "gemma/pages/layer-007.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-008.safetensors",
+        "size": 238176325,
+        "sha256": "a037a7b54ce988750342c1b6604dad2d7eb314d4aa3610fb811fb82d60f81780",
+        "target": "gemma/pages/layer-008.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-009.safetensors",
+        "size": 238176315,
+        "sha256": "9742a1168dd4f8f37356961e4d0e44b41045a1a80871e0e2e1617b38ef9cc0f0",
+        "target": "gemma/pages/layer-009.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-010.safetensors",
+        "size": 238176333,
+        "sha256": "d1116c1f4e36037b6633d3838aa60393b8558fff3aaa53e67d0cc43e7e2df9ed",
+        "target": "gemma/pages/layer-010.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-011.safetensors",
+        "size": 256977656,
+        "sha256": "f4faf1d37222cdde286b576cf6e7e72b69b60853d7c9cee61e546a79fbe3dab2",
+        "target": "gemma/pages/layer-011.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-012.safetensors",
+        "size": 238176319,
+        "sha256": "4a8d8f3345d1452226a90e2005f64b2ac758017051b22d7fe7257e934e1d1e1b",
+        "target": "gemma/pages/layer-012.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-013.safetensors",
+        "size": 238176321,
+        "sha256": "968e277987e0b960379b769a831686ec9a8b53ca1dfa2f43112ebc89659b2a48",
+        "target": "gemma/pages/layer-013.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-014.safetensors",
+        "size": 238176331,
+        "sha256": "28ea152dd5f0631b06b17fb7a0b8434c3b0a86ac0377075b6606a4229112d4a6",
+        "target": "gemma/pages/layer-014.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-015.safetensors",
+        "size": 238176319,
+        "sha256": "1364cbc7df529d14d6a405a3aef39fbd623af9fa69c8fff69dddbabb559858ac",
+        "target": "gemma/pages/layer-015.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-016.safetensors",
+        "size": 238176331,
+        "sha256": "ec6f9d42053447561425c3286065ac64e1837ac6a4cee9be5e309dd64ee2b393",
+        "target": "gemma/pages/layer-016.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-017.safetensors",
+        "size": 256977640,
+        "sha256": "e238f8c7af3de4ec5ce2b23ba4e4313e4e5dd2bde46b02e4f1c955a9137ecc74",
+        "target": "gemma/pages/layer-017.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-018.safetensors",
+        "size": 238176327,
+        "sha256": "1ec05159651fa7dda24984ee6f69f7f09c0f61b90a0b25abddaf47173e7c2b5f",
+        "target": "gemma/pages/layer-018.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-019.safetensors",
+        "size": 238176325,
+        "sha256": "a957bc4d9499a0957a3e61188715f44b7e6519183be1965bc2dc75fe8caa704b",
+        "target": "gemma/pages/layer-019.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-020.safetensors",
+        "size": 238176329,
+        "sha256": "b39849de4ec6bd807e7fef310b495c218e244fa00d193594113b573d5c1b4200",
+        "target": "gemma/pages/layer-020.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-021.safetensors",
+        "size": 238176341,
+        "sha256": "5fcc2fd8c92c95210558b75b816b60061b31927bff793aaf52cd0d6e4b69ee5f",
+        "target": "gemma/pages/layer-021.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-022.safetensors",
+        "size": 238176327,
+        "sha256": "9544d311b629d80d78d2a8d20db7ed584e8da79834945f4037665279319db676",
+        "target": "gemma/pages/layer-022.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-023.safetensors",
+        "size": 256977670,
+        "sha256": "de209b11b78d90d6722149ab73a46fa83e607be2edc295681a4d363b280e69ce",
+        "target": "gemma/pages/layer-023.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-024.safetensors",
+        "size": 238176327,
+        "sha256": "13ecf5657a7af13f3ccc66689f3d2ed646f7fcaafcab7b29bbdfc7843cd5165c",
+        "target": "gemma/pages/layer-024.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-025.safetensors",
+        "size": 238176339,
+        "sha256": "3fbedf5561e37df2aae78e0bade40ef4e0bffa528788654dc984264830106a03",
+        "target": "gemma/pages/layer-025.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-026.safetensors",
+        "size": 238176345,
+        "sha256": "467f2c0215b7dffba66aacdfac6140299d7a6f0ad67d33acd2c58d1dfd01de3d",
+        "target": "gemma/pages/layer-026.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-027.safetensors",
+        "size": 238176341,
+        "sha256": "687ac65a4e6d14331a0bd073663ae7426982d660df3b8e2c59510ba821938c63",
+        "target": "gemma/pages/layer-027.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-028.safetensors",
+        "size": 238176335,
+        "sha256": "e86a52171fe0df97724dacbc1dc3950d6f5a0c6c8f95dfdbfcb89635789f48c7",
+        "target": "gemma/pages/layer-028.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-029.safetensors",
+        "size": 256977664,
+        "sha256": "e8bfaeb166710846e723f71671216e7266338cef20a50518c5b676c4caac603c",
+        "target": "gemma/pages/layer-029.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-030.safetensors",
+        "size": 238176329,
+        "sha256": "d470ebbb0b83474dbb47bcba0a0cbc3e1cf7ee716861978d6652296c7038f515",
+        "target": "gemma/pages/layer-030.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-031.safetensors",
+        "size": 238176343,
+        "sha256": "9c7e7b76700b3949e0e14b8eb16547e26802483311ef2d986f51f1dc36d85a89",
+        "target": "gemma/pages/layer-031.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-032.safetensors",
+        "size": 238176329,
+        "sha256": "9aab46de69df7d46379541e7030426422e673b5001360c803495893189e88e51",
+        "target": "gemma/pages/layer-032.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-033.safetensors",
+        "size": 238176337,
+        "sha256": "2313e3bcf84ab14b68d5f3f737ced92a8d1500cdb99db5b579da50248d0336dc",
+        "target": "gemma/pages/layer-033.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-034.safetensors",
+        "size": 238176349,
+        "sha256": "9cc9ee42e70dce16226a0c542a7fa71f048deecd6ce5a1d0d3d6d733cabaad06",
+        "target": "gemma/pages/layer-034.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-035.safetensors",
+        "size": 256977654,
+        "sha256": "258bd7cdac2a1da011b5b577c70006d519cee4058aa4fc24d7b34922d87f4cfa",
+        "target": "gemma/pages/layer-035.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-036.safetensors",
+        "size": 238176335,
+        "sha256": "415778491a9366c8abfa3257dd33fa40650cf18de367b70334b9f5a302ef23f2",
+        "target": "gemma/pages/layer-036.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-037.safetensors",
+        "size": 238176345,
+        "sha256": "1a5a155326353677942e8ada37f721a04955b050ca1883ac584bcaf9a8db74b4",
+        "target": "gemma/pages/layer-037.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-038.safetensors",
+        "size": 238176337,
+        "sha256": "2e02675a3fa04fe98f70da8c420597aa1df98ffedfa122f240c08d6ea32cd2ba",
+        "target": "gemma/pages/layer-038.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-039.safetensors",
+        "size": 238176317,
+        "sha256": "b18df9c2d269a86723227b828b2cc14854119a57edb614a4667e5358f9cfbe6f",
+        "target": "gemma/pages/layer-039.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-040.safetensors",
+        "size": 238176331,
+        "sha256": "b53501cb1998ad6737c34035fd46d2402885cf081b424e7d611591bf3a20d2e9",
+        "target": "gemma/pages/layer-040.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-041.safetensors",
+        "size": 256977674,
+        "sha256": "72529d5cbd23f279af4afe0bcfee6418d916b6d0d5382a2cf3326a60d2689865",
+        "target": "gemma/pages/layer-041.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-042.safetensors",
+        "size": 238176329,
+        "sha256": "abda066447ec8379c63bf5871a4c4eaaa99190411ec53b50bb35f949b9eaf57f",
+        "target": "gemma/pages/layer-042.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-043.safetensors",
+        "size": 238176345,
+        "sha256": "95aeefe012c613a2c6bb2ef396a43a7186d63920fb17d5fa6dfc47dab794199f",
+        "target": "gemma/pages/layer-043.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-044.safetensors",
+        "size": 238176339,
+        "sha256": "f7209231a294a7e567ed9fd066965a8810fa4a298e747b7526c542e885863391",
+        "target": "gemma/pages/layer-044.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-045.safetensors",
+        "size": 238176349,
+        "sha256": "83c483ed322725246fe6e4e05266410d38ba07e98e11f16e5722938a41e8a27c",
+        "target": "gemma/pages/layer-045.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-046.safetensors",
+        "size": 238176353,
+        "sha256": "e74107aa37812cdea6130051d49c089f0ae45509e3f2c551368f9536b1a0512c",
+        "target": "gemma/pages/layer-046.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-047.safetensors",
+        "size": 256977660,
+        "sha256": "1d2342f2dd3087394aa4b9752e44ab56d4e3fe5b0d6caf7e86a8655286214ac5",
+        "target": "gemma/pages/layer-047.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/paged_manifest.json",
+        "size": 15186,
+        "sha256": "bd38e192d8db648bfe16f09872d077fe0149a65a762e840299ce0038f5b95207",
+        "target": "gemma/paged_manifest.json"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/fixed.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "gemma/pages/fixed.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-000.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "gemma/pages/layer-000.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-001.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "gemma/pages/layer-001.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-002.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "gemma/pages/layer-002.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-003.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "gemma/pages/layer-003.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-004.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "gemma/pages/layer-004.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-005.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "gemma/pages/layer-005.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-006.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "gemma/pages/layer-006.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-007.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "gemma/pages/layer-007.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-008.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "gemma/pages/layer-008.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-009.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "gemma/pages/layer-009.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-010.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "gemma/pages/layer-010.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-011.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "gemma/pages/layer-011.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-012.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "gemma/pages/layer-012.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-013.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "gemma/pages/layer-013.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-014.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "gemma/pages/layer-014.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-015.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "gemma/pages/layer-015.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-016.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "gemma/pages/layer-016.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-017.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "gemma/pages/layer-017.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-018.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "gemma/pages/layer-018.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-019.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "gemma/pages/layer-019.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-020.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "gemma/pages/layer-020.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-021.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "gemma/pages/layer-021.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-022.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "gemma/pages/layer-022.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-023.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "gemma/pages/layer-023.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-024.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "gemma/pages/layer-024.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-025.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "gemma/pages/layer-025.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-026.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "gemma/pages/layer-026.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-027.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "gemma/pages/layer-027.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-028.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "gemma/pages/layer-028.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-029.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "gemma/pages/layer-029.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-030.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "gemma/pages/layer-030.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-031.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "gemma/pages/layer-031.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-032.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "gemma/pages/layer-032.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-033.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "gemma/pages/layer-033.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-034.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "gemma/pages/layer-034.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-035.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "gemma/pages/layer-035.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-036.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "gemma/pages/layer-036.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-037.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "gemma/pages/layer-037.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-038.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "gemma/pages/layer-038.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-039.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "gemma/pages/layer-039.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-040.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "gemma/pages/layer-040.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-041.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "gemma/pages/layer-041.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-042.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "gemma/pages/layer-042.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-043.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "gemma/pages/layer-043.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-044.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "gemma/pages/layer-044.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-045.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "gemma/pages/layer-045.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-046.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "gemma/pages/layer-046.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "gemma/pages/layer-047.safetensors.NOTICE",
+        "size": 258,
+        "sha256": "80be6ef02253860fa0d0f48994c46955a461f167bf31f8dc4d37b60ceec53ad3",
+        "target": "gemma/pages/layer-047.safetensors.NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "latent_upscale_models/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors",
+        "size": 995778752,
+        "sha256": "eb5a71fe4068ee87ccdb1c3aa635e547ca76bd2d30ae20ae889f2c325c0677e8",
+        "target": "latent_upscale_models/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "vae/ltx-2.5-audio-vae-bf16.safetensors",
+        "size": 364866540,
+        "sha256": "c52733d37f6a7fb7949c3dc0fb468c6cb2169e4d836983a73babb9f0d54837a5",
+        "target": "vae/ltx-2.5-audio-vae-bf16.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "vae/ltx-2.5-video-vae-conv-bf16.safetensors",
+        "size": 1452269922,
+        "sha256": "685b06ee3d9b2039647698fc4ea33175112462fc374e2777312c907897dfce8d",
+        "target": "vae/ltx-2.5-video-vae-conv-bf16.safetensors"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "GEMMA_APACHE_LICENSE",
+        "size": 11358,
+        "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+        "target": "GEMMA_APACHE_LICENSE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "LICENSE",
+        "size": 30399,
+        "sha256": "be75acae5c99b0fb16ed6cfbf8f731e5121a729bef112d20337699407e796451",
+        "target": "LICENSE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "LTX_ACCEPTABLE_USE_POLICY.pdf",
+        "size": 110423,
+        "sha256": "054b9e6e9d4b8632dd13abe64faded682c344cf9e514813b8d262d0ea94329f1",
+        "target": "LTX_ACCEPTABLE_USE_POLICY.pdf"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "MODIFICATIONS.md",
+        "size": 1253,
+        "sha256": "7614953d08204a09074c02c0ab1348356d0c7bdf76c3c71dfe3a890637320bb8",
+        "target": "MODIFICATIONS.md"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "NOTICE",
+        "size": 1162,
+        "sha256": "aac1b6718eb1fdbc081ed64c91a18677a2aff428a02fa35f778a2a7ca1d87022",
+        "target": "NOTICE"
+      },
+      {
+        "repo": "Vayden/LTX-2.5-MLX-Q8-Paged",
+        "revision": "445f3d7e46fd850884750c32b49eb5e629c3b686",
+        "filename": "README.md",
+        "size": 3342,
+        "sha256": "ce446e4bd85cee2dc8577c1745b6a266e842bd1b9f53102a50579011b5a586d0",
+        "target": "README.md"
+      }
+    ]
   }
 ]

@@ -57,8 +57,10 @@ locations. `WEETODD_STUDIO_DATA` selects a separate data directory for isolated 
    or choose it in the clip inspector. **Set Up Models…** is also available from missing-model actions.
 
 **Download or prepare a model** shows compatible catalog items with source terms, download size and
-required space before an explicit download. Prefer preconverted Q8 when available; source conversion
-is an alternative. LTX 2.5 source preparation downloads the five official distilled components and
+required space before an explicit download. Prefer the
+[H3 Q8 vision encoder](https://huggingface.co/Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged) or
+[LTX 2.5 distilled Q8 package](https://huggingface.co/Vayden/LTX-2.5-MLX-Q8-Paged) marked **Preconverted
+(Recommended)**. Source conversion remains an alternative. LTX 2.5 source preparation downloads the five official distilled components and
 converts transformer/Gemma to paged Q8. H3 encoder preparation downloads just the compact Q8 encoder,
 its support files and full Qwen architecture config, then retains the vision page. H3 transformer,
 VAEs and tokenizer/processor remain separate required components.
@@ -80,11 +82,14 @@ For CLI users, `python scripts/setup_models.py --help` exposes the same catalog,
 and downloads. For example:
 
 ```bash
-python scripts/setup_models.py download ltx25-distilled-q8 \
+python scripts/setup_models.py download h3-qwen-q8-vision-preconverted \
+  --destination /path/to/shared-models --existing-root /path/to/ComfyUI/models
+python scripts/setup_models.py download ltx25-distilled-q8-preconverted \
   --destination /path/to/shared-models --existing-root /path/to/ComfyUI/models
 ```
 
-This command prepares from the pinned source files; choose a preconverted catalog ID to skip conversion.
+Run the command for the model you need. These downloads skip local conversion. The catalog also
+offers `h3-qwen-q8-vision` and `ltx25-distilled-q8` to convert from pinned source files.
 After a download, scan the returned directory, choose the components, and create the recipe. ComfyUI
 users can select those same paths in existing loaders; setup never downloads or converts during a graph.
 The [headless example/schema](../examples/headless/README.md) remains available for direct JSON users.
@@ -97,9 +102,9 @@ Ref2VA Q8 transformer pages and vision-capable Qwen v2 pages. Start with one ima
 640×384 and the recipe's 19 dense evaluations; add a second reference only after checking memory.
 The existing text-only Qwen page export cannot encode reference images.
 
-See the [model preparation commands](../README.md#experimental-h3-reference-paging). Preparation
-requires an existing compact Q8 Qwen encoder containing vision weights and a genuine Ref2VA
-transformer. Guided setup can prepare the encoder; the genuine Ref2VA transformer must be prepared
+See the [model preparation commands](../README.md#experimental-h3-reference-paging). Choose the
+[preconverted Q8 vision encoder](https://huggingface.co/Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged)
+in guided setup, or prepare it from the compact source encoder. The genuine Ref2VA transformer must be prepared
 separately with the existing bounded-memory conversion commands. Clip/movie headless
 export preserves this recipe so Studio can be closed during generation. One-image 640×384 generation measured a 21.70GB complete Comfy process peak on an M3 Ultra
 with 256 GiB. The headless output was byte-identical and peaked at 21.26GB.
