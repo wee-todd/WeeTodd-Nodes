@@ -1437,7 +1437,7 @@ This table is generated from the registered node contracts. Run
 | LTX 2.3 Upscale + Publish | Upscale decoded H3 or other ComfyUI video frames with the LTX latent upscaler and preserve the supplied audio. | LTX 2.3 — Upscaling | Experimental |
 | LTX 2.3 Unload MLX Runtime | Release the process-local LTX 2.3 pipeline. | LTX 2.3 — Core | Supported |
 | LTX 2.5 Component Loader (MLX) | Select LTX 2.5 split components without loading weights or downloading files. Self-describing paged transformers may contain one prebaked IC-LoRA. | LTX 2.5 — Loaders | Experimental |
-| LTX 2.5 LoRA Loader (MLX) | Attach a generic LTX 2.5 transformer LoRA, including block and non-block targets. Multiple loader nodes may be chained. Use the dedicated loader for IC-LoRA task adapters. | LTX 2.5 — Loaders | Supported |
+| LTX 2.5 LoRA Loader (MLX) | Attach a generic LTX 2.5 transformer LoRA, including attention gates, block and non-block targets. Multiple loader nodes may be chained. Use the dedicated loader for IC-LoRA task adapters. | LTX 2.5 — Loaders | Supported |
 | LTX 2.5 IC-LoRA Loader (MLX) | Select and attach an installed LTX 2.5-compatible IC-LoRA for video/reference conditioning. The dropdown scans every ComfyUI loras model root. Up to two distinct task families may be stacked when their reference scale factors match; this supports combinations such as CrossView plus Ingredients character/scene reference. Official LTX 2.3 22B adapters pass an additional shape check. The selected IC-LoRA Pipeline Mode determines whether the adapter runs for stage one or the full generation. Do not use this node with a transformer that already bakes the same IC-LoRA. | LTX 2.5 — Loaders | Experimental |
 | LTX 2.5 MSR Loader (MLX) | Attach one LTX 2.5 MSR adapter after validating all learned Fourier-slot tensors and 480 rank-128 transformer pairs. The slot tensors load only when references execute. | LTX 2.5 — Loaders | Supported |
 | LTX 2.5 Guided Model Loader (MLX) | Select the LTX 2.5 development transformer for guided stage one and the official rank-450 distilled LoRA for stage two. No weights load in this node. | LTX 2.5 — Loaders | Experimental |
@@ -1495,6 +1495,15 @@ This table is generated from the registered node contracts. Run
 <!-- END GENERATED NODE CATALOG -->
 
 ## Troubleshooting
+
+### Studio Prepare Clip rejects the official LTX 2.5 distilled LoRA
+
+Update the renderer if the error mentions `to_gate_logits` as an incompatible target. The
+official rank-450 adapter includes attention-gate projections; older validation rejected these
+valid weights. Keep the existing model files and prepare the clip again. For an app-managed
+runtime, use the updated app's **Set Up Managed Renderer** to refresh its source snapshot.
+Studio now shows the renderer's specific preparation or generation error; **Show Log** retains
+the full traceback.
 
 ### A workflow opens with shifted widget values
 

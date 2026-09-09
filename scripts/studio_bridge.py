@@ -23,7 +23,7 @@ def emit(**value):
     print(json.dumps(value), flush=True)
 
 
-def run(command, *, capture=False):
+def run(command, *, capture=False, error_result=None):
     """Keep cancellation attached to this job's child process, including its cleanup."""
     child = subprocess.Popen(
         command, stdout=subprocess.PIPE if capture else sys.stderr, stderr=sys.stderr, text=True
@@ -31,9 +31,15 @@ def run(command, *, capture=False):
     try:
         output, _ = child.communicate()
         if child.returncode:
-            raise RuntimeError(
-                f"{Path(str(command[0])).name} exited with status {child.returncode}"
-            )
+            detail = f"{Path(str(command[0])).name} exited with status {child.returncode}"
+            if error_result is not None:
+                try:
+                    record = json.loads(Path(error_result).read_text())
+                except (OSError, ValueError):
+                    record = None
+                if isinstance(record, dict) and isinstance(record.get("error"), str):
+                    detail = record["error"].strip() or detail
+            raise RuntimeError(detail)
         return output or ""
     except BaseException:
         if child.poll() is None:
@@ -352,7 +358,8 @@ def prepare(request, destination):
             "--output-directory",
             str(destination / "preflight"),
             "--preflight-only",
-        ]
+        ],
+        error_result=destination / "preflight" / "result.json",
     )
     return {"recipePath": str(recipe_path), "prompt": recipe["prompt"], "report": report}
 
@@ -368,7 +375,8 @@ def render(prepared, destination):
             prepared,
             "--output-directory",
             str(destination),
-        ]
+        ],
+        error_result=destination / "result.json",
     )
     result = json.loads((destination / "result.json").read_text())
     if result.get("status") != "success":

@@ -1110,7 +1110,8 @@ class WeeToddLTX25LoRALoader:
     FUNCTION = "attach"
     CATEGORY = "WeeTodd/LTX 2.5/loaders"
     DESCRIPTION = (
-        "Attach a generic LTX 2.5 transformer LoRA, including block and non-block targets. "
+        "Attach a generic LTX 2.5 transformer LoRA, including attention gates, "
+        "block and non-block targets. "
         "Multiple loader nodes may be chained. Use the dedicated loader for IC-LoRA task "
         "adapters."
     )

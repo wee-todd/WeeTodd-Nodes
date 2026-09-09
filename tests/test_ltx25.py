@@ -322,6 +322,44 @@ def test_ltx25_distilled_lora_header_is_generic_transformer_adapter(tmp_path):
     assert report["lora_alpha"] == 2
 
 
+@pytest.mark.parametrize("model_version", [None, "2.3.0", "2.5.0"])
+@pytest.mark.parametrize("attention,input_dim", [
+    ("attn1", 4096), ("attn2", 4096),
+    ("audio_attn1", 2048), ("audio_attn2", 2048),
+    ("audio_to_video_attn", 4096), ("video_to_audio_attn", 2048),
+])
+def test_ltx25_official_distilled_attention_gate_targets(
+    tmp_path, model_version, attention, input_dim
+):
+    adapter = tmp_path / "attention-gate.safetensors"
+    target = f"diffusion_model.transformer_blocks.47.{attention}.to_gate_logits"
+    metadata = {"lora_rank": "450", "lora_alpha": "450"}
+    if model_version:
+        metadata["model_version"] = model_version
+    # Official rank-450 distillation clamps each gate pair to its 32 output heads.
+    save_file({
+        target + ".lora_A.weight": np.zeros((32, input_dim), dtype=np.float16),
+        target + ".lora_B.weight": np.zeros((32, 32), dtype=np.float16),
+    }, adapter, metadata=metadata)
+
+    report = inspect_ltx25_lora(adapter)
+
+    assert report["adapter_role"] == "transformer_lora"
+    assert report["lora_rank"] == report["lora_alpha"] == 450
+    assert report["normalized_target_count"] == 1
+
+
+def test_ltx25_metadata_free_attention_gate_rejects_wrong_head_count(tmp_path):
+    adapter = tmp_path / "wrong-gate.safetensors"
+    target = "transformer_blocks.0.attn1.to_gate_logits"
+    save_file({
+        target + ".lora_A.weight": np.zeros((2, 4096), dtype=np.float16),
+        target + ".lora_B.weight": np.zeros((16, 2), dtype=np.float16),
+    }, adapter)
+    with pytest.raises(ValueError, match="incompatible targets include"):
+        inspect_ltx25_lora(adapter)
+
+
 def test_ltx25_down_up_schema_normalizes_and_applies_per_target_alpha(tmp_path):
     adapter = tmp_path / "renamed-community-adapter.safetensors"
     save_file(

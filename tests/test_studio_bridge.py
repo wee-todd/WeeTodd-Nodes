@@ -14,6 +14,46 @@ bridge = importlib.import_module("studio_bridge")
 jobs = importlib.import_module("studio_job")
 
 
+@pytest.mark.parametrize("record", [
+    {"status": "failed", "error": "ValueError: Select a compatible LTX adapter."},
+    None, "malformed JSON", [], {"status": "failed"},
+])
+def test_child_failure_surfaces_renderer_error_with_safe_fallback(tmp_path, record):
+    result = tmp_path / "result.json"
+    if record is not None:
+        result.write_text(record if isinstance(record, str) else json.dumps(record))
+    expected = (
+        "Select a compatible LTX adapter"
+        if isinstance(record, dict) and record.get("error") else "exited with status 1"
+    )
+    with pytest.raises(RuntimeError, match=expected):
+        bridge.run([sys.executable, "-c", "raise SystemExit(1)"], error_result=result)
+
+
+def test_prepare_passes_preflight_failure_record_to_child_runner(tmp_path, monkeypatch):
+    monkeypatch.setattr(bridge, "compose_recipe", lambda request: ({"prompt": "test"}, {}))
+    calls = []
+    monkeypatch.setattr(bridge, "run", lambda command, **kwargs: calls.append((command, kwargs)))
+    destination = tmp_path / "prepared"
+    bridge.prepare({}, destination)
+    assert calls[0][1]["error_result"] == destination / "preflight" / "result.json"
+    assert "--preflight-only" in calls[0][0]
+
+
+def test_render_passes_failure_record_to_child_runner(tmp_path, monkeypatch):
+    recipe = tmp_path / "recipe.json"
+    recipe.write_text("{}")
+    destination = tmp_path / "render"
+
+    def fail(command, **kwargs):
+        assert kwargs["error_result"] == destination / "result.json"
+        raise RuntimeError("ValueError: Rendering failed with a specific reason.")
+
+    monkeypatch.setattr(bridge, "run", fail)
+    with pytest.raises(RuntimeError, match="Rendering failed with a specific reason"):
+        bridge.render(str(recipe), destination)
+
+
 def movie_settings():
     return dict(
         fps=24,

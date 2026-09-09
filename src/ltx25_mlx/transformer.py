@@ -682,6 +682,17 @@ def _ltx25_bridge_target_shape(target: str | None) -> tuple[int, int] | None:
     if match is None or not 0 <= int(match.group(1)) < 48:
         return None
     tail = match.group(2)
+    # Gate projections produce one logit per attention head, not a full hidden
+    # vector. The official distilled adapter includes all six of these targets.
+    if tail in {
+        f"{name}.to_gate_logits" for name in ("attn1", "attn2", "audio_to_video_attn")
+    }:
+        return (32, 4096)
+    if tail in {
+        f"{name}.to_gate_logits"
+        for name in ("audio_attn1", "audio_attn2", "video_to_audio_attn")
+    }:
+        return (32, 2048)
     attention_projections = ("to_q", "to_k", "to_v", "to_out")
     if tail in {
         *(
