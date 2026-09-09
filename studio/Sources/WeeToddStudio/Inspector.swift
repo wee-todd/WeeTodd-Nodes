@@ -38,6 +38,8 @@ struct InspectorColumn: View {
 struct ClipInspector: View {
   @EnvironmentObject var store: StudioStore
   var clip: Clip
+  @FocusState private var seedFocused: Bool
+  @State private var seedUndoGroup = UUID()
   func binding<T>(_ key: WritableKeyPath<Clip, T>) -> Binding<T> {
     Binding(
       get: { store.selectedClip?[keyPath: key] ?? clip[keyPath: key] },
@@ -148,7 +150,17 @@ struct ClipInspector: View {
             }.textFieldStyle(.roundedBorder)
             HStack {
               Text("Seed")
-              TextField("Seed", value: binding(\.seed), format: .number)
+              TextField(
+                "Seed",
+                value: Binding(
+                  get: { store.selectedClip?.seed ?? clip.seed },
+                  set: { value in
+                    store.editClip(undoGroup: seedFocused ? seedUndoGroup : nil) { $0.seed = value }
+                  }), format: .number
+              ).focused($seedFocused)
+                .onChange(of: seedFocused) { _, focused in
+                  if focused { seedUndoGroup = UUID() }
+                }
               Button {
                 store.editClip { $0.seed = Int.random(in: 0...Int(Int32.max)) }
               } label: {

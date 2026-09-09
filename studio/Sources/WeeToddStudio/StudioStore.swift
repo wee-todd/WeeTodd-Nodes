@@ -191,6 +191,7 @@ extension Encodable {
   var motionPromptSession: MotionPromptEditorSession?
   private var undoStates: [StudioProject] = []
   private var redoStates: [StudioProject] = []
+  private var lastUndoGroup: UUID?
   private var autosaveTask: Task<Void, Never>?
   private var observer: Any?
   private var bridgeObservation: AnyCancellable?
@@ -251,16 +252,20 @@ extension Encodable {
       refreshPreview()
     }
   }
-  func change(_ body: (inout StudioProject) -> Void) {
-    undoStates.append(project)
+  func change(undoGroup: UUID? = nil, _ body: (inout StudioProject) -> Void) {
+    var updated = project
+    body(&updated)
+    guard updated != project else { return }
+    if undoGroup == nil || undoGroup != lastUndoGroup { undoStates.append(project) }
+    lastUndoGroup = undoGroup
     if undoStates.count > 80 { undoStates.removeFirst() }
     redoStates.removeAll()
-    body(&project)
+    project = updated
     changed()
   }
-  func editClip(_ body: (inout Clip) -> Void) {
+  func editClip(undoGroup: UUID? = nil, _ body: (inout Clip) -> Void) {
     guard let i = project.clips.firstIndex(where: { $0.id == selectedClipID }) else { return }
-    change { body(&$0.clips[i]) }
+    change(undoGroup: undoGroup) { body(&$0.clips[i]) }
   }
   func changed() {
     validationErrors.removeAll()
@@ -284,6 +289,7 @@ extension Encodable {
     }
   }
   func undo() {
+    lastUndoGroup = nil
     guard let value = undoStates.popLast() else { return }
     redoStates.append(project)
     project = value
@@ -291,6 +297,7 @@ extension Encodable {
     refreshPreview()
   }
   func redo() {
+    lastUndoGroup = nil
     guard let value = redoStates.popLast() else { return }
     undoStates.append(project)
     project = value
@@ -298,6 +305,7 @@ extension Encodable {
     refreshPreview()
   }
   func select(_ id: UUID) {
+    lastUndoGroup = nil
     selectedClipID = id
     selectedTitleID = nil
     selectedAudioID = nil

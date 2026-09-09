@@ -80,6 +80,9 @@ A 36GB physical-device maximum is not yet established; the header-based estimate
 - Generated versions remain in Clip Assets. Undo/redo and autosave protect edits. Collect Media writes
   a separate project with relative media references, including used Global assets. It preserves shared
   model/LoRA paths; it does not package weights or rewrite model recipes for another machine.
+- Seed typing is grouped into one Undo step per editing session. Command-Z and Shift-Command-Z
+  restore the complete previous/next seed, including while the field retains focus. Unchanged field
+  writes do not add Undo steps or clear Redo.
 
 **Preview movie** builds a reduced-resolution movie containing the actual transitions, titles,
 and active audio tracks. Clip preview is immediate; movie preview is rebuilt after edits. Missing
@@ -163,6 +166,10 @@ sequence/anchor tests; job locking, integrity and resume tests; a real LTX 2.5 g
 a fresh private-runtime installation; and real MetalFX spatial/RIFE and guided MetalFX interpolation.
 The private-runtime test produced byte-identical generated and assembled MP4s to the development
 runtime for the one-second LTX 2.5 fixture. This is a narrow integration check, not universal parity.
+
+Seed Undo/Redo was also checked in the release app with a focused field, after Tab, through the Edit
+menu, with multi-digit replacement, and across separate editing sessions. Restoring the generated
+seed restores the clip's green status without rerendering.
 
 Before a broad consumer release: complete model discovery/download UI and tool packaging, sign and
 notarize the app, test clean Macs and lower-memory hardware, qualify more conditioning combinations,
