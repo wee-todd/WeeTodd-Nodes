@@ -46,6 +46,12 @@ model quality or live account compatibility. Offline resume reused both remote a
 same final movie hash after the fixture server stopped. Direct Cloud uses
 a read-only free-request/PAYG check and fresh CU policy; unknown allowance stays blocked. The DT+
 App Bridge has no verified free-only billing contract and cannot generate in this implementation.
+A real LTX 2.3 cloud response exposed a finalization timing assumption: all 121 video frames and
+230,880 stereo samples arrived, but the complete causal audio was shorter than the 24 FPS video.
+The helper and Python bridge now recognize and independently validate the exact LTX causal count.
+Offline recovery produced a verified 768×448 MP4 with all 121 frames and the original 48 kHz audio;
+no cloud resubmission was used. A matching gRPC fixture covers the receipt path. Broader live account
+qualification and a fresh post-fix cloud submission remain pending.
 Advanced reference/control/audio conditioning and local LoRA conversion/upload remain unsupported.
 The optional helper distribution includes dependency source and rebuild/replacement instructions.
 See [Draw Things setup and qualification](studio/README.md#draw-things--experimental).

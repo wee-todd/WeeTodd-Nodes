@@ -188,7 +188,22 @@ def validate_media(
                 raise ValueError("measured audio format or sample count does not match manifest")
             video_duration = frame_count * denominator / numerator
             audio_duration = samples / rate
-            if abs(video_duration - audio_duration) > denominator / numerator + 0.01:
+            timing = result.get("audioTiming")
+            if timing is not None:
+                # Draw Things' LTX decoder has a fixed causal audio clock;
+                # playback FPS does not change the number of decoded samples.
+                # Remeasure the exact contract, never trust a duration waiver.
+                if (
+                    timing != "ltx-causal-v1" or rate not in (24000, 48000)
+                    or (frame_count - 1) % 8 != 0
+                    or samples != (4 * (frame_count - 1) + 1) * (rate // 100)
+                ):
+                    raise ValueError("audio does not match the declared LTX causal sample count")
+                if audio_duration > video_duration:
+                    raise ValueError(
+                        "LTX audio exceeds video duration; use 24 or 25 FPS to preserve its tail"
+                    )
+            elif abs(video_duration - audio_duration) > denominator / numerator + 0.01:
                 raise ValueError("audio duration differs from video by more than one frame")
             result["audioPath"] = str(resolved_audio)
 

@@ -75,4 +75,37 @@ final class ArtifactTests: XCTestCase {
     XCTAssertThrowsError(try ArtifactWriter(root: FileManager.default.temporaryDirectory,
       requestID: "../escape", operation: "image", expectedFrames: 1, fps: 1, sampleRate: 0, requiresAudio: false))
   }
+
+  func testCompleteLTXCausalAudioAt24FPSCanFinishWithoutRetiming() throws {
+    for rate in [24000, 48000] {
+      let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+      defer { try? FileManager.default.removeItem(at: root) }
+      let writer = try ArtifactWriter(root: root, requestID: "causal", operation: "video",
+        expectedFrames: 121, fps: 24, sampleRate: rate, requiresAudio: true, ltxAudio: true)
+      for _ in 0..<121 { try writer.image(tensor(0.5)) }
+      let samples = 481 * (rate / 100)
+      var audio = Tensor<Float>(.CPU, .NC(2, samples))
+      for c in 0..<2 { for i in 0..<samples { audio[c,i] = 0.125 } }
+      try writer.audio(audio)
+      let manifest = try writer.finish(configuration: [:])
+      XCTAssertEqual(manifest["audioTiming"] as? String, "ltx-causal-v1")
+      XCTAssertEqual(manifest["sampleCount"] as? Int, samples)
+      XCTAssertEqual(manifest["fpsNumerator"] as? Int, 24)
+    }
+  }
+
+  func testCausalExceptionRequiresLTXAndExactSampleCountWithoutOverlongAudio() throws {
+    for (ltx, samples, fps) in [(false, 230880, 24), (true, 230879, 24), (true, 230880, 30)] {
+      let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+      defer { try? FileManager.default.removeItem(at: root) }
+      let writer = try ArtifactWriter(root: root, requestID: "causal", operation: "video",
+        expectedFrames: 121, fps: fps, sampleRate: 48000, requiresAudio: true, ltxAudio: ltx)
+      for _ in 0..<121 { try writer.image(tensor(0.5)) }
+      var audio = Tensor<Float>(.CPU, .NC(2, samples))
+      for c in 0..<2 { for i in 0..<samples { audio[c,i] = 0.125 } }
+      try writer.audio(audio)
+      XCTAssertThrowsError(try writer.finish(configuration: [:]))
+      XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("manifest.json").path))
+    }
+  }
 }

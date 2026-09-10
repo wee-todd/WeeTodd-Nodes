@@ -508,6 +508,20 @@ Dimensions use a 64-pixel grid. Generation FPS must be an integer; LTX frame cou
 Generation adds an audiovisual movie to version history and Clip Assets. A changed clip is not
 marked current by an older render finishing later.
 
+Start remote LTX clips at **24 or 25 FPS**. The pinned Draw Things decoder produces audio on a
+fixed causal clock, independently of playback FPS. Its complete audio can end slightly before the
+last picture: a 121-frame clip contains 4.81 seconds of audio, versus 5.042 seconds of video at
+24 FPS. The helper and Python bridge independently verify the exact causal sample count, then
+preserve the original frame rate and soundtrack without stretching either. The remaining picture
+plays after the soundtrack ends. Other audio still uses the one-frame duration check; missing or
+incomplete audio is rejected. This exception does not permit audio extending past the video.
+
+Earlier helpers could report a receiving/finalization error after all frames and audio arrived.
+Update both the helper and renderer (refresh an app-managed runtime if applicable). Preserve the
+failed job's `render/media` folder before retrying: complete received files may be recoverable
+locally without another cloud generation. A missing completion manifest is not proof that the
+remote request failed or that another submission would be free.
+
 The pinned helper recognizes selected FLUX, Qwen Image, and Z-Image model families for images, and
 LTX 2/2.3 for video. Only exact endpoint IDs advertised by both the helper and server appear. This
 is not a claim of remote H3 or LTX 2.5 support; those remain available through the native engines.
@@ -546,7 +560,7 @@ Cloud API jobs do not require the Draw Things app.
 | Packaged Studio | Bundled helper discovery, connection test, prompt CU, project reload, and light/dark appearance checked |
 | Helper corresponding source | Distributed archive extracted and rebuilt against its supplied editable dependencies |
 | Native project/job compatibility | Focused regression tests |
-| Real Draw Things model generation | Pending endpoint-bound acceptance |
+| Real Draw Things model generation | One LTX 2.3 cloud response recovered offline: 121 frames at 768×448/24 FPS plus 48 kHz stereo audio; full post-fix live acceptance remains pending |
 | Direct Cloud free-tier generation | Pending authenticated live acceptance; missing allowance fails closed |
 | DT+ App Bridge generation | Unavailable pending verifiable billing policy |
 

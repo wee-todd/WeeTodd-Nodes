@@ -199,6 +199,52 @@ def test_audio_duration_must_match_video_within_one_frame(tmp_path):
         )
 
 
+@pytest.mark.parametrize("rate,fps", [(48000, 24), (24000, 24), (48000, 25)])
+def test_ltx_causal_audio_preserves_received_timing(tmp_path, rate, fps):
+    # Draw Things decodes 4*(frames-1)+1 audio positions at 100 Hz,
+    # independently of playback FPS. The real 121-frame/24-FPS failure
+    # contained all 230880 stereo samples at 48 kHz.
+    for index in range(121):
+        _png(tmp_path / "frames" / f"{index:08d}.png")
+    samples = 481 * (rate // 100)
+    _float32_wav(tmp_path / "audio.wav", rate=rate, samples=samples, channels=2)
+    manifest = _video_manifest(121) | {
+        "fpsNumerator": fps, "sampleRate": rate, "sampleCount": samples,
+        "channels": 2, "audioTiming": "ltx-causal-v1",
+    }
+    result = validate_media(
+        manifest, root=tmp_path, expected_request_id="request-1",
+        expected_operation="video", expected_frames=121, requires_audio=True,
+    )
+    assert result["sampleCount"] == samples
+    assert result["fpsNumerator"] == fps
+    assert result["audioTiming"] == "ltx-causal-v1"
+
+
+@pytest.mark.parametrize("timing,samples,rate,fps", [
+    (None, 230880, 48000, 24),
+    ("ltx-causal-v1", 230879, 48000, 24),
+    ("ltx-causal-v1", 230879, 48000, 25),  # within old tolerance: still incomplete
+    ("ltx-causal-v1", 230880, 44100, 24),
+    ("unknown", 230880, 48000, 24),
+    ("ltx-causal-v1", 230880, 48000, 30),  # would lose audible tail
+])
+def test_ltx_audio_timing_is_not_a_general_duration_bypass(tmp_path, timing, samples, rate, fps):
+    for index in range(121):
+        _png(tmp_path / "frames" / f"{index:08d}.png")
+    _float32_wav(tmp_path / "audio.wav", rate=rate, samples=samples, channels=2)
+    manifest = _video_manifest(121) | {
+        "fpsNumerator": fps, "sampleRate": rate, "sampleCount": samples, "channels": 2,
+    }
+    if timing is not None:
+        manifest["audioTiming"] = timing
+    with pytest.raises(ValueError, match="audio"):
+        validate_media(
+            manifest, root=tmp_path, expected_request_id="request-1",
+            expected_operation="video", expected_frames=121, requires_audio=True,
+        )
+
+
 def test_audio_must_be_ieee_float32_wav(tmp_path):
     _write_frames(tmp_path)
     _float32_wav(tmp_path / "audio.wav", rate=8000, samples=12000)

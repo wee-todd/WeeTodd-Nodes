@@ -14,6 +14,7 @@ final class ArtifactWriter {
   let fps: Int
   let sampleRate: Int
   let requiresAudio: Bool
+  let ltxAudio: Bool
   private(set) var frameCount = 0
   private var dimensions: [Int]?
   var width: Int? { dimensions?[2] }
@@ -22,7 +23,7 @@ final class ArtifactWriter {
   private var channels = 0
 
   init(root: URL, requestID: String, operation: String, expectedFrames: Int,
-       fps: Int, sampleRate: Int, requiresAudio: Bool) throws {
+       fps: Int, sampleRate: Int, requiresAudio: Bool, ltxAudio: Bool = false) throws {
     guard root.isFileURL, !requestID.isEmpty, ["image", "video"].contains(operation),
       expectedFrames > 0, expectedFrames <= 100000, fps > 0,
       !requiresAudio || sampleRate > 0,
@@ -30,6 +31,7 @@ final class ArtifactWriter {
     self.root = root; self.requestID = requestID; self.operation = operation
     self.expectedFrames = expectedFrames; self.fps = fps; self.sampleRate = sampleRate
     self.requiresAudio = requiresAudio
+    self.ltxAudio = ltxAudio
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
     try FileManager.default.createDirectory(at: root.appendingPathComponent("frames"),
                                              withIntermediateDirectories: false)
@@ -100,9 +102,19 @@ final class ArtifactWriter {
     guard frameCount == expectedFrames, !requiresAudio || sampleCount > 0 else {
       throw TransportError.invalidMedia
     }
+    let audioDuration = sampleCount > 0 ? Double(sampleCount)/Double(sampleRate) : 0
+    let videoDuration = Double(frameCount)/Double(fps)
+    // The pinned LTX decoder emits 4*(frames-1)+1 audio positions at 100 Hz.
+    // Playback FPS does not retime this tensor. Accept only its exact count,
+    // preserving every sample and frame; do not waive arbitrary truncation.
+    let causalAudio = ltxAudio && [24000, 48000].contains(sampleRate)
+      && (frameCount - 1) % 8 == 0
+      && sampleCount == (4 * (frameCount - 1) + 1) * (sampleRate / 100)
+      && audioDuration <= videoDuration
     if sampleCount > 0 {
-      let discrepancy = abs(Double(sampleCount)/Double(sampleRate) - Double(frameCount)/Double(fps))
-      guard discrepancy <= 1/Double(fps) + 0.01 else { throw TransportError.invalidMedia }
+      guard causalAudio || abs(audioDuration - videoDuration) <= 1/Double(fps) + 0.01 else {
+        throw TransportError.invalidMedia
+      }
     }
     var manifest: [String: Any] = [
       "schema": "weetodd-drawthings-media-v1", "requestID": requestID,
@@ -117,6 +129,7 @@ final class ArtifactWriter {
       if sampleCount > 0 {
         manifest["audioPath"] = "audio.wav"; manifest["sampleRate"] = sampleRate
         manifest["sampleCount"] = sampleCount; manifest["channels"] = channels
+        if causalAudio { manifest["audioTiming"] = "ltx-causal-v1" }
       }
     }
     try JSONSerialization.data(withJSONObject: manifest, options: [.sortedKeys])

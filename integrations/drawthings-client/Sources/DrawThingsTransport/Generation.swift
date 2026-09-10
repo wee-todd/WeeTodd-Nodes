@@ -46,7 +46,7 @@ public enum Generation {
       expectedFrames: operation == "video" ? Int(configuration.numFrames) : 1,
       fps: operation == "video" ? Int(configuration.fpsId) : 1,
       sampleRate: requiresAudio ? ModelZoo.audioSampleRateForModel(configuration.model ?? "") : 0,
-      requiresAudio: requiresAudio)
+      requiresAudio: requiresAudio, ltxAudio: requiresAudio)
     let stream = TensorStream(writer: writer)
     // All local, inventory and connection checks precede any quota reservation.
     // From this marker onward cancellation may leave a reserved/submitted request.

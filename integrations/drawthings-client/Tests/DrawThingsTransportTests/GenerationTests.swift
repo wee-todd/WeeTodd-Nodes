@@ -25,12 +25,12 @@ private final class GenerationFixture: ImageGenerationServiceProvider {
     calls += 1
     var tensor = Tensor<Float>(.CPU, .NHWC(1, 64, 64, 3))
     for y in 0..<64 { for x in 0..<64 { for c in 0..<3 { tensor[0,y,x,c] = 0.25 } } }
-    var audio = Tensor<Float>(.CPU, .NC(2, 18000))
-    for channel in 0..<2 { for sample in 0..<18000 {
+    var audio = Tensor<Float>(.CPU, .NC(2, 230880))
+    for channel in 0..<2 { for sample in 0..<230880 {
       audio[channel, sample] = sin(Float(sample) * 440 * 2 * .pi / 48000) * 0.1
     } }
     return context.sendResponse(ImageGenerationResponse.with {
-      $0.generatedImages = Array(repeating: tensor.data(using: [.zip, .fpzip]), count: video ? 9 : 1)
+      $0.generatedImages = Array(repeating: tensor.data(using: [.zip, .fpzip]), count: video ? 121 : 1)
       if video && !omitAudio { $0.generatedAudio = [audio.data(using: [.zip, .fpzip])] }
     }).map { self.failsAfterFrames ? GRPCStatus(code: .unavailable) : GRPCStatus.ok }
   }
@@ -62,7 +62,7 @@ final class GenerationTests: XCTestCase {
       let request: [String: Any] = [
         "requestID": "av-fixture", "operation": "video", "modelID": "ltx_2.3_22b_distilled_q6p.ckpt",
         "prompt": "fixture", "inputs": [], "loras": [], "billingPolicy": "freeOnly",
-        "configuration": ["width": 64, "height": 64, "steps": 8, "seed": 42, "numFrames": 9, "fps": 24],
+        "configuration": ["width": 64, "height": 64, "steps": 8, "seed": 42, "numFrames": 121, "fps": 24],
         "outputDirectory": root.path,
         "profile": ["route": "grpc", "host": "127.0.0.1", "port": server.channel.localAddress!.port!, "useTLS": false]
       ]
@@ -72,9 +72,10 @@ final class GenerationTests: XCTestCase {
       } else {
         _ = try Generation.run(request, authorize: { _ in nil }, progress: { _ in })
         let manifest = try JSONSerialization.jsonObject(with: Data(contentsOf: root.appendingPathComponent("manifest.json"))) as! [String: Any]
-        XCTAssertEqual(manifest["frameCount"] as? Int, 9)
-        XCTAssertEqual(manifest["sampleCount"] as? Int, 18000)
+        XCTAssertEqual(manifest["frameCount"] as? Int, 121)
+        XCTAssertEqual(manifest["sampleCount"] as? Int, 230880)
         XCTAssertEqual(manifest["sampleRate"] as? Int, 48000)
+        XCTAssertEqual(manifest["audioTiming"] as? String, "ltx-causal-v1")
         XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent("audio.wav").path))
       }
       XCTAssertEqual(fixture.calls, 1)

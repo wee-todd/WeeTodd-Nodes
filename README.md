@@ -14,7 +14,8 @@ See [implementation status](STATUS.md) for current capabilities and qualificatio
 An optional [Draw Things integration](studio/README.md#draw-things--experimental) adds remote image
 assets and audiovisual clips to Studio, portable headless jobs, and ComfyUI through a shared gRPC
 adapter. It displays estimated CU and verifies free-only eligibility before submission. Self-hosted
-transport is fixture-tested; real Draw Things/DT+ account and generation qualification is pending.
+transport is fixture-tested. One real LTX 2.3 cloud response was recovered and verified locally;
+full live account and generation qualification is still pending.
 The pinned remote SDK supports selected image models and LTX 2/2.3 video; native H3/LTX 2.5 support
 remains separate. DT+ App Bridge generation is unavailable until its billing route can be verified.
 
