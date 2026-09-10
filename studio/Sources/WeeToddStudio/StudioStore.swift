@@ -15,6 +15,16 @@ struct RuntimeSettings: Codable {
   var rifeWeights = ""
   var metalPath = ""
   var drawThingsHelperPath: String?
+
+  static func restoring(_ data: Data?, defaults: Self) -> Self {
+    var value = data.flatMap { try? JSONDecoder().decode(Self.self, from: $0) } ?? defaults
+    if value.drawThingsHelperPath?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      ?? true {
+      value.drawThingsHelperPath = defaults.drawThingsHelperPath
+    }
+    return value
+  }
+
   static func defaults() -> Self {
     let root =
       ProcessInfo.processInfo.environment["WEETODD_ROOT"] ?? Bundle.main.object(
@@ -25,7 +35,8 @@ struct RuntimeSettings: Codable {
       profilesDirectory: support.appendingPathComponent("Profiles").path)
     value.metalPath =
       Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/StudioMetal").path
-    value.drawThingsHelperPath = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/WeeToddDrawThings").path
+    let helper = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/WeeToddDrawThings").path
+    if FileManager.default.isExecutableFile(atPath: helper) { value.drawThingsHelperPath = helper }
     return value
   }
 }
@@ -229,12 +240,9 @@ extension Encodable {
     try? FileManager.default.createDirectory(
       at: Self.supportDirectory.appendingPathComponent("Profiles"),
       withIntermediateDirectories: true)
-    if let data = try? Data(
-      contentsOf: Self.supportDirectory.appendingPathComponent("runtime.json")),
-      let value = try? JSONDecoder().decode(RuntimeSettings.self, from: data)
-    {
-      runtime = value
-    }
+    runtime = RuntimeSettings.restoring(
+      try? Data(contentsOf: Self.supportDirectory.appendingPathComponent("runtime.json")),
+      defaults: runtime)
     if let data = try? Data(
       contentsOf: Self.supportDirectory.appendingPathComponent("global-assets.json")),
       let value = try? JSONDecoder().decode([MediaAsset].self, from: data)

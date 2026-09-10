@@ -453,6 +453,10 @@ its hash manifest, licenses within a complete dependency-source archive, and ins
 rebuilding with modified libraries. Studio lets users import a replacement executable. The synthetic
 fixture server is a development test target and is never bundled with Studio.
 
+When upgrading an existing installation, Studio automatically uses its bundled helper if the saved
+helper setting is missing or empty. An explicitly imported helper path stays selected, and existing
+Python, model-recipe, and finishing-tool settings are preserved.
+
 A normal Studio build can omit this optional distribution. Existing native generation still works;
 Draw Things Connections then requires importing a helper executable. Python and FFmpeg remain
 necessary for the shared job/finishing bridge.

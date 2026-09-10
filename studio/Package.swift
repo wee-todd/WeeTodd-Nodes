@@ -16,6 +16,7 @@ let package = Package(
     .executableTarget(name: "StudioMetal"),
     .executableTarget(name: "WeeToddCLI"),
     .testTarget(name: "StudioCoreTests", dependencies: ["StudioCore"]),
+    .testTarget(name: "StudioAppTests", dependencies: ["WeeToddStudio"]),
   ],
   swiftLanguageModes: [.v5]
 )
