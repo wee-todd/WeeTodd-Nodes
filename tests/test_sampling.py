@@ -1191,3 +1191,36 @@ def test_staged_sampling_policy_releases_on_failure_or_cancel(tmp_path, mode, fa
     assert not cache.loaded
     assert cache._sampler is None
     assert cache._projection_backend_report is None
+
+
+def test_dt_transformer_rejects_image_task_without_optional_preflight(tmp_path):
+    from dataclasses import replace
+    spec = _spec(tmp_path, task='fl2va')
+    direct = tmp_path/'original.ckpt'
+    direct.write_bytes(b'SQLite format 3\x00')
+    with pytest.raises(ValueError,match='DT direct.*text-to-video'):
+        replace(spec,transformer=str(direct)).validate()
+
+
+def test_sampler_constructor_failure_closes_direct_store(tmp_path, monkeypatch):
+    pytest.importorskip('mlx.core')
+    from dataclasses import replace
+    from types import SimpleNamespace
+
+    from test_dt_tensor_store import checkpoint
+
+    import minimax_h3_mlx.dt_h3_checkpoint as direct
+    import minimax_h3_mlx.pipeline as pipeline
+    from minimax_h3_mlx.dt_tensor_store import DTTensorStore
+    from wee_todd_nodes.sampling import _default_sampler_factory
+    spec=_spec(tmp_path)
+    model=checkpoint(tmp_path,0,(1,),b'\x00\x00')
+    store=DTTensorStore(model)
+    monkeypatch.setattr(direct,'load_dt_h3_dit',lambda *a:SimpleNamespace(paged_blocks=store))
+    def fails(*args):
+        raise ValueError('pipeline failed')
+    monkeypatch.setattr(pipeline,'MiniMaxH3Pipeline',fails)
+    with pytest.raises(ValueError,match='pipeline failed'):
+        _default_sampler_factory(replace(spec,transformer=str(model)))
+    with pytest.raises(RuntimeError,match='closed'):
+        store.read('w')

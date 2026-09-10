@@ -4440,5 +4440,70 @@
         "target": "tokenizer/vocab.json"
       }
     ]
+  },
+  {
+    "descriptor": {
+      "id": "h3-dt-tokenizer",
+      "name": "H3 tokenizer \u00b7 For Draw Things model reuse",
+      "description": "Small tokenizer files only. Use with the H3 Draw Things model reuse preset; no model weights or conversion.",
+      "downloadBytes": 11509682,
+      "requiredDiskBytes": 279945138,
+      "sourceURL": "https://huggingface.co/MiniMaxAI/MiniMax-H3/tree/42ed227ee7df40d41602854ae760620d6eb651fe",
+      "licenseURL": "https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/42ed227ee7df40d41602854ae760620d6eb651fe/LICENSE",
+      "licenseNotice": "Retains the MiniMax H3 Community License and its eligibility/use restrictions. Review the source terms and any Hugging Face access requirements before downloading.",
+      "outputKind": "directory",
+      "engines": [
+        "h3"
+      ],
+      "tasks": [
+        "t2v"
+      ],
+      "components": [
+        "tokenizer"
+      ]
+    },
+    "kind": "h3-dt-tokenizer",
+    "files": [
+      {
+        "repo": "MiniMaxAI/MiniMax-H3",
+        "revision": "42ed227ee7df40d41602854ae760620d6eb651fe",
+        "filename": "FL2VA/tokenizer/merges.txt",
+        "size": 1671839,
+        "sha256": "599bab54075088774b1733fde865d5bd747cbcc7a547c5bc12610e874e26f5e3",
+        "target": "merges.txt"
+      },
+      {
+        "repo": "MiniMaxAI/MiniMax-H3",
+        "revision": "42ed227ee7df40d41602854ae760620d6eb651fe",
+        "filename": "FL2VA/tokenizer/tokenizer.json",
+        "size": 7032403,
+        "sha256": "a5d85b6dcc535e6b93115a9ef287e6132fdbf30270da6218194ba742261173c7",
+        "target": "tokenizer.json"
+      },
+      {
+        "repo": "MiniMaxAI/MiniMax-H3",
+        "revision": "42ed227ee7df40d41602854ae760620d6eb651fe",
+        "filename": "FL2VA/tokenizer/tokenizer_config.json",
+        "size": 11003,
+        "sha256": "a07e942ac874baa13758de8d1fbdb186683cc03416b5589e1b6671c6b3057c68",
+        "target": "tokenizer_config.json"
+      },
+      {
+        "repo": "MiniMaxAI/MiniMax-H3",
+        "revision": "42ed227ee7df40d41602854ae760620d6eb651fe",
+        "filename": "FL2VA/tokenizer/vocab.json",
+        "size": 2776833,
+        "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910",
+        "target": "vocab.json"
+      },
+      {
+        "repo": "MiniMaxAI/MiniMax-H3",
+        "revision": "42ed227ee7df40d41602854ae760620d6eb651fe",
+        "filename": "LICENSE",
+        "size": 17604,
+        "sha256": "59b99642b95ea21630e311198ddbfffbfe05aadba0c2f5d884cbdf4efcc90f44",
+        "target": "LICENSE"
+      }
+    ]
   }
 ]

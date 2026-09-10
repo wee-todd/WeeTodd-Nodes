@@ -682,3 +682,24 @@ def test_preflight_vision_pager_reports_sequential_stage_memory(tmp_path, task):
     assert report.qwen_stage_bytes == 32 + (32 if task == "t2va" else 256) + 10 * 5120 * 2 * 4
     if task != "t2va":
         assert any("reference" in warning and "workspace" in warning for warning in report.warnings)
+
+
+def test_dt_transformer_preflight_rejects_unqualified_image_task(tmp_path, monkeypatch):
+    from dataclasses import replace
+
+    import wee_todd_nodes.preflight as module
+
+    spec = _portable_optimized_spec(tmp_path)
+    original = module._component_report
+
+    def report(name, path, **kwargs):
+        result = original(name, path, **kwargs)
+        return (
+            replace(result, paging_format="weetodd-h3-dt-direct-v1")
+            if name == "transformer"
+            else result
+        )
+
+    monkeypatch.setattr(module, "_component_report", report)
+    with pytest.raises(ValueError, match="DT direct.*text-to-video"):
+        module.preflight_components(replace(spec, task="fl2va"), module.H3PreflightRequest())

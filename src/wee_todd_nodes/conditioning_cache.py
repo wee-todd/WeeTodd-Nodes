@@ -39,6 +39,9 @@ def cache_key(spec, prompt, task):
     ):
         root = Path(location).expanduser().resolve()
         files = [root] if root.is_file() else sorted(root.rglob("*"))
+        from minimax_h3_mlx.dt_source import dt_source_files
+
+        files.extend(dt_source_files(root))
         for path in files:
             if path.is_file() and not path.name.startswith("."):
                 stat = path.stat()

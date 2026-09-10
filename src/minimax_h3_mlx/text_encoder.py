@@ -97,7 +97,12 @@ class MiniMaxH3TextEncoder:
 
         self._load_vision_enabled = load_vision
         self.vision = None
-        if (model_dir / "paged_text_encoder_manifest.json").is_file():
+        from .dt_source import dt_source
+
+        dt_checkpoint = dt_source(model_dir, "text_encoder")
+        if dt_checkpoint is not None:
+            self.language = Qwen3VLModel(replace(self.text_config, num_hidden_layers=0))
+        elif (model_dir / "paged_text_encoder_manifest.json").is_file():
             # Construct only the fixed embedding/norm shell. Constructing the complete stack
             # first transiently allocates every decoder layer even if it is immediately removed.
             self.language = Qwen3VLModel(replace(self.text_config, num_hidden_layers=0))
@@ -117,6 +122,10 @@ class MiniMaxH3TextEncoder:
         self._model_dir = model_dir
         self._processor_dir = Path(processor_dir) if processor_dir is not None else None
         self._tokenizer_dir = Path(tokenizer_dir) if tokenizer_dir is not None else None
+        if dt_checkpoint is not None:
+            from .dt_qwen import install_dt_qwen
+
+            install_dt_qwen(self, dt_checkpoint)
 
     # -- loading ---------------------------------------------------------------------------
 

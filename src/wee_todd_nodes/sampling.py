@@ -61,6 +61,14 @@ class H3TransformerSpec:
             raise FileNotFoundError(f"MiniMax H3 model manifest not found: {manifest}")
         if not transformer.exists():
             raise FileNotFoundError(f"MiniMax H3 transformer not found: {transformer}")
+        from minimax_h3_mlx.dt_h3_checkpoint import is_dt_checkpoint
+        from minimax_h3_mlx.dt_source import dt_source
+        if self.task != "t2va" and (
+            is_dt_checkpoint(transformer)
+            or any(dt_source(getattr(self, component), component)
+                   for component in ("text_encoder", "video_vae", "audio_vae"))
+        ):
+            raise ValueError("DT direct components currently support text-to-video only.")
         manifest = json.loads((root / "model_index.json").read_text())
         metadata = manifest.get("_minimax_h3", {})
         tasks = metadata.get("tasks", [])
@@ -163,15 +171,25 @@ def _default_sampler_factory(spec: H3TransformerSpec):
     from minimax_h3_mlx.load import load_dit
     from minimax_h3_mlx.pipeline import MiniMaxH3Pipeline
 
+    pipeline_config = PipelineConfig.from_model_index(Path(spec.checkpoint) / "model_index.json")
     transformer = Path(spec.transformer)
-    if (transformer / "paged_manifest.json").is_file():
+    from minimax_h3_mlx.dt_h3_checkpoint import is_dt_checkpoint, load_dt_h3_dit
+
+    if is_dt_checkpoint(transformer):
+        dit = load_dt_h3_dit(transformer)
+    elif (transformer / "paged_manifest.json").is_file():
         from minimax_h3_mlx.paged_checkpoint import load_paged_dit
 
         dit = load_paged_dit(transformer)
     else:
         dit = load_dit(transformer)
-    pipeline_config = PipelineConfig.from_model_index(Path(spec.checkpoint) / "model_index.json")
-    return MiniMaxH3Pipeline(dit, None, None, None, pipeline_config)
+    try:
+        return MiniMaxH3Pipeline(dit, None, None, None, pipeline_config)
+    except BaseException:
+        pager = getattr(dit, "paged_blocks", None)
+        if pager is not None:
+            pager.close()
+        raise
 
 
 class H3TransformerCache:

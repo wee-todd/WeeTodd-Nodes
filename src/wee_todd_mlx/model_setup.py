@@ -125,6 +125,26 @@ def setup_catalog() -> list[dict]:
                 + [dict(key=key, label=f"LTX 2.5 {label} adapter", kind="file", accepts=["file"])],
             )
         )
+    result.append(
+        dict(
+            id="h3-draw-things-text",
+            name="MiniMax H3 · Draw Things models · Text to video",
+            engine="h3",
+            task="t2v",
+            description="Experimental native generation from your existing Draw Things H3 files. "
+            "No converted weight copies. Text to video only; "
+            "speed and memory differ from Draw Things.",
+            components=[
+                dict(key=key, label=label, kind=kind, accepts=[kind])
+                for key, label, kind in (
+                    ("dt_transformer", "Draw Things H3 transformer (.ckpt)", "file"),
+                    ("dt_qwen", "Draw Things H3 Qwen encoder (.ckpt)", "file"),
+                    ("dt_vae", "Draw Things H3 VAE (.ckpt)", "file"),
+                    ("tokenizer", "H3 tokenizer (small support files)", "directory"),
+                )
+            ],
+        )
+    )
     for preset in result:
         if preset["engine"] == "ltx25":
             preset["description"] += " " + LTX25_DISTILLED_NOTICE
@@ -203,6 +223,16 @@ def _h3_candidate(key, path, task):
             allow_fl2va_weights_for_ref2va=False,
         )
         return
+    from minimax_h3_mlx.dt_h3_checkpoint import is_dt_checkpoint
+    from minimax_h3_mlx.dt_source import dt_source
+
+    if (key == "transformer" and path.is_file() and is_dt_checkpoint(path)) or (
+        key in {"text_encoder", "video_vae", "audio_vae"} and dt_source(path, key)
+    ):
+        if task != "t2va":
+            raise ValueError("DT direct models currently support text-to-video only.")
+        _component_report(key, path)
+        return
     if path.is_dir():
         if key == "transformer":
             _validate_h3_transformer_identity(path, task)
@@ -277,6 +307,10 @@ def _h3_candidate(key, path, task):
 
 
 def _validate_candidate(preset, key, path):
+    if preset["id"] == "h3-draw-things-text":
+        from .dt_model_setup import validate_selection
+
+        return validate_selection(key, path)
     if preset["engine"] == "h3":
         task = {"t2v": "t2va", "fflf": "fl2va", "ref2va": "ref2va"}[preset["task"]]
         _h3_candidate(key, path, task)
@@ -547,6 +581,8 @@ def scan_models(preset_id, roots) -> dict:
                     )
                 )
                 kind = "directory"
+            elif path.suffix == ".ckpt" and preset["id"] == "h3-draw-things-text":
+                kind = "file"
             elif path.suffix == ".safetensors":
                 kind = "file"
                 inspect_safetensors_header(path)
@@ -628,6 +664,10 @@ def _recipe(preset, components, memory_mode, memory_gb):
             components, task={"t2v": "t2va", "fflf": "fl2va", "ref2va": "ref2va"}[preset["task"]]
         )
         config = H3GenerationConfig(memory_mode="low_memory_bf16", projection_backend="mlx")
+        from minimax_h3_mlx.dt_h3_checkpoint import is_dt_checkpoint
+
+        if memory_mode != "lower_memory" and is_dt_checkpoint(components["transformer"]):
+            config = H3GenerationConfig(memory_mode="normal", projection_backend="mlx")
         fields = asdict(config)
         if memory_mode == "lower_memory":
             fields.update(attention_head_chunk_size="2", ffn_row_chunk_size="128")
@@ -677,6 +717,10 @@ def prepare_recipe(
     """Validate selected local assets, then atomically publish a new unique profile."""
     preset = _preset(preset_id)
     _memory(memory_mode, memory_gb)
+    if preset_id == "h3-draw-things-text":
+        from .dt_model_setup import prepare_dt_recipe
+
+        return prepare_dt_recipe(components, profiles_directory, memory_mode, memory_gb)
     if not isinstance(components, dict):
         raise ValueError("Components must be an object of selected local paths")
     required = {c["key"] for c in preset["components"]}
@@ -701,6 +745,11 @@ def prepare_recipe(
         _validate_candidate(preset, key, path)
         selected[key] = str(path)
     recipe, warnings = _recipe(preset, selected, memory_mode, memory_gb)
+    return _publish_recipe(preset, recipe, warnings, profiles_directory)
+
+
+def _publish_recipe(preset, recipe, warnings, profiles_directory):
+    preset_id = preset["id"]
     root = Path(profiles_directory).expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)
     target = root / f"{preset_id}-{uuid.uuid4().hex}.json"

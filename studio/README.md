@@ -43,6 +43,52 @@ Runtime settings, autosave, global assets, recipes, previews and jobs live under
 `~/Library/Application Support/WeeTodd Studio`. User media and model weights stay in their existing
 locations. `WEETODD_STUDIO_DATA` selects a separate data directory for isolated development tests.
 
+## Reuse local Draw Things H3 models
+
+In **Studio Settings → Model setup**, select **MiniMax H3 · Draw Things models · Text to video**.
+Scan your Draw Things model folder or import these existing files individually:
+
+- H3 transformer: the supported `minimax_h3_i8x.ckpt` layout.
+- Qwen encoder: the supported `qwen_3_vl_32b_50_i8x.ckpt` layout.
+- Video/audio VAE: the supported `minimax_h3_vae_f16.ckpt` layout.
+- H3 tokenizer folder: reuse one already installed, or use the small tokenizer download.
+
+Names are examples; setup checks the tensor inventory, shapes and supported codecs. **Create Recipe**
+creates metadata references next to the recipe. Choose an **H3** clip, **Text to video**, and this
+recipe. This uses the native renderer and your local DT weight files; no DT connection or CU is
+involved. A **Draw Things** clip still selects the separate gRPC/cloud route.
+
+Original weights remain read-only and are decoded only in memory. No converted checkpoint or
+persistent weight cache is created. Keep the generated `h3-dt-components-*` directory beside its
+recipe. Model files and tokenizer remain in their original locations and must be available on the
+machine executing an exported job. Existing H3 ComfyUI Component Loader fields can use the recipe's
+component paths, including the original transformer file and generated metadata directories;
+choose task `t2va`. The combined legacy pipeline loader is not this setup route.
+
+This first release is experimental and limited to text-to-video with generated audio. Other DT
+model families, first/last/reference frames and audio inputs need separate adapters/qualification.
+LoRAs, resident execution and optional accelerators have not been qualified with DT weights.
+Use the checkpoint's default paging and standard MLX projections for the validated path. Performance
+and memory differ from the DT app; the VAEs currently execute in FP32 and the transformer repeatedly
+decodes/reorders its active block. A 36 GB hardware test remains outstanding.
+
+The same setup is available from the CLI, without writing a recipe by hand:
+
+```bash
+python scripts/setup_models.py download h3-dt-tokenizer --destination /path/to/library
+python scripts/setup_models.py create h3-draw-things-text \
+  --component dt_transformer=/path/to/DrawThings/minimax_h3_i8x.ckpt \
+  --component dt_qwen=/path/to/DrawThings/qwen_3_vl_32b_50_i8x.ckpt \
+  --component dt_vae=/path/to/DrawThings/minimax_h3_vae_f16.ckpt \
+  --component tokenizer=/path/to/tokenizer \
+  --profiles-directory /path/to/recipes
+python scripts/render_headless.py --recipe /path/to/recipes/created-recipe.json \
+  --output-directory /path/to/output
+```
+
+Use the tokenizer folder returned by the download/scan and the recipe filename returned by setup.
+The model files stay in the DT model store. The tokenizer download retains its pinned source terms.
+
 ## Guided model setup
 
 For remote generation, see [Draw Things](#draw-things--experimental). Local model recipes below

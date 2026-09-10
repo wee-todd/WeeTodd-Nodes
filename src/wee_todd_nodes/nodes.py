@@ -793,7 +793,10 @@ class WeeToddH3ComponentLoader:
     RETURN_NAMES = ("components",)
     FUNCTION = "specify"
     CATEGORY = "WeeTodd/H3/loaders"
-    DESCRIPTION = "Describe every MiniMax H3 component. This node does not load tensor weights."
+    DESCRIPTION = (
+        "Describe native H3 components, including experimental DT-file T2V references. "
+        "This node does not load tensor weights."
+    )
 
     def specify(
         self,

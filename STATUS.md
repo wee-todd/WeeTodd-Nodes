@@ -30,6 +30,18 @@ reported process peak 7.72 GB, staged peak 6.24 GB and 8 ms AV drift. This estab
 baseline for those recipes, not universal physical-36-GB qualification. The older BF16 comparison
 used 672×384, so its 552 s timing is not a matched-resolution paging benchmark.
 
+Follow-up 2026-09-10: an experimental native H3 DT-file adapter now reads original row-int8,
+palette8, ezm7 and F16 storage without writing converted weights. Guided setup creates metadata
+references for H3 T2V; the shared headless/composable-node path reuses the existing sampler and
+staged lifecycle. Qwen language layers load sequentially with bounded embedding-row reads. Video
+and audio decoders load from the original combined DT VAE. Image/reference/audio-input modes,
+other DT model families, optional accelerators and 36 GB hardware are not qualified. The complete
+DT-weight headless render completed at 512×512/124 frames/19 Euler evaluations in 924.5 seconds
+with an 18.07 GiB process-footprint peak and 8.3 ms A/V duration drift. All weighted runtimes
+unloaded. Sampled frames were coherent; broad quality and a saved ComfyUI DT-file render remain
+open. Block preparation took 320.7 seconds, including 184.7 seconds decoding DT codecs. No DT app
+performance parity is claimed.
+
 ## Shared renderer and ComfyUI
 
 The shared Python/MLX backend runs through ComfyUI or `scripts/render_headless.py`.

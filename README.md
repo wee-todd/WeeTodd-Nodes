@@ -282,6 +282,36 @@ includes the paged transformer and Gemma encoder, video/audio VAEs and spatial u
 downloads the prepared components directly; local quantization is optional.
 The same prepared components can be selected by Studio, the headless runner and existing ComfyUI nodes.
 
+### Reuse Draw Things H3 files · experimental
+
+Studio's **MiniMax H3 · Draw Things models · Text to video** setup preset can read the
+original H3 transformer, Qwen encoder and combined VAE checkpoints directly from a local
+Draw Things model store. It creates small metadata references; it does not convert, copy,
+modify or persistently cache model weights. The same recipe runs headlessly, and its component
+paths work with the composable H3 ComfyUI nodes. This is native WeeTodd generation; choose a
+Draw Things clip instead to use the DT application/server or cloud service.
+
+The initial route supports the tested H3 row-int8/palette8 transformer, 50-layer Qwen row-int8
+encoder and F16 VAE layouts for **text-to-video with generated audio**. Other model families,
+image/reference/audio-input conditioning, and arbitrary DT formats are not supported by this
+route. Setup validates tensor layouts before loading weights. Keep the original files available;
+changing/removing them requires revalidation. LoRAs and optional accelerators have not been
+qualified with these weights. Existing native presets remain the performance default.
+
+Import the three `.ckpt` files and an existing H3 tokenizer folder, or use the small **H3 tokenizer ·
+For Draw Things model reuse** download (about 11.51 MB, no weights). See the
+[Studio and CLI instructions](studio/README.md#reuse-local-draw-things-h3-models).
+The adapter decodes/reorders one transformer block at a time in memory and uses the native
+BF16/FP32 arithmetic policy. It does not inherit DT's Swift/Metal speed or numerical results.
+The complete DT-weight route generated 512×512, 124 frames at 24 fps with stereo 32 kHz audio
+and 19 Euler evaluations in **924.5 seconds**, peaking at **18.07 GiB process footprint** on an
+M3 Ultra with 256 GiB RAM. Qwen took 21.3 seconds, sampling/setup 868.7 seconds and video decode
+31.1 seconds. All weighted runtimes unloaded. This first compatibility run is slower than the
+earlier native Q8-paged run; it is not a matched DT application benchmark or a 36 GB qualification.
+Loading/repacking active blocks accounted for 320.7 seconds, including 184.7 seconds of DT codec
+decoding. Retaining packed int8 arithmetic in memory is a future optimization candidate, not an
+enabled feature. No new full ComfyUI DT-file generation or broad visual-quality matrix is claimed.
+
 ### Ready-to-use Q8 downloads
 
 Choose **Set Up… → Download or prepare a model** in Studio and select **Preconverted (Recommended)**.
@@ -1439,7 +1469,7 @@ This table is generated from the registered node contracts. Run
 <!-- BEGIN GENERATED NODE CATALOG -->
 | Node | Notes | Category | Status |
 | --- | --- | --- | --- |
-| H3 Component Loader | Describe every MiniMax H3 component. This node does not load tensor weights. | H3 — Loaders | Recommended |
+| H3 Component Loader | Describe native H3 components, including experimental DT-file T2V references. This node does not load tensor weights. | H3 — Loaders | Recommended |
 | H3 Model Preview Override | Attach a true-color TAE preview and optional collapse guard to H3 sampling. Core ML can keep preview decoding on the Apple Neural Engine; MLX remains the fallback. Place this node between the component loader and sampler. | H3 — Sampling and acceleration | Experimental |
 | H3 Quantized Transformer Loader | Select and validate a named mixed-precision H3 transformer without loading weights. Both q8 profiles are approximate and keep BlockCache disabled by default. | H3 — Loaders | Experimental |
 | H3 Component Preflight | Validate MiniMax H3 components and estimate staged memory from file headers. Vision-capable paged Qwen is supported; reference workspace is not included. Set available memory to zero when unknown. | H3 — Loaders | Recommended |

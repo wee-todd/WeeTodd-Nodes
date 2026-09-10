@@ -122,11 +122,39 @@ def describe_asset(path, *, manifest_only=False):
                 metadata=header["metadata"],
                 tensor_layout_sha256=_digest(header["tensors"]),
             )
+        elif file.suffix.lower() == ".ckpt":
+            from minimax_h3_mlx.dt_h3_checkpoint import is_dt_checkpoint
+
+            if not is_dt_checkpoint(file):
+                raise ValueError("Unsupported asset format: .ckpt is not a Draw Things store")
+            from minimax_h3_mlx.dt_tensor_store import DTTensorStore
+
+            with DTTensorStore(file) as store:
+                records = [store._record(n) for n in sorted(store.records)]
+                for record in records:
+                    if record.codec & 0x10000000:
+                        store._span(record, store._inline(record))
+                member.update(
+                    tensor_count=len(records),
+                    format="draw-things",
+                    tensor_layout_sha256=_digest(
+                        [(r.name, r.shape, r.codec, r.datatype) for r in records]
+                    ),
+                )
+                sidecar = Path(str(file) + "-tensordata")
+                if sidecar.is_file():
+                    member["payload_stat"] = _stat(sidecar)
         elif file.suffix.lower() in DATA_SUFFIXES:
             if before[2] > MAX_CONFIG_BYTES:
                 raise ValueError(f"Support file exceeds bounded inspection size: {file}")
             content = file.read_bytes()
             member["sha256"] = hashlib.sha256(content).hexdigest()
+            if file.name == "draw_things_source.json":
+                from minimax_h3_mlx.dt_source import dt_source_files
+
+                member["referenced_models"] = [
+                    {"path": str(p), "stat": _stat(p)} for p in dt_source_files(file.parent)
+                ]
             if file.name.endswith(".safetensors.index.json"):
                 weight_map = json.loads(content).get("weight_map")
                 if not isinstance(weight_map, dict) or not weight_map:

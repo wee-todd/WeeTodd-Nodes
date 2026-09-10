@@ -470,6 +470,10 @@ def _validate_preconverted(kind, root):
 
         if not PagedTextEncoderManifest.load(root).supports_vision:
             raise ValueError("Downloaded encoder lacks its required vision page")
+    elif kind == "h3-dt-tokenizer":
+        from .model_setup import _h3_candidate
+
+        _h3_candidate("tokenizer", root, "t2va")
     elif kind in {
         "h3-transformer-fl2va",
         "h3-transformer-ref2va",

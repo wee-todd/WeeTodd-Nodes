@@ -365,11 +365,18 @@ def test_shipped_preconverted_catalog_pins_files_and_retains_terms():
                 "audio_vae/metadata.json",
                 "audio_vae/model.safetensors",
             } <= {item.target for item in items}
+        elif package["kind"] == "h3-dt-tokenizer":
+            assert {"tokenizer.json", "tokenizer_config.json", "LICENSE"} <= {
+                item.target for item in items
+            }
+            assert sum(item.size for item in items) < 12_000_000
+            assert not any(item.target.endswith(".safetensors") for item in items)
         elif package["kind"] == "h3-video-vae":
             assert "video_vae_affine_q8.safetensors" in {item.target for item in items}
         else:
             assert any(item.target.endswith("manifest.json") for item in items)
-        assert "Recommended" in package["descriptor"]["name"]
+        if package["kind"] != "h3-dt-tokenizer":
+            assert "Recommended" in package["descriptor"]["name"]
 
 
 def test_h3_and_ltx25_presets_have_downloads_for_every_required_component():
@@ -385,7 +392,13 @@ def test_h3_and_ltx25_presets_have_downloads_for_every_required_component():
             and preset["task"] in download.get("tasks", [preset["task"]])
             for component in download.get("components", [])
         }
-        required = {component["key"] for component in preset["components"]}
+        local_only = {
+            "ltx25-control": {"control_lora_path"},
+            "ltx25-ingredients": {"ingredients_lora_path"},
+            "ltx25-msr": {"msr_lora_path"},
+            "h3-draw-things-text": {"dt_transformer", "dt_qwen", "dt_vae"},
+        }.get(preset["id"], set())
+        required = {component["key"] for component in preset["components"]} - local_only
         assert required <= provided, (preset["id"], required - provided)
 
 

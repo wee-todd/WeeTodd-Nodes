@@ -31,6 +31,11 @@ class H3VideoVAESpec:
         if self.tile_mode not in {"fixed", "geometry_experimental"}:
             raise ValueError("Unknown H3 video VAE tile mode.")
         path = Path(self.video_vae).expanduser()
+        from minimax_h3_mlx.dt_source import dt_source, validate_dt_reference
+
+        if dt_source(path, "video_vae") is not None:
+            validate_dt_reference(path, "video_vae")
+            return
         if path.is_file():
             if path.suffix != ".safetensors":
                 raise ValueError(f"Compact video VAE must be a safetensors file: {path}")
@@ -105,6 +110,12 @@ def _default_video_vae_factory(spec: H3VideoVAESpec):
     from minimax_h3_mlx.load import load_compact_video_vae, load_video_vae
 
     path = Path(spec.video_vae).expanduser()
+    from minimax_h3_mlx.dt_source import dt_source
+
+    if dt_source(path, "video_vae") is not None:
+        from minimax_h3_mlx.dt_vae import load_dt_video_vae
+
+        return load_dt_video_vae(path)
     if path.is_file():
         return load_compact_video_vae(path)
     return load_video_vae(path)
@@ -477,6 +488,11 @@ class H3AudioVAESpec:
 
     def validate(self) -> None:
         path = Path(self.audio_vae).expanduser()
+        from minimax_h3_mlx.dt_source import dt_source, validate_dt_reference
+
+        if dt_source(path, "audio_vae") is not None:
+            validate_dt_reference(path, "audio_vae")
+            return
         if path.is_file():
             if path.suffix != ".safetensors":
                 raise ValueError(f"Compact audio VAE must be a safetensors file: {path}")
@@ -510,6 +526,12 @@ def _default_audio_vae_factory(spec: H3AudioVAESpec):
     from minimax_h3_mlx.load import load_audio_vae, load_compact_audio_vae
 
     path = Path(spec.audio_vae).expanduser()
+    from minimax_h3_mlx.dt_source import dt_source
+
+    if dt_source(path, "audio_vae") is not None:
+        from minimax_h3_mlx.dt_vae import load_dt_audio_vae
+
+        return load_dt_audio_vae(path)
     if path.is_file():
         return load_compact_audio_vae(path)
     return load_audio_vae(path)

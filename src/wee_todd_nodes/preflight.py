@@ -469,6 +469,45 @@ def _component_report(
             quantization="not-applicable",
         )
 
+    if name == "transformer" and path.is_file():
+        from minimax_h3_mlx.dt_h3_checkpoint import describe_dt_h3, is_dt_checkpoint
+
+        if is_dt_checkpoint(path):
+            description = describe_dt_h3(path)
+            return ComponentReport(
+                name=name,
+                path=str(path),
+                files=(path.name,),
+                disk_bytes=path.stat().st_size,
+                tensor_bytes=description["tensor_bytes"],
+                tensor_count=description["tensor_count"],
+                dtypes=("F16",),
+                quantization="DT row-int8/palette8",
+                adaln_bytes=description["adaln_bytes"],
+                paging_format="weetodd-h3-dt-direct-v1",
+                paging_fixed_bytes=description["fixed_bytes"],
+                paging_window_bytes=description["window_bytes"] * 2,
+            )
+
+    if path.is_dir() and name in {"text_encoder", "video_vae", "audio_vae"}:
+        from minimax_h3_mlx.dt_source import describe_dt_reference, dt_source
+
+        if dt_source(path, name) is not None:
+            description = describe_dt_reference(path, name)
+            source = description["source"]
+            return ComponentReport(
+                name=name,
+                path=str(path),
+                files=(source.name,),
+                disk_bytes=source.stat().st_size,
+                tensor_bytes=description["tensor_bytes"],
+                tensor_count=description["tensor_count"],
+                dtypes=("F16",),
+                quantization="DT direct (native execution dtype)",
+                paging_format="weetodd-h3-dt-source-v1",
+                paging_window_bytes=description["window_bytes"],
+            )
+
     _validate_component_config(path, name)
     files = _weight_files(path, name)
     headers = [read_safetensors_header(file) for file in files]
@@ -677,6 +716,10 @@ def preflight_components(
             raise type(exc)(_component_resolution_error(spec, name, paths[name], exc)) from exc
     components = tuple(component_reports)
     by_name = {component.name: component for component in components}
+    if spec.task != "t2va" and any(
+        (c.paging_format or "").startswith("weetodd-h3-dt-") for c in components
+    ):
+        raise ValueError("DT direct components currently support text-to-video only.")
     if (
         spec.task in {"fl2va", "ref2va"}
         and by_name["text_encoder"].paging_format
@@ -767,7 +810,12 @@ def preflight_components(
             "vision attention workspace depend on the actual reference media and are "
             "not included in this header-only estimate."
         )
-    if transformer.paging_format is not None:
+    if transformer.paging_format == "weetodd-h3-dt-direct-v1":
+        warnings.append(
+            "DT direct transformer estimates include fixed weights and a decoded block "
+            "with a loading buffer. Original files are read repeatedly during sampling."
+        )
+    elif transformer.paging_format is not None:
         warnings.append(
             "Paged transformer memory uses the fixed page plus the largest four-block window; "
             "storage traffic and allocator behavior remain unmeasured."
