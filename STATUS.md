@@ -10,6 +10,18 @@ by Studio, headless recipes and the composable ComfyUI sampler; default 0 preser
 Cache budget, quantized/LoRA parity and success/failure/cancellation cleanup have focused tests.
 Full-size cache timing and post-fix chunk performance on a physical 36 GB Mac remain unqualified.
 
+Studio generation selection now separates engine, task and preset. Supported sampling controls and
+LoRA strengths are visible; unsupported CFG/Shift or fixed schedules are explained rather than
+silently ignored. Preparation and export share a content-based recipe resolver, and Generate runs
+preflight automatically. Legacy clips preserve their Custom recipe behavior. H3 acceleration
+preferences have per-clip overrides, and headless resident sampling now forwards the selected
+policy while retaining staged unloading before decode. A matched 512×512, 124-frame, 19-evaluation H3 test on a 256 GiB M3 Ultra completed in
+574.7 s with paged weights and normal working buffers versus 1065.8 s for the saved lower-memory
+baseline; movies were byte-identical. MLX stage peak rose from 6.64 to 6.98 GiB. Full residency
+reduced total time to 535.1 s but raised the stage peak to 32.32 GiB. Studio exposes both choices;
+automatic defaults stay conservative pending broader qualification. This does not qualify either
+option on a physical 36 GB Mac. See [measurement conditions](studio/README.md#matched-h3-execution-measurements).
+
 Community report, 36 GB M3 Max (user-measured, source artifacts not independently inspected):
 LTX 2.5 T2V at 768×448, 121 frames, 8+3 distilled, paged Q8 transformer/Gemma completed in
 164.8 s (reported sampling 148.9 s), with reported complete process peak 9.20 GB. H3 first-frame
@@ -89,7 +101,7 @@ members and strengths into the clip; editing a template cannot mutate existing p
 jobs. The shared renderer retains authoritative adapter and task checks. GUI validation uses synthetic
 header fixtures and establishes editing/transport behavior, not visual quality.
 
-Guided setup now provides seven built-in H3/LTX presets, header-based existing-model reuse, validated
+Guided setup now provides built-in H3/LTX presets, header-based existing-model reuse, validated
 recipe creation, memory-policy advisories and explicit pinned downloads/preparation. Interrupted
 downloads resume; SHA-256 and staged output publication protect existing models. Final media
 preflight remains required for image/reference clips. Published Vayden releases provide the H3 Q8

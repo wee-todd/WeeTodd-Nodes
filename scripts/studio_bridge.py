@@ -140,12 +140,15 @@ def profiles(directory):
                 and task == "t2v"
             ):
                 task = "ref2va"
+            from wee_todd_mlx.generation_selection import generation_descriptor
+
             result.append(
                 {
                     "id": str(p.resolve()),
                     "name": p.stem.replace("_", " "),
                     "engine": recipe["engine"],
                     "task": task,
+                    "generation": generation_descriptor(recipe),
                     "width": recipe["config"].get("width", 768),
                     "height": recipe["config"].get("height", 448),
                 }
@@ -156,63 +159,86 @@ def profiles(directory):
 
 
 def infer_task(clip):
-    if clip.get("extensionDirection"):
-        return "extension"
-    roles = {a["role"] for a in clip.get("attachments", [])}
-    for role, task in (("control", "control"), ("audioDriver", "a2v"), ("reference", "ref2va")):
-        if role in roles:
-            return task
-    return "fflf" if roles & {"first", "last", "keyframe"} else "t2v"
+    from wee_todd_mlx.generation_selection import infer_task as shared_infer_task
+
+    return shared_infer_task(clip)
+
+
+def resolve_clip_generation(request, clip):
+    from wee_todd_mlx.generation_selection import resolve_generation_selection
+
+    attached_loras = []
+    if clip["engine"] == "h3":
+        from studio_lora import clip_lora
+
+        assets = {a["id"]: a for a in request["project"]["assets"]
+                  + request.get("globalAssets", [])}
+        for attachment in clip.get("attachments", []):
+            if attachment["role"] == "lora":
+                asset = assets.get(attachment["assetID"])
+                if asset is None:
+                    raise ValueError("A clip attachment is missing from its asset store.")
+                attached_loras.append(clip_lora(asset, attachment, "h3"))
+    return resolve_generation_selection(
+        clip.get("generationSelection"), clip,
+        profiles(request["runtime"]["profilesDirectory"]),
+        {"acceleration": request["runtime"].get("acceleration"),
+         "attached_loras": attached_loras},
+    )
+
+
+def describe_generation(request):
+    clip = next(c for c in request["project"]["clips"] if c["id"] == request["clipID"])
+    result = resolve_clip_generation(request, clip)
+    recipe = result["recipe"]
+    resolved_fingerprint = ""
+    generation = result["generation"]
+    if clip.get("prompt", "").strip():
+        recipe, report = compose_recipe(request)
+        resolved_fingerprint = report["resolvedFingerprint"]
+        generation = report["generation"]
+
+    def source_paths(value):
+        if isinstance(value, dict):
+            return [item for child in value.values() for item in source_paths(child)]
+        if isinstance(value, list):
+            return [item for child in value for item in source_paths(child)]
+        if isinstance(value, str) and ("/" in value or value.startswith("~")):
+            return [str(Path(value).expanduser().resolve())]
+        return []
+
+    dependencies = source_paths(recipe.get("components", {}))
+    dependencies += source_paths(recipe.get("loras", {}))
+    dependencies += source_paths(recipe.get("conditioning", {}).get("inputs", []))
+    for dependency in list(dependencies):
+        for name in ("paged_manifest.json", "model_identity.json", "conversion_provenance.json"):
+            provenance = Path(dependency) / name
+            if provenance.is_file():
+                dependencies.append(str(provenance))
+    return {
+        "profileID": result["profileID"], "generation": generation,
+        "fingerprint": resolved_fingerprint,
+        "selectionFingerprint": result["fingerprint"],
+        "sourcePaths": sorted(set([result["profileID"], *dependencies])),
+        "warnings": result["warnings"],
+    }
 
 
 def compose_recipe(request):
     """Map explicit editorial roles to the existing fail-closed renderer contract."""
     project, settings = request["project"], request["runtime"]
     clip = next(c for c in project["clips"] if c["id"] == request["clipID"])
-    engine, task = clip["engine"], infer_task(clip)
+    from wee_todd_mlx.generation_selection import (
+        fingerprint,
+        generation_descriptor,
+    )
+
+    engine = clip["engine"]
     if engine == "movie":
         raise ValueError("Imported movies need finishing/export, not model generation.")
-    available = profiles(settings["profilesDirectory"])
-    selected = clip.get("profileID", "auto")
-    if selected == "auto":
-        candidates = [p for p in available if p["engine"] == engine and p["task"] == task]
-        if engine == "ltx25" and task == "control":
-            from wee_todd_mlx.model_setup import ltx25_recipe_control_families
-            from wee_todd_mlx.task_conditioning import CONTROL_FAMILIES
-
-            required = {
-                CONTROL_FAMILIES.get(a.get("controlType", "canny_edges"))
-                for a in clip.get("attachments", []) if a["role"] == "control"
-            }
-            candidates = []
-            for profile in available:
-                if profile["engine"] != engine:
-                    continue
-                try:
-                    families = ltx25_recipe_control_families(profile["id"])
-                except (OSError, ValueError, KeyError, TypeError):
-                    continue
-                if None not in required and required <= families:
-                    candidates.append(profile)
-        # LTX 2.5's basic distilled pipeline can transport keyframes and one frozen audio input.
-        if not candidates and engine == "ltx25" and task in {"fflf", "a2v"}:
-            candidates = [
-                p
-                for p in available
-                if p["engine"] == engine and p["task"] == "t2v" and "distilled" in p["name"]
-            ]
-        if not candidates:
-            raise ValueError(
-                f"Import a compatible {engine} {task} recipe in Runtime Settings. "
-                "No inputs were discarded."
-            )
-        selected = candidates[0]["id"]
-    if selected not in {p["id"] for p in available}:
-        raise ValueError("The selected model recipe is missing. Reimport or select Automatic.")
-    recipe = json.loads(Path(selected).read_text())
-    if recipe["engine"] != engine:
-        raise ValueError("Selected recipe belongs to another model family.")
-    recipe = copy.deepcopy(recipe)
+    resolved = resolve_clip_generation(request, clip)
+    selected, recipe = resolved["profileID"], resolved["recipe"]
+    task = "fflf" if resolved["task"] == "i2v" else resolved["task"]
     recipe.pop("reference_images", None)
     # Media belongs to the clip. Preserve imported contract options, never hidden paths.
     imported_contract = recipe.pop("conditioning", {})
@@ -377,8 +403,18 @@ def compose_recipe(request):
     from wee_todd_mlx.task_conditioning import validate_conditioning
 
     report = validate_conditioning(recipe)
+    generation = generation_descriptor(recipe)
+    if "acceleration" in resolved["generation"]:
+        generation["acceleration"] = resolved["generation"]["acceleration"]
+    if (clip.get("generationSelection") or {}).get("steps") is not None:
+        if not generation["controls"]["stepsEditable"]:
+            raise ValueError("steps override is unsupported by the attached adapter schedule.")
     return recipe, {
         "profile": Path(selected).stem,
+        "generation": generation,
+        "resolvedFingerprint": fingerprint(recipe),
+        "selectionFingerprint": resolved["fingerprint"],
+        "warnings": resolved["warnings"],
         "task": task,
         "conditioning": report,
         "nativeFPS": fps,
@@ -1235,6 +1271,7 @@ def main():
             "setup-downloads",
             "setup-download",
             "catalog",
+            "describe-generation",
             "inspect",
             "prepare",
             "render",
@@ -1308,6 +1345,8 @@ def main():
         )
     elif args.command == "motion-prepare":
         result = motion_prepare(request)
+    elif args.command == "describe-generation":
+        result = describe_generation(request)
     elif args.command == "prepare":
         result = prepare(request, args.output.resolve())
     elif args.command == "render":

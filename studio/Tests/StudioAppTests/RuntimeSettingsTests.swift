@@ -38,3 +38,27 @@ final class RuntimeSettingsTests: XCTestCase {
     XCTAssertNil(RuntimeSettings.restoring(data, defaults: withoutHelper).drawThingsHelperPath)
   }
 }
+
+extension RuntimeSettingsTests {
+  func testAccelerationSettingsRemainOptionalForLegacyRuntime() throws {
+    var runtime = RuntimeSettings(root: "/source", pythonPath: "/python", profilesDirectory: "/profiles")
+    XCTAssertNil(try JSONDecoder().decode(RuntimeSettings.self,
+      from: JSONEncoder().encode(runtime)).acceleration)
+    runtime.acceleration = .init()
+    runtime.acceleration?.h3MemoryPolicy = "paged"
+    let restored = RuntimeSettings.restoring(try JSONEncoder().encode(runtime), defaults: runtime)
+    XCTAssertEqual(restored.acceleration?.h3MemoryPolicy, "paged")
+    XCTAssertEqual(restored.acceleration?.h3ProjectionBackend, "auto")
+  }
+}
+
+extension RuntimeSettingsTests {
+  func testLargerWorkspacePagingRuntimeRoundTrip() throws {
+    var runtime = RuntimeSettings(root: "/source", pythonPath: "/python", profilesDirectory: "/profiles")
+    runtime.acceleration = .init()
+    runtime.acceleration?.h3MemoryPolicy = "pagedNormal"
+    let restored = RuntimeSettings.restoring(try JSONEncoder().encode(runtime), defaults: runtime)
+    XCTAssertEqual(restored.acceleration?.h3MemoryPolicy, "pagedNormal")
+    XCTAssertEqual(restored.acceleration?.h3ProjectionBackend, "auto")
+  }
+}

@@ -15,6 +15,7 @@ struct RuntimeSettings: Codable {
   var rifeWeights = ""
   var metalPath = ""
   var drawThingsHelperPath: String?
+  var acceleration: AccelerationSettings?
 
   static func restoring(_ data: Data?, defaults: Self) -> Self {
     var value = data.flatMap { try? JSONDecoder().decode(Self.self, from: $0) } ?? defaults
@@ -40,11 +41,12 @@ struct RuntimeSettings: Codable {
     return value
   }
 }
-struct ModelProfile: Identifiable {
+struct ModelProfile: Identifiable, Codable {
   var id: String
   var name: String
   var engine: String
   var task: String
+  var generation: GenerationDescriptor?
 }
 
 @MainActor final class Bridge: ObservableObject {
@@ -186,6 +188,7 @@ extension Encodable {
   @Published var zoom: Double = 42
   @Published var runtime = RuntimeSettings.defaults()
   @Published var profiles: [ModelProfile] = []
+  @Published var generationDescriptions: [UUID: [String: Any]] = [:]
   @Published var projectURL: URL?
   @Published var showPrompt = false
   @Published var showMotionPrompt = false
@@ -221,7 +224,7 @@ extension Encodable {
   @Published var queue: [UUID] = []
   @Published var previewMode = "Clip"
   let bridge = Bridge()
-  private var preparedFingerprint: String?
+  var preparedFingerprint: String?
   var motionPromptSession: MotionPromptEditorSession?
   private var undoStates: [StudioProject] = []
   private var redoStates: [StudioProject] = []
@@ -352,6 +355,7 @@ extension Encodable {
   }
   func addClip(_ engine: Engine = .ltx25) {
     var c = Clip(name: "Shot \(project.clips.count + 1)", engine: engine)
+    if engine != .movie && engine != .drawThings { c.generationSelection = GenerationSelection() }
     if engine == .drawThings {
       c.drawThings = DrawThingsSelection(profileID: drawThingsConnections.first?.id ?? "",
         modelID: "", modelFamily: "", configuration: ["steps": .integer(8)])
@@ -676,7 +680,10 @@ extension Encodable {
         guard let id = d["id"] as? String, let name = d["name"] as? String,
           let engine = d["engine"] as? String, let task = d["task"] as? String
         else { return nil }
-        return ModelProfile(id: id, name: name, engine: engine, task: task)
+        let generation = (d["generation"] as? [String: Any]).flatMap {
+          try? JSONDecoder().decode(GenerationDescriptor.self, from: JSONSerialization.data(withJSONObject: $0))
+        }
+        return ModelProfile(id: id, name: name, engine: engine, task: task, generation: generation)
       }
     } catch { notice = error.localizedDescription }
   }
@@ -709,9 +716,55 @@ extension Encodable {
       "clipID": selectedClipID?.uuidString ?? "",
     ]
   }
+  func generationRequestKey(for clip: Clip) -> String {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = .sortedKeys
+    let relevantProfiles = profiles.filter { $0.engine == clip.engine.rawValue }.sorted { $0.id < $1.id }
+    let profileMetadata = relevantProfiles.map { profile in
+      let attributes = try? FileManager.default.attributesOfItem(atPath: profile.id)
+      return profile.id + "|" + String(describing: attributes?[.modificationDate])
+        + "|" + String(describing: attributes?[.size])
+    }.joined(separator: "\n")
+    let referenced = Set(clip.attachments.map(\.assetID))
+    let mediaMetadata = allAssets.filter { referenced.contains($0.id) }.sorted { $0.id.uuidString < $1.id.uuidString }.map { asset in
+      let attributes = try? FileManager.default.attributesOfItem(atPath: asset.path)
+      return asset.path + "|" + String(describing: attributes?[.modificationDate])
+        + "|" + String(describing: attributes?[.size])
+    }.joined(separator: "\n")
+    return clip.generationFingerprint + ((try? encoder.encode(runtime).base64EncodedString()) ?? "")
+      + GenerationSelection.assetFingerprint(for: clip, assets: allAssets)
+      + ((try? encoder.encode(relevantProfiles).base64EncodedString()) ?? "")
+      + ((try? encoder.encode(loraGroups).base64EncodedString()) ?? "")
+      + String(clip.settings(in: project).fps) + profileMetadata + mediaMetadata
+  }
+  func describeGeneration() async {
+    guard let clip = selectedClip, clip.engine != .movie, clip.engine != .drawThings else { return }
+    let key = generationRequestKey(for: clip)
+    do {
+      var result = try await Bridge().invoke("describe-generation", runtime: runtime, payload: try payload())
+      guard selectedClip.map({ generationRequestKey(for: $0) }) == key else { return }
+      result["studioInput"] = key
+      result["studioEngine"] = clip.engine.rawValue
+      result["studioTask"] = clip.inferredTask
+      result["studioProfile"] = clip.profileID
+      generationDescriptions[clip.id] = result
+      validationErrors[clip.id] = nil
+    } catch {
+      guard selectedClip.map({ generationRequestKey(for: $0) }) == key else { return }
+      validationErrors[clip.id] = error.localizedDescription
+    }
+  }
+  func generateSelected() async {
+    await prepareSelected()
+    guard canGenerateSelected else { return }
+    await renderPrepared()
+  }
   func prepareSelected() async {
     guard selectedClip != nil else { return }
     if selectedClip?.engine == .drawThings { await prepareDrawThingsClip(); return }
+    preparedRecipe = nil
+    preparedFingerprint = nil
+    await describeGeneration()
     do {
       let snapshot = signature(for: selectedClip!)
       let destination = Self.supportDirectory.appendingPathComponent(
@@ -731,6 +784,7 @@ extension Encodable {
       if let i = project.clips.firstIndex(where: { $0.id == selectedClipID }) {
         project.clips[i].validatedSignature = snapshot
       }
+      if let id = selectedClipID { validationErrors[id] = nil }
       preparedFingerprint = snapshot
       notice = "Preflight passed. Review the exact prompt, then render."
     } catch {
@@ -748,6 +802,13 @@ extension Encodable {
       let destination = URL(fileURLWithPath: path).deletingLastPathComponent()
         .deletingLastPathComponent().appendingPathComponent("render")
       let prompt = preparedPrompt
+      let prepared = (try? JSONSerialization.jsonObject(with: Data(preparedReport.utf8))) as? [String: Any]
+      let resolved = prepared ?? generationDescriptions[c.id]
+      let generationSettings = resolved?["generation"].flatMap {
+        try? JSONDecoder().decode(GenerationDescriptor.self,
+          from: JSONSerialization.data(withJSONObject: $0))
+      }
+      let resolvedFingerprint = prepared?["resolvedFingerprint"] as? String
       let r = try await bridge.invoke(
         "render", runtime: runtime, payload: ["recipePath": path], output: destination)
       guard let video = r["video"] as? String else {
@@ -773,7 +834,8 @@ extension Encodable {
         guard let i = p.clips.firstIndex(where: { $0.id == c.id }) else { return }
         p.clips[i].versions.append(
           RenderVersion(path: video, seed: c.seed, prompt: prompt, recipePath: path,
-                        stats: RenderStats(result: r)))
+                        stats: RenderStats(result: r), generationSettings: generationSettings,
+                        resolvedFingerprint: resolvedFingerprint))
         p.clips[i].sourcePath = video
         p.clips[i].sourceIn = renderedStart
         p.clips[i].duration = min(c.duration, renderedDuration)
@@ -796,6 +858,7 @@ extension Encodable {
     var c = Clip(
       name: old.name + " · extension", engine: old.engine == .movie ? .ltx25 : old.engine)
     c.prompt = old.prompt
+    c.generationSelection = GenerationSelection(task: "extension")
     c.extensionDirection = direction
     c.extensionSource = old.sourcePath
     c.extensionClipID = old.id

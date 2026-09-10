@@ -130,12 +130,16 @@ public struct RenderVersion: Codable, Identifiable, Equatable {
   public var prompt: String
   public var recipePath: String
   public var stats: RenderStats?
-  public init(path: String, seed: Int, prompt: String, recipePath: String, stats: RenderStats? = nil) {
+  public var generationSettings: GenerationDescriptor?
+  public var resolvedFingerprint: String?
+  public init(path: String, seed: Int, prompt: String, recipePath: String, stats: RenderStats? = nil, generationSettings: GenerationDescriptor? = nil, resolvedFingerprint: String? = nil) {
     self.path = path
     self.seed = seed
     self.prompt = prompt
     self.recipePath = recipePath
     self.stats = stats
+    self.generationSettings = generationSettings
+    self.resolvedFingerprint = resolvedFingerprint
   }
 }
 public struct Clip: Codable, Identifiable, Equatable {
@@ -171,6 +175,7 @@ public struct Clip: Codable, Identifiable, Equatable {
   public var renderedSignature = ""
   public var validatedSignature = ""
   public var extensionClipID: UUID?
+  public var generationSelection: GenerationSelection?
   public var drawThings: DrawThingsSelection?
   public init(name: String = "Untitled clip", engine: Engine = .ltx25) {
     self.name = name
@@ -180,6 +185,7 @@ public struct Clip: Codable, Identifiable, Equatable {
     settingsOverride ?? project.settings
   }
   public var inferredTask: String {
+    if let selection = generationSelection { return selection.task }
     if !extensionDirection.isEmpty { return "extension" }
     if attachments.contains(where: { $0.role == .control }) { return "control" }
     if attachments.contains(where: { $0.role == .audioDriver }) { return "a2v" }
@@ -192,7 +198,8 @@ public struct Clip: Codable, Identifiable, Equatable {
   public var displayTask: String {
     if engine == .movie { return "Imported media" }
     switch inferredTask {
-    case "fflf": return "Image / keyframe video"
+    case "i2v": return "Image to video"
+    case "fflf": return "First and last frames"
     case "ref2va": return "Reference video"
     case "a2v": return "Audio-driven video"
     case "control": return "Controlled video"

@@ -113,9 +113,12 @@ def normalize_conditioning(recipe, *, check_files=True):
             "loras",
             "publication",
             "cache_directory",
+            "block_residency",
         },
         "recipe",
     )
+    if "block_residency" in recipe and recipe.get("engine") != "h3":
+        raise ValueError("block_residency is supported for native H3 only")
     if "conditioning" in recipe:
         if "reference_images" in recipe:
             raise ValueError("Use conditioning or legacy reference_images, not both")

@@ -54,13 +54,17 @@ enum ClipState: String {
     var paths = clip.attachments.compactMap { attachment in
       allAssets.first { $0.id == attachment.assetID }?.path
     }
-    if clip.profileID != "auto" {
-      paths.append(clip.profileID)
-    } else if let profile = profiles.first(where: {
-      $0.engine == clip.engine.rawValue && $0.task == clip.inferredTask
-    }) {
-      paths.append(profile.id)
+    if let resolved = generationDescriptions[clip.id],
+      resolved["studioInput"] as? String == generationRequestKey(for: clip) {
+      parts.append(resolved["fingerprint"] as? String ?? "")
+      paths += resolved["sourcePaths"] as? [String] ?? []
+    } else {
+      parts.append("unresolved")
     }
+    paths += profiles.filter { $0.engine == clip.engine.rawValue }.map(\.id)
+    parts.append(generationRequestKey(for: clip))
+    parts.append(runtime.root + "|" + runtime.profilesDirectory)
+    parts.append(String(clip.settings(in: project).fps))
     for path in paths.sorted() {
       let attributes = try? FileManager.default.attributesOfItem(atPath: path)
       parts.append(
@@ -121,19 +125,8 @@ enum ClipState: String {
       result.append("Choose generation dimensions on the 32-pixel grid")
     }
     if clip.duration <= 0 { result.append("Set a positive duration") }
-    if clip.profileID == "auto" {
-      if !profiles.contains(where: {
-        $0.engine == clip.engine.rawValue
-          && ($0.task == clip.inferredTask
-            || (clip.engine == .ltx25 && ["a2v", "fflf"].contains(clip.inferredTask)
-              && $0.task == "t2v"))
-      }) {
-        result.append("Add a compatible \(clip.engine.label) \(clip.inferredTask) recipe")
-      }
-    } else if !profiles.contains(where: {
-      $0.id == clip.profileID && $0.engine == clip.engine.rawValue
-    }) {
-      result.append("Select a matching model recipe")
+    if generationDescriptions[clip.id]?["studioInput"] as? String != generationRequestKey(for: clip) {
+      result.append("Validate the selected task and model settings")
     }
     for a in clip.attachments {
       guard let asset = allAssets.first(where: { $0.id == a.assetID }) else {

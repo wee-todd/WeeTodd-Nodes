@@ -94,6 +94,10 @@ class H3GenerationConfig:
 
     def validate_paging(self, transformer: str | Path, block_residency="checkpoint_default"):
         """Reject incompatible retention requests before constructing weighted components."""
+        if block_residency not in {"checkpoint_default", "resident"}:
+            raise ValueError("H3 block_residency must be checkpoint_default or resident.")
+        if block_residency == "resident" and self.memory_mode != "normal":
+            raise ValueError("Resident H3 blocks require normal memory mode.")
         if self.paging_cache_gb == 0:
             return
         if block_residency != "checkpoint_default":

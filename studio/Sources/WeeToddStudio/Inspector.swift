@@ -55,7 +55,13 @@ struct ClipInspector: View {
       }
       if clip.engine != .movie {
         field("ENGINE") {
-          Picker("Engine", selection: binding(\.engine)) {
+          Picker("Engine", selection: Binding(get: { clip.engine }, set: { engine in
+            store.editClip {
+              $0.engine = engine
+              $0.profileID = "auto"
+              $0.generationSelection = engine == .drawThings ? nil : GenerationSelection()
+            }
+          })) {
             ForEach(Engine.allCases.filter { $0 != .movie }) {
               Text($0.label).tag($0)
             }
@@ -64,16 +70,7 @@ struct ClipInspector: View {
         if clip.engine == .drawThings {
           DrawThingsClipInspector(clip: clip)
         } else {
-        field("MODEL RECIPE") {
-          Picker("Model recipe", selection: binding(\.profileID)) {
-            Text("Automatic · match media roles").tag("auto")
-            ForEach(store.profiles.filter { $0.engine == clip.engine.rawValue }) {
-              Text($0.name).tag($0.id)
-            }
-          }.labelsHidden()
-          Button("Set up or repair models…") { store.showRuntime = true }
-            .font(.caption)
-        }
+          GenerationInspector(clip: clip)
         }
         Button {
           store.showPrompt = true
@@ -155,6 +152,19 @@ struct ClipInspector: View {
       DisclosureGroup("Advanced generation") {
         VStack(alignment: .leading, spacing: 10) {
           if clip.engine != .movie {
+            if clip.engine != .drawThings {
+              Picker("Custom recipe", selection: Binding(get: { clip.profileID }, set: { value in
+                store.editClip {
+                  $0.profileID = value
+                  $0.generationSelection = GenerationSelection(task: $0.inferredTask, preset: .custom)
+                }
+              })) {
+                Text("Automatic").tag("auto")
+                ForEach(store.profiles.filter { $0.engine == clip.engine.rawValue }) {
+                  Text($0.name).tag($0.id)
+                }
+              }
+            }
             if clip.engine == .h3 {
               Picker("H3 page cache", selection: binding(\.h3PagingCacheGB)) {
                 Text("Recipe default").tag(Optional<Double>.none)
@@ -237,6 +247,11 @@ struct ClipInspector: View {
                 Text("Seed \(v.seed)").foregroundStyle(.secondary)
               }
             }.font(.caption)
+            if let settings = v.generationSettings {
+              Text("Steps: \(settings.controls.evaluations.map(String.init) ?? "custom")"
+                + (settings.controls.refinementSteps.map { " · refinement: \($0)" } ?? ""))
+                .font(.caption2).foregroundStyle(.secondary)
+            }
             RenderStatsView(stats: v.stats)
           }
         }.font(.system(size: 11))

@@ -197,3 +197,115 @@ def test_comparison_verifies_files_and_rejects_changed_media(tmp_path, monkeypat
     output.write_bytes(b"changed media")
     with pytest.raises(ValueError, match="parity failed"):
         module.compare(tmp_path, [headless])
+
+
+@pytest.mark.parametrize("mode,memory,cache", [
+    ("invalid", "normal", 0),
+    ("resident", "low_memory_bf16", 0),
+    ("resident", "normal", 1),
+])
+def test_headless_residency_policy_rejected_before_weight_loading(tmp_path, mode, memory, cache):
+    from wee_todd_nodes.runtime import H3GenerationConfig
+
+    config = H3GenerationConfig(memory_mode=memory, paging_cache_gb=cache)
+    with pytest.raises(ValueError, match="(block_residency|normal memory|block residency)"):
+        config.validate_paging(tmp_path, mode)
+
+
+@pytest.mark.parametrize("mode", ["checkpoint_default", "resident"])
+@pytest.mark.parametrize("failure", [None, RuntimeError, KeyboardInterrupt])
+def test_headless_forwards_policy_and_releases_before_decode(tmp_path, monkeypatch, mode, failure):
+    from contextlib import nullcontext
+
+    from wee_todd_mlx import conditioning_media, task_conditioning
+    from wee_todd_nodes import (
+        conditioning,
+        decoding,
+        direct_publishing,
+        preflight,
+        runtime,
+        sampling,
+    )
+
+    monkeypatch.syspath_prepend(str(ROOT / "scripts"))
+    import profile_fasth3_server
+    import render_headless as module
+
+    monkeypatch.setattr(task_conditioning, "validate_conditioning", lambda r: {
+        "contract": {"task": "t2v"}, "input_ids": [],
+    })
+    monkeypatch.setattr(conditioning_media, "inspect_media", lambda *a: {})
+    monkeypatch.setattr(preflight, "preflight_components", lambda *a: None)
+    monkeypatch.setattr(profile_fasth3_server, "install_profiling", lambda *a: nullcontext())
+    encoded = SimpleNamespace(cache_report={}, condition_video_rows=None, condition_audio_rows=None)
+    monkeypatch.setattr(conditioning.TEXT_ENCODER_RUNTIME, "encode", lambda *a, **k: encoded)
+    released = []
+    runtimes = [conditioning.TEXT_ENCODER_RUNTIME, sampling.TRANSFORMER_RUNTIME,
+                decoding.VIDEO_VAE_RUNTIME, decoding.AUDIO_VAE_RUNTIME, runtime.RUNTIME]
+    for index, active in enumerate(runtimes):
+        monkeypatch.setattr(active, "unload", lambda i=index: released.append(i))
+
+    def sample(*args, **kwargs):
+        assert kwargs["block_residency"] == mode
+        assert kwargs["unload_after"] is True
+        if failure:
+            raise failure("test interruption")
+        return SimpleNamespace(transformer_evaluations=2, total_seconds=1,
+                               paging_report={}, sol_attention_report={}, vdn_report={},
+                               preview_report={}, projection_backend_report={"requested": "auto"},
+                               projection_backend_runtime={"fallback_calls": 1},
+                               block_residency_report={"requested": mode})
+
+    monkeypatch.setattr(sampling.TRANSFORMER_RUNTIME, "sample", sample)
+
+    def publish(*args, **kwargs):
+        assert 1 in released, "transformer must release before decoding"
+        return SimpleNamespace(video_path=tmp_path / "render.mp4", metadata={})
+
+    monkeypatch.setattr(direct_publishing, "publish_latents_direct", publish)
+    recipe = {"engine": "h3", "components": {"checkpoint": str(tmp_path), "task": "t2va"},
+              "config": {"steps": 3}, "prompt": "test", "ffmpeg": "ffmpeg",
+              "block_residency": mode}
+    if failure:
+        with pytest.raises(failure):
+            module.render_h3(recipe, tmp_path / "render.mp4")
+    else:
+        result = module.render_h3(recipe, tmp_path / "render.mp4")
+        assert result["block_residency"]["requested"] == mode
+        assert result["projection_backend_runtime"]["fallback_calls"] == 1
+    assert set(released) == set(range(5))
+
+
+def test_conditioning_schema_accepts_explicit_h3_residency():
+    from wee_todd_mlx.task_conditioning import normalize_conditioning
+
+    recipe = {"engine": "h3", "components": {"task": "t2va"}, "config": {},
+              "conditioning": {"version": 1, "task": "t2v", "inputs": []},
+              "block_residency": "resident"}
+    assert normalize_conditioning(recipe)["task"] == "t2v"
+
+
+def test_headless_preflight_forwards_residency_before_component_loading(monkeypatch, tmp_path):
+    from wee_todd_mlx import conditioning_media, task_conditioning
+    from wee_todd_mlx.headless_preflight import preflight_recipe
+    from wee_todd_nodes import preflight
+
+    monkeypatch.setattr(task_conditioning, "validate_conditioning", lambda r: {"contract": {}})
+    monkeypatch.setattr(conditioning_media, "inspect_media", lambda *a: {})
+    monkeypatch.setattr(preflight, "preflight_components", lambda *a: pytest.fail("too late"))
+    with pytest.raises(ValueError, match="normal memory"):
+        preflight_recipe({"engine": "h3", "components": {"checkpoint": str(tmp_path)},
+                          "config": {"memory_mode": "low_memory_bf16"},
+                          "block_residency": "resident"})
+
+
+@pytest.mark.parametrize("engine", ["ltx23", "ltx25"])
+def test_block_residency_is_rejected_for_other_engines(engine):
+    from wee_todd_mlx.task_conditioning import normalize_conditioning
+
+    with pytest.raises(ValueError, match="block_residency.*H3"):
+        normalize_conditioning({
+            "engine": engine, "components": {}, "config": {},
+            "conditioning": {"version": 1, "task": "t2v", "inputs": []},
+            "block_residency": "resident",
+        })

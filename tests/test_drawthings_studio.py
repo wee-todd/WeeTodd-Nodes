@@ -325,3 +325,47 @@ def test_render_forwards_cancellation_to_finisher_and_cleans_partial(tmp_path):
         time.sleep(0.01)
     assert not (output / "clip.mp4").exists()
     assert not list(output.glob(".*.partial*"))
+
+
+@pytest.mark.parametrize("task,attachments,message", [
+    ("t2v", [{"role": "first", "assetID": "image"}], "Text to video.*attachment"),
+    ("i2v", [], "Image to video.*first"),
+    ("i2v", [{"role": "last", "assetID": "image"}], "Image to video.*last"),
+])
+def test_explicit_task_conflicts_preserve_attached_media(task, attachments, message):
+    import copy
+
+    value = project()
+    value["clips"][0].update(generationSelection={"task": task, "preset": "custom"},
+                              attachments=attachments)
+    original = copy.deepcopy(value)
+    with pytest.raises(ValueError, match=message):
+        compose_drawthings_request(value, "clip-uuid", [], request_id="x")
+    assert value == original
+
+
+@pytest.mark.parametrize("field,value", [
+    ("steps", 12), ("cfg", 2.0), ("shift", 3.0), ("refinementSteps", 2),
+    ("memoryPolicy", "normal"), ("projectionBackend", "auto"), ("unexpected", False),
+    ("preset", "speed"), ("task", "fflf"),
+])
+def test_explicit_drawthings_unsupported_selection_controls_fail(field, value):
+    data = project()
+    selection = {"task": "t2v", "preset": "custom", field: value}
+    data["clips"][0]["generationSelection"] = selection
+    with pytest.raises(ValueError, match="Draw Things"):
+        compose_drawthings_request(data, "clip-uuid", [], request_id="x")
+
+
+def test_explicit_drawthings_image_task_keeps_remote_controls(tmp_path):
+    data = project()
+    image = tmp_path / "first.png"
+    image.write_bytes(b"first-frame")
+    data["clips"][0].update(generationSelection={"task": "i2v", "preset": "custom"},
+                              attachments=[{"role": "first", "assetID": "image"}])
+    data["clips"][0]["drawThings"]["configuration"] = {"steps": 12, "shift": 2.0}
+    result = compose_drawthings_request(data, "clip-uuid",
+                                       [{"id": "image", "kind": "image", "path": str(image)}])
+    assert len(result["inputs"]) == 1
+    assert result["configuration"]["steps"] == 12
+    assert result["configuration"]["shift"] == 2.0

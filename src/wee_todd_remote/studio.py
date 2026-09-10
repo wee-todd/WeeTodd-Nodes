@@ -64,6 +64,45 @@ def _ltx_frames(duration: float, fps: int) -> int:
     return max(1, math.ceil((required - 1) / 8) * 8 + 1)
 
 
+def _validate_generation_selection(clip: dict[str, Any]) -> None:
+    selection = clip.get("generationSelection")
+    if selection is None:
+        return
+    selection = _object(selection, "Draw Things generation selection")
+    numeric = {"steps", "refinementSteps", "cfg", "shift", "memoryPolicy", "projectionBackend"}
+    unknown = set(selection) - {"task", "preset"} - numeric
+    submitted = {key for key in numeric if selection.get(key) is not None}
+    if unknown or submitted:
+        name = sorted(unknown | submitted)[0]
+        raise ValueError(
+            f"Unsupported Draw Things generation selection control: {name}; "
+            "edit the Draw Things configuration controls instead"
+        )
+    if selection.get("preset") != "custom":
+        raise ValueError("Draw Things generation selection currently requires the Custom preset")
+    task = selection.get("task")
+    if task not in {"t2v", "i2v"}:
+        raise ValueError("Draw Things supports Text to video and Image to video tasks only")
+    attachments = clip.get("attachments", [])
+    if not isinstance(attachments, list):
+        raise ValueError("Draw Things attachments must be an array")
+    if task == "t2v" and attachments:
+        raise ValueError(
+            "Draw Things Text to video conflicts with attached media; "
+            "remove the attachments or select Image to video"
+        )
+    if task == "i2v":
+        roles = [item.get("role") if isinstance(item, dict) else None for item in attachments]
+        conflicts = [str(role) for role in roles if role != "first"]
+        if conflicts:
+            raise ValueError(
+                "Draw Things Image to video conflicts with these attachment roles: "
+                + ", ".join(conflicts)
+            )
+        if roles != ["first"]:
+            raise ValueError("Draw Things Image to video requires exactly one first-frame image")
+
+
 def compose_drawthings_request(
     project: dict[str, Any],
     clip_id: str,
@@ -96,6 +135,7 @@ def compose_drawthings_request(
     if model_family.lower() not in _LTX_FRAME_CLOCK_FAMILIES:
         raise ValueError("modelFamily is not supported by the Draw Things video helper")
 
+    _validate_generation_selection(clip)
     inputs = canonical_inputs(clip.get("attachments", []), assets)
     if clip.get("extensionDirection") or clip.get("extensionSource") or clip.get("extensionClipID"):
         raise ValueError(

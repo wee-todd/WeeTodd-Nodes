@@ -11,6 +11,11 @@ and can unload between Qwen3-VL, transformer, video VAE, and audio VAE stages.
 
 See [implementation status](STATUS.md) for current capabilities and qualification limits.
 
+Studio's [clip generation controls](studio/README.md#clip-generation-controls) now separate engine,
+task and preset selection, display supported sampling controls, and validate automatically before
+generation. App-level H3 acceleration preferences have per-clip overrides; old clips retain Custom
+recipe behavior. Headless jobs carry the resolved settings, including explicit resident sampling.
+
 Studio now shows native render progress and per-version measurements, with guided LTX 2.5
 control/Ingredients/MSR setup. H3 has an optional retained-page budget shared by Studio, headless
 jobs and the experimental H3 Paging Settings node. It is off by default; full-size 36 GB speed

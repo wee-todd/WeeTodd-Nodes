@@ -28,9 +28,26 @@ struct DrawThingsClipInspector: View {
       }
     })
   }
+  func decimal(_ key: String, fallback: Double) -> Binding<Double> {
+    Binding(get: {
+      switch store.selectedClip?.drawThings?.configuration[key] {
+      case .number(let value): return value
+      case .integer(let value): return Double(value)
+      default: return fallback
+      }
+    }, set: { value in store.editClip { $0.drawThings?.configuration[key] = .number(value) } })
+  }
   var body: some View {
     VStack(alignment: .leading, spacing: 10) {
       SmallLabel(text: "Draw Things")
+      Picker("Task", selection: Binding(get: {
+        clip.generationSelection?.task ?? (clip.attachments.contains { $0.role == .first } ? "i2v" : "t2v")
+      }, set: { task in store.editClip { $0.generationSelection = GenerationSelection(task: task, preset: .custom) } })) {
+        Text("Text to video").tag("t2v")
+        Text("Image to video").tag("i2v")
+      }
+      Text("Custom server settings · connection capability is validated before generation.")
+        .font(.caption2).foregroundStyle(.secondary)
       Picker("Connection", selection: selection(\.profileID, fallback: "")) {
         Text("Choose a connection").tag("")
         ForEach(store.drawThingsConnections) { Text($0.name).tag($0.id) }
@@ -57,6 +74,18 @@ struct DrawThingsClipInspector: View {
       HStack {
         Text("Steps")
         TextField("Steps", value: number("steps", fallback: 8), format: .number.grouping(.never))
+      }
+      HStack {
+        Text("CFG")
+        TextField("CFG", value: decimal("guidanceScale", fallback: 1), format: .number)
+      }
+      Toggle("Override Shift", isOn: Binding(get: { clip.drawThings?.configuration["shift"] != nil },
+        set: { enabled in store.editClip { $0.drawThings?.configuration["shift"] = enabled ? .number(1) : nil } }))
+      if clip.drawThings?.configuration["shift"] != nil {
+        HStack {
+          Text("Shift")
+          TextField("Shift", value: decimal("shift", fallback: 1), format: .number)
+        }
       }
       HStack {
         Text("Generation FPS")

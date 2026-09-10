@@ -1174,3 +1174,20 @@ def test_motion_refinement_applies_standard_lora_reports_it_and_does_not_leak(tm
     assert plain.lora_report == ()
     assert len(created) == 2
     cache.unload()
+
+
+@pytest.mark.parametrize("mode", ["checkpoint_default", "resident"])
+@pytest.mark.parametrize("failure", [RuntimeError, KeyboardInterrupt])
+def test_staged_sampling_policy_releases_on_failure_or_cancel(tmp_path, mode, failure):
+    class InterruptedSampler(FakeSampler):
+        def sample_latents(self, *args, **kwargs):
+            raise failure("interrupted sampling")
+
+    cache = H3TransformerCache(InterruptedSampler)
+    spec = _spec(tmp_path)
+    with pytest.raises(failure):
+        cache.sample(spec, _conditioning(spec), H3GenerationConfig(steps=3),
+                     block_residency=mode, unload_after=True)
+    assert not cache.loaded
+    assert cache._sampler is None
+    assert cache._projection_backend_report is None

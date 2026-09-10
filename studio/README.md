@@ -34,7 +34,8 @@ The bootstrap uses a pinned, checksum-verified uv release from Astral.
 
 Advanced users can connect an existing compatible WeeTodd repository and Python environment.
 Use guided model setup below, or import existing `weetodd-headless-v2` recipes to identify model
-component sets. Automatic selection matches the clip engine and media roles. FFmpeg/FFprobe and
+component sets. New clips select an engine, task and preset; automatic recipe selection inspects
+compatible recipe contents. FFmpeg/FFprobe and
 optional RIFE remain separately configured tools; a retail installer must package these tools
 with their licenses and complete clean-Mac qualification.
 
@@ -127,6 +128,78 @@ The [headless example/schema](../examples/headless/README.md) remains available 
 Setup creates component recipes, while **Prepare clip** validates the final clip's media and settings.
 If a reference/image clip still needs attention, attach the required media and follow its Actions entry.
 For a complete CLI walkthrough, see [download and create an LTX 2.5 recipe](../examples/headless/README.md#download-and-create-an-ltx-25-recipe).
+
+## Clip generation controls
+
+Choose **Engine → Task → Preset** in the clip inspector. Tasks come from the installed compatible
+model recipes. Image to video requires a first image; First + last frame requires both endpoints.
+Changing tasks preserves attachments and names any conflicting or missing input. A reference-only
+H3 recipe cannot make a text-only clip appear ready. Model filenames remain available in Advanced
+for deliberate custom selection.
+
+The inspector displays sampling controls and compatible LoRAs/groups with editable strengths.
+Ordinary native H3 Euler **Steps** means actual evaluations: 19 evaluations correspond to 20 stored
+schedule points. Specialized or fixed schedules explain their restrictions. LTX stage-one and
+refinement controls are separate; fixed distilled schedules remain fixed. Native H3 uses distilled
+guidance and fixed video/audio shifts, so CFG and Shift are visibly unavailable. Supported native
+LTX CFG and Draw Things configuration values remain editable. Unsupported submitted overrides fail
+validation instead of being ignored.
+
+Edited preset controls show **Modified**; **Reset** removes those overrides. Existing clips open as
+**Custom**, preserving their imported recipe settings. Choosing a preset opts into the new explicit
+selection. **Generate** prepares and validates the clip automatically. The separate preparation and
+prompt/settings review remain available. Clip/movie headless export uses the same resolved recipe.
+
+### Acceleration settings
+
+App-level H3 acceleration preferences are separate from creative sampling settings. Automatic
+projections use the existing hardware-qualified backend and numerical fallback checks; **MLX**
+explicitly uses the standard backend. Automatic memory selection uses the lower-memory policy on
+Macs with 64 GiB or less, and retains the recipe policy on larger Macs pending further qualification.
+The detected RAM figure is advisory, not available RAM or a hard allocation limit.
+
+Each explicit clip can override those preferences. **Paged** selects lower-memory execution with
+the checkpoint's existing layout; it does not convert a resident checkpoint into pages.
+**Paged · larger workspace** keeps that layout but uses normal working buffers, allowing a separate
+comparison of working memory and weight residency. This option is not qualified for 36 GB hardware.
+**Resident**
+retains all transformer blocks during sampling, requires normal memory mode and a zero page-cache
+budget, and is intended only for ample-memory systems. The transformer still unloads before VAE
+decoding, including failure/cancellation cleanup. This is separate from keeping weights warm across
+jobs. Existing Custom clips do not silently inherit newly changed app preferences.
+
+Balanced and Speed currently preserve the recipe's sampling schedule. Speed is not a promise of
+fewer evaluations or a measured speedup; experimental approximations are not silently enabled.
+Low memory selects the supported lower-memory policy. Dimensions, duration and attached media
+remain explicit clip choices. Hardware-specific speed recommendations require matched measurements.
+
+### Matched H3 execution measurements
+
+On an M3 Ultra with 256 GiB unified memory (2026-09-10), a saved 512×512, 124-frame,
+24 FPS H3 T2V recipe used 19 Euler evaluations, seed 42, Q8 paged FL2VA transformer,
+paged Qwen and Q8 video VAE. Prompt, models, quantization, dimensions and schedule were fixed.
+Each run used a fresh renderer process; the conditioning cache could reuse encoded text, so compare
+sampling separately from whole-job time. No other generation ran concurrently.
+
+| Execution | Total | Sampling | Video decode | Process RSS peak | MLX stage peak |
+| --- | --- | --- | --- | --- | --- |
+| Paged · lower memory, MLX (saved baseline) | 1065.8 s | 1016.1 s | 35.2 s | 5.69 GiB | 6.64 GiB |
+| Paged · lower memory, Automatic | 1046.4 s | 1010.0 s | 34.6 s | 5.62 GiB | 6.64 GiB |
+| Paged · larger workspace, MLX | 574.7 s | 535.5 s | 37.9 s | 6.34 GiB | 6.98 GiB |
+| Resident, MLX | 535.1 s | 493.8 s | 38.5 s | 31.18 GiB | 32.32 GiB |
+| Resident, Automatic | 558.6 s | 514.9 s | 41.0 s | 31.18 GiB | 32.32 GiB |
+
+All five movies were byte-identical, with 124 video frames, stereo 32 kHz audio, 8.3 ms
+A/V drift and every weighted runtime released. These are individual runs, not a statistical
+backend ranking. Automatic projections passed the hardware/numerical checks but showed no useful
+speed gain here. The resident policy roughly halved sampling time, with a substantial memory cost.
+The larger-workspace paged run achieved most of that gain with only a small measured peak increase,
+showing that chunking/working-buffer policy accounts for much of this baseline's slowdown.
+Full residency saved another 39.6 s overall while adding about 25 GiB to the MLX stage peak.
+Try **Paged · larger workspace** first for this recipe before full residency. Normal memory mode
+also selects a larger decode batch; decode did not improve in these runs.
+Process RSS and the largest instrumented MLX stage are distinct counters, not additive RAM totals.
+This is evidence for this recipe on this Mac, not qualification for a 36 GB Mac or every task.
 
 ## Progress, measurements, and H3 page retention
 

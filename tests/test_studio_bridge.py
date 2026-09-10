@@ -307,3 +307,54 @@ def test_sequence_import_and_bridge_extract_actual_endpoints(tmp_path):
         assert b > r + 150
         r, _, b = last.getpixel((96, 64))[:3]
         assert r > b + 150
+
+
+def generation_request(tmp_path):
+    profile = tmp_path / 'neutral-name.json'
+    profile.write_text(json.dumps({
+        'format': 'weetodd-headless-v2', 'engine': 'h3',
+        'components': {'task': 't2va', 'transformer_path': '/models/transformer'},
+        'config': {'steps': 20}, 'conditioning': {'version': 1, 'task': 't2v', 'inputs': []},
+    }))
+    clip = dict(id='clip', engine='h3', profileID='auto', generationWidth=512,
+                generationHeight=512, seed=42, duration=5, prompt='A bird flies.',
+                attachments=[], generationSelection={'task': 't2v', 'steps': 12})
+    return {'project': {'clips': [clip], 'assets': [], 'settings': {}}, 'clipID': 'clip',
+            'runtime': {'profilesDirectory': str(tmp_path), 'ffmpegPath': '/usr/bin/true',
+                        'ffprobePath': '/usr/bin/true'}}
+
+
+def test_describe_and_compose_share_selection_and_recipe_fingerprint(tmp_path):
+    from wee_todd_mlx.generation_selection import fingerprint
+
+    request = generation_request(tmp_path)
+    described = bridge.describe_generation(request)
+    recipe, report = bridge.compose_recipe(request)
+    assert described['selectionFingerprint'] == report['selectionFingerprint']
+    assert described['fingerprint'] == report['resolvedFingerprint']
+    assert described['generation'] == report['generation']
+    assert report['resolvedFingerprint'] == fingerprint(recipe)
+    assert recipe['config']['steps'] == 13
+    assert '/models/transformer' in described['sourcePaths']
+
+
+def test_catalog_descriptor_and_repeated_composition_track_recipe_content(tmp_path):
+    request = generation_request(tmp_path)
+    catalog = bridge.profiles(tmp_path)
+    assert catalog[0]['generation']['controls']['evaluations'] == 19
+    before = bridge.describe_generation(request)['fingerprint']
+    source = Path(catalog[0]['id'])
+    recipe = json.loads(source.read_text())
+    recipe['components']['transformer_path'] = '/models/replacement'
+    source.write_text(json.dumps(recipe))
+    assert bridge.describe_generation(request)['fingerprint'] != before
+
+
+def test_describe_final_fingerprint_changes_with_prompt_and_seed(tmp_path):
+    request = generation_request(tmp_path)
+    original = bridge.describe_generation(request)['fingerprint']
+    request['project']['clips'][0]['prompt'] = 'A fish swims.'
+    changed_prompt = bridge.describe_generation(request)['fingerprint']
+    assert changed_prompt != original
+    request['project']['clips'][0]['seed'] = 77
+    assert bridge.describe_generation(request)['fingerprint'] != changed_prompt

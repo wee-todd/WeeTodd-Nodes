@@ -151,17 +151,17 @@ struct PromptActions: View {
           .foregroundStyle(!store.canGenerateSelected ? Color.secondary : Color.green)
         Text(
           !store.canGenerateSelected
-            ? "Prepare → review → render" : "Preflight passed. Generate uses these settings."
+            ? "Generate validates settings automatically" : "Preflight passed. Generate uses these settings."
         ).font(.caption).foregroundStyle(.secondary)
       }
       Spacer()
       Button("View log") { store.showLog = true }
       Button("Prepare clip") { Task { await store.prepareSelected() } }.disabled(bridge.busy)
       Button {
-        Task { await store.renderPrepared() }
+        Task { await store.generateSelected() }
       } label: {
         Label("Generate clip", systemImage: "play.fill")
-      }.buttonStyle(.borderedProminent).disabled(bridge.busy || !store.canGenerateSelected)
+      }.buttonStyle(.borderedProminent).disabled(bridge.busy || store.selectedClip?.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false)
     }
   }
 }
@@ -207,6 +207,33 @@ struct RuntimeView: View {
             Text("Light").tag("light")
             Text("Dark").tag("dark")
           }.pickerStyle(.segmented)
+          Text("Performance and acceleration").font(.headline)
+          Text("This Mac · \(Int(ProcessInfo.processInfo.physicalMemory / 1_073_741_824)) GiB unified memory")
+            .font(.caption).foregroundStyle(.secondary)
+          Picker("H3 sampling memory", selection: Binding(get: {
+            store.runtime.acceleration?.h3MemoryPolicy ?? "automatic"
+          }, set: { value in
+            if store.runtime.acceleration == nil { store.runtime.acceleration = AccelerationSettings() }
+            store.runtime.acceleration?.h3MemoryPolicy = value
+          })) {
+            Text("Automatic · recommended").tag("automatic")
+            Text("Paged · lower memory").tag("paged")
+            Text("Paged · larger workspace").tag("pagedNormal")
+            Text("Resident · experimental high RAM").tag("resident")
+          }
+          Picker("H3 projection backend", selection: Binding(get: {
+            store.runtime.acceleration?.h3ProjectionBackend ?? "auto"
+          }, set: { value in
+            if store.runtime.acceleration == nil { store.runtime.acceleration = AccelerationSettings() }
+            store.runtime.acceleration?.h3ProjectionBackend = value
+          })) {
+            Text("Automatic · supported acceleration").tag("auto")
+            Text("MLX").tag("mlx")
+          }
+          Text("Automatic uses hardware-aware memory policy and the verified projection backend. The resolved settings explain the actual choice. Paged · larger workspace retains checkpoint pagination with larger working buffers; fit on 36 GB Macs has not been qualified. Resident sampling is experimental and requires high RAM; it is not qualified on 36 GB Macs. Clips can override these defaults. Legacy custom recipes keep their saved behavior.")
+            .font(.caption).foregroundStyle(.secondary)
+          Button("Restore automatic acceleration") { store.runtime.acceleration = AccelerationSettings() }
+          Divider()
           Text("Renderer").font(.headline)
           Text(
             "Studio can install a private native renderer with its own Python and verified dependencies. Existing model files stay shared. Advanced users can connect an existing environment."
@@ -253,7 +280,7 @@ struct RuntimeView: View {
             Text("\(store.profiles.count) recipes").foregroundStyle(.secondary)
           }
           Text(
-            "A recipe identifies a compatible component set and sampling policy. Automatic selection matches the clip’s engine and media roles."
+            "A recipe identifies a compatible component set and sampling policy. Automatic selection matches the clip’s engine and selected task with compatible recipe contents."
           ).font(.caption).foregroundStyle(.secondary)
           Divider()
           ModelSetupCatalogView(

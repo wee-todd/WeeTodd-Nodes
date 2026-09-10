@@ -37,7 +37,7 @@ extension StudioStore {
   }
   var canGenerateSelected: Bool {
     guard let clip = selectedClip else { return false }
-    guard clip.engine == .drawThings else { return preparedRecipe != nil }
+    guard clip.engine == .drawThings else { return preparedRecipe != nil && preparedFingerprint == signature(for: clip) }
     guard let prepared = preparedDrawThingsClip else { return false }
     return prepared.projectID == project.id && prepared.clipID == clip.id
       && prepared.signature == signature(for: clip)

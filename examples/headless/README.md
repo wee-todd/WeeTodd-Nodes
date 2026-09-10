@@ -121,6 +121,18 @@ Turbo LoRAs and control adapters are not part of these base component downloads.
 - `prompt`: the generation prompt; Studio replaces it with the clip prompt.
 - `conditioning`: `{ "version": 1, "task": "t2v", "inputs": [], "audio_policy": "generated" }`
   for this example. Image/reference/control tasks require their corresponding media inputs.
+- H3-only `block_residency`: `checkpoint_default` (default) or `resident`. Resident sampling
+  requires `config.memory_mode="normal"` and `config.paging_cache_gb=0`; it retains all transformer
+  blocks during sampling and unloads them before decoding. Use only with ample unified memory.
+  For paged weights with larger working buffers, keep `block_residency="checkpoint_default"`
+  and select `config.memory_mode="normal"`; `"low_memory_bf16"` uses the lower-memory policy.
+  `config.projection_backend="auto"` enables the existing hardware-qualified projection selector;
+  `"mlx"` selects standard MLX. Results report requested/resolved backend and residency evidence.
+
+Studio resolves app acceleration preferences and clip overrides before export. Its exported native
+recipes contain concrete engine configuration, so the command-line runner does not need Studio's
+settings or recipe picker. Native H3 ordinary Euler `config.steps` is a schedule-point count: 20
+points execute 19 evaluations. Do not apply that conversion to fixed or specialized schedules.
 
 Run from the repository with its Python environment:
 

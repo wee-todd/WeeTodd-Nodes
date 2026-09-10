@@ -28,7 +28,10 @@ def preflight_recipe(recipe):
         )
         config = H3GenerationConfig(**recipe["config"])
         config.validate()
-        config.validate_paging(spec.resolved_paths()["transformer"])
+        config.validate_paging(
+            spec.resolved_paths()["transformer"],
+            recipe.get("block_residency", "checkpoint_default"),
+        )
         report = preflight_components(
             spec,
             H3PreflightRequest(

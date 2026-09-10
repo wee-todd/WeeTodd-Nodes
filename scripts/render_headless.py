@@ -123,6 +123,8 @@ def render_h3(recipe, target):
     )
     config = H3GenerationConfig(**recipe["config"])
     config.validate()
+    block_residency = recipe.get("block_residency", "checkpoint_default")
+    config.validate_paging(components.resolved_paths()["transformer"], block_residency)
     preflight_components(
         components,
         H3PreflightRequest(
@@ -343,6 +345,7 @@ def render_h3(recipe, target):
                 conditioning,
                 config,
                 unload_after=True,
+                block_residency=block_residency,
                 sol_attention=attention,
                 fastvideo=fastvideo,
                 vdn=vdn,
@@ -365,6 +368,8 @@ def render_h3(recipe, target):
             or latents.sol_attention_report.get("fallback_calls") != 0
         ):
             raise RuntimeError("Native VSA execution proof failed")
+        # Enforce the stage boundary even for a resident sampling policy.
+        TRANSFORMER_RUNTIME.unload()
         sampling_finished = True
         publish_target = (
             target if extension_source is None else target.with_name("generated-window.mp4")
@@ -413,6 +418,9 @@ def render_h3(recipe, target):
             "evaluations": latents.transformer_evaluations,
             "sampling_seconds": latents.total_seconds,
             "paging": latents.paging_report,
+            "block_residency": latents.block_residency_report,
+            "projection_backend": latents.projection_backend_report,
+            "projection_backend_runtime": latents.projection_backend_runtime,
             "attention": latents.sol_attention_report,
             "vdn": latents.vdn_report,
             "preview": latents.preview_report,
