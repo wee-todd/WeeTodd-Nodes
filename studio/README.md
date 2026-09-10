@@ -67,14 +67,27 @@ choose task `t2va`. The combined legacy pipeline loader is not this setup route.
 
 This first release is experimental and limited to text-to-video with generated audio. Other DT
 model families, first/last/reference frames and audio inputs need separate adapters/qualification.
-LoRAs, resident execution and optional accelerators have not been qualified with DT weights.
-Use the checkpoint's default paging and standard MLX projections for the validated path. Performance
+LoRAs, resident execution and accelerators other than verified MPP projections have not been
+qualified with DT weights. Use the checkpoint's default paging. Performance
 and memory differ from the DT app; the VAEs currently execute in FP32. The transformer's packed
 weights now decode and reorder on Metal automatically, retaining the previous native weight values.
 Existing DT-weight recipes use this improvement without reimporting models. The matched 512×512,
 124-frame, 19-evaluation run fell from 15:25 to 12:05 with a byte-identical movie, and process peak
 fell from 18.07 to 16.35 GiB on M3 Ultra/256 GiB. Transformer MLX peak rose by 0.37 GiB; overall
 MLX peak was unchanged. A physical 36 GB hardware test remains outstanding.
+
+New DT recipes with normal working memory use **Automatic** projections. The renderer checks GPU
+and macOS support, compares each new projection shape with standard MLX on first use and falls
+back if verification fails. Lower-memory setup retains standard MLX. Existing recipes remain
+unchanged; choose **Automatic** in the clip's projection control to opt in, or **MLX** to disable it.
+For exported recipes, the equivalent field is `config.projection_backend` (`auto` or `mlx`);
+ComfyUI offers it on **H3 Generation Config**. This does not enable resident loading or alter steps,
+precision, memory chunk sizes or conditioning.
+
+The matched normal-memory M3 Ultra run with Automatic projections completed in **10:51**, versus
+**12:05** with standard MLX: **10.1% less total time**, with byte-identical video/audio. Process peak
+remained **16.35 GiB** and MLX peaks were unchanged. This qualifies the measured configuration,
+not lower-memory settings or other hardware.
 
 The same setup is available from the CLI, without writing a recipe by hand:
 

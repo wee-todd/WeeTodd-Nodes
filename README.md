@@ -295,8 +295,9 @@ The initial route supports the tested H3 row-int8/palette8 transformer, 50-layer
 encoder and F16 VAE layouts for **text-to-video with generated audio**. Other model families,
 image/reference/audio-input conditioning, and arbitrary DT formats are not supported by this
 route. Setup validates tensor layouts before loading weights. Keep the original files available;
-changing/removing them requires revalidation. LoRAs and optional accelerators have not been
-qualified with these weights. Existing native presets remain the performance default.
+changing/removing them requires revalidation. LoRAs, resident execution and accelerators other
+than verified MPP projections have not been qualified with these weights. Existing native presets
+remain the performance default.
 
 Import the three `.ckpt` files and an existing H3 tokenizer folder, or use the small **H3 tokenizer ·
 For Draw Things model reuse** download (about 11.51 MB, no weights). See the
@@ -320,6 +321,22 @@ The decoder also passed every finite FP16 scale multiplied by every int8 value. 
 single matched development comparison, slower than the earlier native Q8-paged run, not a matched
 DT application benchmark or a physical 36 GB qualification. Direct packed-int8 matrix multiplication,
 a full saved ComfyUI DT-file render and broad visual-quality qualification remain future work.
+
+New DT recipes using normal working memory select `projection_backend=auto`. The renderer enables
+MPP projections only on its qualified GPU architecture and macOS version, verifies each new
+projection shape against standard MLX on first use, and falls back on unsupported configurations,
+kernel failures or a verification mismatch. Lower-memory recipes retain standard MLX. Existing
+recipes are not rewritten: choose **Automatic** under the clip's projection settings, or set
+`config.projection_backend` to `auto` in an exported recipe. ComfyUI exposes the same choice in
+**H3 Generation Config**. **MLX** remains available for comparison or to disable MPP.
+
+With Automatic projections, the same matched DT-weight render completed in **651.4 seconds
+(10:51), down another 10.1% from 724.5 seconds**. The complete MP4 remained byte-identical,
+process-footprint peak stayed at **16.35 GiB**, and transformer/overall MLX peaks stayed at
+**5.31/12.53 GiB**. Block execution fell from 513.8 to 446.3 seconds; block preparation was
+134.4 versus 131.9 seconds. All four projection signatures passed verification, no retained weight
+cache was used, and all weighted runtimes unloaded. This is the same M3 Ultra/256 GiB development
+comparison, with fresh prompt encoding; it does not qualify other hardware or lower-memory settings.
 
 ### Ready-to-use Q8 downloads
 

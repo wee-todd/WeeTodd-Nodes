@@ -53,3 +53,38 @@ def test_dt_tokenizer_download_has_no_model_weights():
     item = next(p for p in PRECONVERTED if p["descriptor"]["id"] == "h3-dt-tokenizer")
     assert sum(f["size"] for f in item["files"]) < 12000000
     assert not any(f["filename"].endswith((".safetensors", ".ckpt")) for f in item["files"])
+
+
+@pytest.mark.parametrize(
+    "dt_source,memory_mode,memory_gb,backend,buffers,head_chunk",
+    [
+        (True, "automatic", 256, "auto", "normal", "automatic"),
+        (True, "automatic", 36, "mlx", "low_memory_bf16", "2"),
+        (True, "lower_memory", 256, "mlx", "low_memory_bf16", "2"),
+        (False, "automatic", 256, "mlx", "low_memory_bf16", "automatic"),
+    ],
+)
+def test_recipe_selects_verified_dt_acceleration_without_changing_memory_policy(
+    tmp_path, monkeypatch, dt_source, memory_mode, memory_gb, backend, buffers, head_chunk
+):
+    from types import SimpleNamespace
+
+    from wee_todd_mlx.model_setup import _preset, _recipe
+
+    transformer = tmp_path / "transformer.ckpt"
+    transformer.write_bytes(b"SQLite format 3\x00" if dt_source else b"native")
+    components = {key: str(tmp_path / key) for key in (
+        "checkpoint", "text_encoder", "video_vae", "audio_vae", "processor", "tokenizer"
+    )}
+    components["transformer"] = str(transformer)
+    # Component validation is independent of recipe policy and requires real model inventories.
+    monkeypatch.setattr(
+        "wee_todd_nodes.preflight.preflight_components",
+        lambda *args: SimpleNamespace(to_dict=lambda: {"warnings": []}),
+    )
+    monkeypatch.setattr("wee_todd_mlx.headless_preflight.preflight_recipe", lambda recipe: None)
+    recipe, _ = _recipe(_preset("h3-text"), components, memory_mode, memory_gb)
+    config = recipe["config"]
+    assert config["projection_backend"] == backend
+    assert config["memory_mode"] == buffers
+    assert config["attention_head_chunk_size"] == head_chunk

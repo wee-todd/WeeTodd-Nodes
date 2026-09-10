@@ -667,7 +667,8 @@ def _recipe(preset, components, memory_mode, memory_gb):
         from minimax_h3_mlx.dt_h3_checkpoint import is_dt_checkpoint
 
         if memory_mode != "lower_memory" and is_dt_checkpoint(components["transformer"]):
-            config = H3GenerationConfig(memory_mode="normal", projection_backend="mlx")
+            # Runtime hardware and numerical gates decide whether MPP can replace dense MLX.
+            config = H3GenerationConfig(memory_mode="normal", projection_backend="auto")
         fields = asdict(config)
         if memory_mode == "lower_memory":
             fields.update(attention_head_chunk_size="2", ffn_row_chunk_size="128")
