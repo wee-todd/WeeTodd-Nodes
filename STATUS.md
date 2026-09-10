@@ -42,6 +42,14 @@ unloaded. Sampled frames were coherent; broad quality and a saved ComfyUI DT-fil
 open. Block preparation took 320.7 seconds, including 184.7 seconds decoding DT codecs. No DT app
 performance parity is claimed.
 
+The subsequent Metal weight-preparation pass reduced that same DT-weight render to 724.5 seconds
+(21.6% less time) with an identical MP4 digest. Process footprint fell to 16.35 GiB; transformer
+MLX peak rose from 4.94 to 5.31 GiB, with the overall 12.53 GiB MLX peak unchanged. Original weights
+remain read-only, one block stays active, and all runtimes unloaded. All 534 mapped native tensors
+and the exhaustive finite-half-scale/int8 rounding check matched the CPU decoder. Block preparation
+fell from 320.7 to 134.4 seconds; direct packed-int8 projections and physical 36 GB qualification
+remain open. Existing DT-file recipes use this preparation path automatically.
+
 ## Shared renderer and ComfyUI
 
 The shared Python/MLX backend runs through ComfyUI or `scripts/render_headless.py`.

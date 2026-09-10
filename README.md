@@ -302,15 +302,24 @@ Import the three `.ckpt` files and an existing H3 tokenizer folder, or use the s
 For Draw Things model reuse** download (about 11.51 MB, no weights). See the
 [Studio and CLI instructions](studio/README.md#reuse-local-draw-things-h3-models).
 The adapter decodes/reorders one transformer block at a time in memory and uses the native
-BF16/FP32 arithmetic policy. It does not inherit DT's Swift/Metal speed or numerical results.
-The complete DT-weight route generated 512×512, 124 frames at 24 fps with stereo 32 kHz audio
-and 19 Euler evaluations in **924.5 seconds**, peaking at **18.07 GiB process footprint** on an
-M3 Ultra with 256 GiB RAM. Qwen took 21.3 seconds, sampling/setup 868.7 seconds and video decode
-31.1 seconds. All weighted runtimes unloaded. This first compatibility run is slower than the
-earlier native Q8-paged run; it is not a matched DT application benchmark or a 36 GB qualification.
-Loading/repacking active blocks accounted for 320.7 seconds, including 184.7 seconds of DT codec
-decoding. Retaining packed int8 arithmetic in memory is a future optimization candidate, not an
-enabled feature. No new full ComfyUI DT-file generation or broad visual-quality matrix is claimed.
+BF16/FP32 arithmetic policy. Packed int8 and palette weights now expand through bounded Metal
+kernels, and layout transforms stay on the GPU. Raw/ezm7 tensors retain the CPU reader. This changes
+weight preparation, not projection precision or sampler math, and writes no converted weights.
+It does not inherit DT's Swift/Metal sampler speed or numerical results.
+
+The matched DT-weight render at 512×512, 124 frames, 24 fps, stereo 32 kHz audio and 19 Euler
+evaluations fell from **924.5 to 724.5 seconds (21.6% less time)** on an M3 Ultra with 256 GiB RAM.
+The entire MP4 was byte-identical. Process-footprint peak fell from **18.07 to 16.35 GiB**; overall
+MLX peak stayed at 12.53 GiB, while transformer-stage MLX peak rose from 4.94 to 5.31 GiB. Qwen
+encoded afresh in both runs. Sampling/setup fell from 868.7 to 667.6 seconds; video decode was
+31.1 versus 33.0 seconds and was not optimized. All weighted runtimes unloaded.
+
+Block preparation fell from 320.7 to 134.4 seconds, including a reduction in codec decoding from
+184.7 to 49.0 seconds. All 534 mapped fixed/block tensors matched the CPU reference byte for byte.
+The decoder also passed every finite FP16 scale multiplied by every int8 value. This remains a
+single matched development comparison, slower than the earlier native Q8-paged run, not a matched
+DT application benchmark or a physical 36 GB qualification. Direct packed-int8 matrix multiplication,
+a full saved ComfyUI DT-file render and broad visual-quality qualification remain future work.
 
 ### Ready-to-use Q8 downloads
 

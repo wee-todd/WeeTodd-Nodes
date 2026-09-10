@@ -15,32 +15,40 @@ import numpy as np
 from .dt_tensor_store import DTTensorStore
 
 
-def unpair_rotary(value, *, heads=56, head_dim=128, rotary_dim=96):
+def unpair_rotary(value, *, heads=56, head_dim=128, rotary_dim=96, array_module=np):
     if value.shape[0] != heads * head_dim or rotary_dim % 2 or rotary_dim > head_dim:
         raise ValueError("Invalid DT rotary tensor shape.")
-    order = np.concatenate(
-        (np.arange(0, rotary_dim, 2), np.arange(1, rotary_dim, 2), np.arange(rotary_dim, head_dim))
+    order = array_module.array(
+        np.concatenate(
+            (
+                np.arange(0, rotary_dim, 2),
+                np.arange(1, rotary_dim, 2),
+                np.arange(rotary_dim, head_dim),
+            )
+        )
     )
     return value.reshape(heads, head_dim, *value.shape[1:])[:, order].reshape(value.shape)
 
 
-def fuse_qkv(q, k, v, *, heads=56, head_dim=128):
+def fuse_qkv(q, k, v, *, heads=56, head_dim=128, array_module=np):
     if q.shape != k.shape or q.shape != v.shape or q.shape[0] != heads * head_dim:
         raise ValueError("Invalid DT Q/K/V shapes.")
-    return np.stack([a.reshape(heads, head_dim, *a.shape[1:]) for a in (q, k, v)], axis=1).reshape(
-        -1, *q.shape[1:]
-    )
+    return array_module.stack(
+        [a.reshape(heads, head_dim, *a.shape[1:]) for a in (q, k, v)], axis=1
+    ).reshape(-1, *q.shape[1:])
 
 
 class DTH3Mapping:
-    def __init__(self, store):
+    def __init__(self, store, *, array_module=np):
         self.store = store
+        self.xp = array_module
         self.consumed = set()
 
     def read(self, name, index=0, parameter=0):
         key = f"__dit__[t-{name}-{index}-{parameter}]"
         self.consumed.add(key)
-        return self.store.read(key)
+        value = self.store.read(key)
+        return value if self.xp is np else self.xp.array(value)
 
     def block(self, index, *, refiner=False, skip_adaln=False):
         prefix = "refiner_" if refiner else ""
@@ -51,21 +59,21 @@ class DTH3Mapping:
         q, k, v = (read(name) for name in ("q", "k", "v"))
         qn, kn = (read(name).reshape(-1) for name in ("norm_q", "norm_k"))
         if not refiner:
-            q, k = unpair_rotary(q), unpair_rotary(k)
-            qn, kn = (unpair_rotary(a, heads=1) for a in (qn, kn))
+            q, k = (unpair_rotary(a, array_module=self.xp) for a in (q, k))
+            qn, kn = (unpair_rotary(a, heads=1, array_module=self.xp) for a in (qn, kn))
         values = {
             "norm1.weight": read("norm1").reshape(-1),
             "norm2.weight": read("norm2").reshape(-1),
-            "attn.qkv_proj.weight": fuse_qkv(q, k, v),
+            "attn.qkv_proj.weight": fuse_qkv(q, k, v, array_module=self.xp),
             "attn.q_norm.weight": qn,
             "attn.k_norm.weight": kn,
             "attn.out_proj.weight": read("o"),
-            "mlp.fc1.weight": np.concatenate([read("gate"), read("up")]),
+            "mlp.fc1.weight": self.xp.concatenate([read("gate"), read("up")]),
             "mlp.fc2.weight": read("down"),
         }
         if not refiner and not skip_adaln:
             for parameter, suffix in ((0, "weight"), (1, "bias")):
-                values[f"adaln_proj.linear.{suffix}"] = np.concatenate(
+                values[f"adaln_proj.linear.{suffix}"] = self.xp.concatenate(
                     [
                         self.read(f"adaln_{chunk}_{modality}", index, parameter)
                         for modality in range(3)
@@ -95,7 +103,7 @@ class DTH3Mapping:
         values["token_refiner.final_norm.weight"] = self.read("refiner_final_norm").reshape(-1)
         values["final_layer.norm.weight"] = self.read("norm_out").reshape(-1)
         for parameter, suffix in ((0, "weight"), (1, "bias")):
-            values[f"final_layer.adaln_proj.linear.{suffix}"] = np.concatenate(
+            values[f"final_layer.adaln_proj.linear.{suffix}"] = self.xp.concatenate(
                 [
                     self.read("norm_out_shift", parameter=parameter),
                     self.read("norm_out_scale", parameter=parameter),
@@ -117,8 +125,10 @@ def _native_arrays(values):
     return out
 
 
-def load_dt_h3_dit(path: str | Path, *, window_size=1):
+def load_dt_h3_dit(path: str | Path, *, window_size=1, decode_backend="mlx"):
     """Load H3 fixed weights, leaving transformer blocks in their original DT file."""
+    if decode_backend not in {"mlx", "reference"}:
+        raise ValueError("DT weight decode backend must be mlx or reference.")
     import mlx.core as mx
     from mlx.utils import tree_flatten, tree_unflatten
 
@@ -143,8 +153,15 @@ def load_dt_h3_dit(path: str | Path, *, window_size=1):
     class DirectStore(PagedTensorStore):
         def __init__(self):
             super().__init__(manifest)
-            self.source = DTTensorStore(path)
-            self.mapping = DTH3Mapping(self.source)
+            if decode_backend == "mlx":
+                from .dt_mlx_decode import DTMLXTensorStore
+
+                self.source = DTMLXTensorStore(path)
+            else:
+                self.source = DTTensorStore(path)
+            self.mapping = DTH3Mapping(
+                self.source, array_module=mx if decode_backend == "mlx" else np
+            )
 
         def _load_record(self, record, *, skip_adaln):
             self.source._check()
@@ -187,6 +204,7 @@ def load_dt_h3_dit(path: str | Path, *, window_size=1):
             return {
                 **super().report(),
                 **self.store.source.report(),
+                "weight_decode_backend": decode_backend,
                 "execution_dtype": "native_bf16_fp32",
             }
 

@@ -69,8 +69,12 @@ This first release is experimental and limited to text-to-video with generated a
 model families, first/last/reference frames and audio inputs need separate adapters/qualification.
 LoRAs, resident execution and optional accelerators have not been qualified with DT weights.
 Use the checkpoint's default paging and standard MLX projections for the validated path. Performance
-and memory differ from the DT app; the VAEs currently execute in FP32 and the transformer repeatedly
-decodes/reorders its active block. A 36 GB hardware test remains outstanding.
+and memory differ from the DT app; the VAEs currently execute in FP32. The transformer's packed
+weights now decode and reorder on Metal automatically, retaining the previous native weight values.
+Existing DT-weight recipes use this improvement without reimporting models. The matched 512×512,
+124-frame, 19-evaluation run fell from 15:25 to 12:05 with a byte-identical movie, and process peak
+fell from 18.07 to 16.35 GiB on M3 Ultra/256 GiB. Transformer MLX peak rose by 0.37 GiB; overall
+MLX peak was unchanged. A physical 36 GB hardware test remains outstanding.
 
 The same setup is available from the CLI, without writing a recipe by hand:
 
