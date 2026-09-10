@@ -209,8 +209,11 @@ def test_transformer_cache_closes_paged_worker_before_unload(tmp_path: Path):
         closed = True
 
     def factory(spec):
+        from minimax_h3_mlx.paged_checkpoint import PagedCheckpointManifest, PagedTensorStore
+
         sampler = FakeSampler(spec)
-        sampler.dit.paged_blocks = SimpleNamespace(close=close, report=lambda: {})
+        store = PagedTensorStore(PagedCheckpointManifest(tmp_path, 0, 0, None, ()))
+        sampler.dit.paged_blocks = SimpleNamespace(close=close, report=lambda: {}, store=store)
         return sampler
 
     spec = _spec(tmp_path)
@@ -765,6 +768,66 @@ def test_transformer_failure_releases_sampler(tmp_path: Path):
         )
 
     assert cache.loaded is False
+
+
+@pytest.mark.parametrize("outcome", ["success", "failure", "cancel"])
+def test_paging_cache_budget_forwarded_and_cleared_with_warm_sampler(tmp_path, outcome):
+    from minimax_h3_mlx.paged_checkpoint import (
+        PagedCheckpointManifest,
+        PagedTensorStore,
+        PageRecord,
+    )
+
+    page = tmp_path / "block.safetensors"
+    mx.save_safetensors(str(page), {"blocks.0.weight": mx.ones((2, 2))})
+    record = PageRecord(page.name, 1, 16, "unused")
+    fixed = PageRecord("fixed.safetensors", 0, 0, "unused")
+    store = PagedTensorStore(PagedCheckpointManifest(tmp_path, 1, 16, fixed, (record,)))
+
+    class SamplingWithRealPage(FakeSampler):
+        def __init__(self, spec):
+            super().__init__(spec)
+            self.dit.paged_blocks = SimpleNamespace(
+                store=store, report=lambda: {"retained_bytes": store.retained_bytes},
+                close=store.clear_retained_cache,
+            )
+
+        def sample_latents(self, *args, **kwargs):
+            assert store.cache_budget_bytes == 4_000_000_000
+            store.begin_cache()
+            store.load_block(0)
+            store.release()
+            assert store.retained_bytes == 16
+            if outcome == "failure":
+                raise RuntimeError("sampling failed")
+            if outcome == "cancel":
+                raise KeyboardInterrupt
+            return super().sample_latents(*args, **kwargs)
+
+    cache = H3TransformerCache(SamplingWithRealPage)
+    spec = _spec(tmp_path)
+    (Path(spec.transformer) / "paged_manifest.json").write_text("{}")
+    config = H3GenerationConfig(steps=3, paging_cache_gb=4)
+    if outcome == "success":
+        result = cache.sample(spec, _conditioning(spec), config, unload_after=False)
+        assert result.paging_report["retained_bytes"] == 0
+        assert cache.loaded
+    else:
+        with pytest.raises(RuntimeError if outcome == "failure" else KeyboardInterrupt):
+            cache.sample(spec, _conditioning(spec), config, unload_after=False)
+        assert not cache.loaded
+    assert store.retained_bytes == 0
+
+
+def test_paging_cache_rejects_resident_sampler(tmp_path):
+    def factory(spec):
+        pytest.fail("unpaged cache requests must fail before model loading")
+
+    cache = H3TransformerCache(factory)
+    spec = _spec(tmp_path)
+    with pytest.raises(ValueError, match="requires a paged H3 transformer"):
+        cache.sample(spec, _conditioning(spec), H3GenerationConfig(paging_cache_gb=4))
+    assert not cache.loaded
 
 
 def test_transformer_sampler_rejects_non_text_conditioning(tmp_path: Path):

@@ -148,12 +148,24 @@ struct AssetBrowser: View {
   }
   @ViewBuilder func roleButtons(_ asset: MediaAsset) -> some View {
     if asset.kind == .image {
-      Button("First frame") { store.useAsset(asset, role: .first) }
+      Button("First frame · Image to video") { store.useAsset(asset, role: .first) }
       Button("Last frame") { store.useAsset(asset, role: .last) }
       Button("Keyframe at playhead") {
         store.useAsset(asset, role: .keyframe, time: store.playhead)
       }
-      Button("Reference") { store.useAsset(asset, role: .reference) }
+      Button(store.selectedClip?.engine == .ltx25 ? "MSR reference · dedicated adapter" : "Reference") {
+        store.useAsset(asset, role: .reference)
+      }
+      if store.selectedClip?.engine == .ltx25 {
+        Button("Ingredients reference sheet · IC-LoRA") {
+          store.useAsset(asset, role: .control)
+          store.editClip { clip in
+            if let index = clip.attachments.lastIndex(where: { $0.assetID == asset.id && $0.role == .control }) {
+              clip.attachments[index].controlType = "ingredients_reference_sheet"
+            }
+          }
+        }
+      }
     }
     if [.video, .sequence].contains(asset.kind) {
       Button("Video reference") { store.useAsset(asset, role: .reference) }

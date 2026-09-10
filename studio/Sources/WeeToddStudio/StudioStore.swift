@@ -52,6 +52,8 @@ struct ModelProfile: Identifiable {
   @Published var log = ""
   @Published var message = "Ready"
   @Published var fraction: Double = 0
+  @Published var startedAt: Date?
+  @Published var lastOutputAt: Date?
   private var process: Process?
   func cancel() {
     message = "Cancelling and releasing render resources…"
@@ -88,6 +90,8 @@ struct ModelProfile: Identifiable {
     try JSONSerialization.data(withJSONObject: body, options: [.prettyPrinted, .sortedKeys]).write(
       to: input, options: .atomic)
     busy = true
+    startedAt = Date()
+    lastOutputAt = startedAt
     fraction = 0
     message = command.capitalized + "…"
     log = ""
@@ -114,22 +118,20 @@ struct ModelProfile: Identifiable {
     let response: [String: Any] = try await withCheckedThrowingContinuation { continuation in
       DispatchQueue.global(qos: .userInitiated).async {
         var bytes = Data()
+        var progressStream = BridgeProgressStream()
         while true {
           let part = pipe.fileHandleForReading.availableData
           if part.isEmpty { break }
           bytes.append(part)
           if bytes.count > 2_000_000 { bytes = Data(bytes.suffix(1_000_000)) }
           let text = String(decoding: part, as: UTF8.self)
+          let events = progressStream.append(part)
           DispatchQueue.main.async {
             self.log = String((self.log + text).suffix(30000))
-            for line in text.split(separator: "\n") {
-              if let data = String(line).data(using: .utf8),
-                let event = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                event["event"] as? String == "progress"
-              {
-                self.message = event["message"] as? String ?? self.message
-                self.fraction = event["fraction"] as? Double ?? self.fraction
-              }
+            self.lastOutputAt = Date()
+            for event in events {
+              self.message = event.message
+              self.fraction = event.fraction ?? self.fraction
             }
           }
         }
@@ -770,7 +772,8 @@ extension Encodable {
       change { p in
         guard let i = p.clips.firstIndex(where: { $0.id == c.id }) else { return }
         p.clips[i].versions.append(
-          RenderVersion(path: video, seed: c.seed, prompt: prompt, recipePath: path))
+          RenderVersion(path: video, seed: c.seed, prompt: prompt, recipePath: path,
+                        stats: RenderStats(result: r)))
         p.clips[i].sourcePath = video
         p.clips[i].sourceIn = renderedStart
         p.clips[i].duration = min(c.duration, renderedDuration)

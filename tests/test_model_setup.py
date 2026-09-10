@@ -43,6 +43,8 @@ def test_catalog_covers_shared_studio_tasks_without_loading_models():
         ("ltx23", "fflf"),
         ("ltx25", "t2v"),
         ("ltx25", "fflf"),
+        ("ltx25", "control"),
+        ("ltx25", "ref2va"),
     }
     assert all(p["components"] and p["description"] for p in catalog)
     assert all(c["kind"] in {"file", "directory"} for p in catalog for c in p["components"])

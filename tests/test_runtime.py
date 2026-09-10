@@ -9,6 +9,42 @@ def test_config_accepts_small_wiring_canvas():
     H3GenerationConfig(width=640, height=384, steps=8).validate()
 
 
+@pytest.mark.parametrize("budget", [-1, 16.1, float("inf"), float("nan"), True, "4"])
+def test_config_rejects_invalid_paging_cache_budget(budget):
+    with pytest.raises(ValueError, match="paging_cache_gb"):
+        H3GenerationConfig(paging_cache_gb=budget).validate()
+
+
+@pytest.mark.parametrize("budget", [0, 4, 8, 16])
+def test_config_accepts_bounded_paging_cache_budget(budget):
+    H3GenerationConfig(paging_cache_gb=budget).validate()
+
+
+def test_paging_cache_preflight_requires_paged_checkpoint_and_default_residency(tmp_path):
+    config = H3GenerationConfig(paging_cache_gb=4)
+    with pytest.raises(ValueError, match="requires a paged H3 transformer"):
+        config.validate_paging(tmp_path)
+    (tmp_path / "paged_manifest.json").write_text("{}")
+    config.validate_paging(tmp_path)
+    with pytest.raises(ValueError, match="checkpoint_default"):
+        config.validate_paging(tmp_path, "resident")
+
+
+def test_disabled_paging_cache_allows_resident_checkpoint(tmp_path):
+    H3GenerationConfig().validate_paging(tmp_path, "resident")
+
+
+def test_headless_preflight_rejects_unpaged_cache_without_loading_weights(tmp_path):
+    from wee_todd_mlx.headless_preflight import preflight_recipe
+
+    recipe = {
+        "engine": "h3", "components": {"checkpoint": str(tmp_path), "task": "t2va"},
+        "config": {"paging_cache_gb": 4},
+    }
+    with pytest.raises(ValueError, match="requires a paged H3 transformer"):
+        preflight_recipe(recipe)
+
+
 def test_config_accepts_experimental_two_and_a_half_second_window():
     H3GenerationConfig(duration_seconds=2.5).validate()
 

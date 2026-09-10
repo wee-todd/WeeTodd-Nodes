@@ -110,7 +110,7 @@ class PagedCheckpointManifest:
 
 
 class PagedTensorStore:
-    """Load one lazy page at a time and explicitly reclaim its materialized allocation."""
+    """Bound active weight windows and optionally pin raw arrays under an explicit budget."""
 
     def __init__(self, manifest: PagedCheckpointManifest):
         self.manifest = manifest
@@ -118,6 +118,48 @@ class PagedTensorStore:
         self._active_name: str | None = None
         self.peak_page_bytes = 0
         self.pages_loaded = 0
+        self.disk_page_loads = 0
+        self.file_tensor_bytes = 0
+        self.disk_load_seconds = 0.0
+        self.cache_materialize_seconds = 0.0
+        self.cache_budget_bytes = 0
+        self.retained_bytes = 0
+        self.peak_retained_bytes = 0
+        self.raw_cache_hits = 0
+        self.raw_cache_misses = 0
+        self.adaln_bytes_avoided = 0
+        self._retained: dict[str, dict[str, mx.array]] = {}
+        self._retained_adaln_bytes: dict[str, int] = {}
+        self._cache_enabled = False
+        self._cache_skip_adaln: bool | None = None
+
+    def configure_cache(self, budget_bytes: int) -> None:
+        """Set an experimental raw-weight budget; admission starts after schedule setup."""
+        if not isinstance(budget_bytes, int) or not 0 <= budget_bytes <= 16_000_000_000:
+            raise ValueError("H3 raw page cache budget must be an integer from 0 to 16 GB.")
+        if self._active is not None:
+            raise RuntimeError("Cannot configure the H3 raw cache during an active window.")
+        self.clear_retained_cache()
+        self.cache_budget_bytes = budget_bytes
+        self.peak_retained_bytes = 0
+        self.raw_cache_hits = 0
+        self.raw_cache_misses = 0
+        self.cache_materialize_seconds = 0.0
+
+    def begin_cache(self) -> None:
+        """Permit pinned admission for this sampling run after AdaLN preparation."""
+        self._cache_enabled = self.cache_budget_bytes > 0
+        if not self._retained:
+            self._cache_skip_adaln = None
+
+    def clear_retained_cache(self) -> None:
+        self._retained.clear()
+        self._retained_adaln_bytes.clear()
+        self.retained_bytes = 0
+        self._cache_enabled = False
+        self._cache_skip_adaln = None
+        gc.collect()
+        mx.clear_cache()
 
     @property
     def active_page(self) -> str | None:
@@ -142,7 +184,9 @@ class PagedTensorStore:
             raise IndexError(f"H3 block window start {start} is outside 0..{upper}.")
         return self._load_many(self.manifest.blocks[start:stop])
 
-    def load_blocks(self, indices: tuple[int, ...]) -> dict[str, mx.array]:
+    def load_blocks(
+        self, indices: tuple[int, ...], *, skip_adaln: bool = False
+    ) -> dict[str, mx.array]:
         """Load an explicit ordered set of block pages for layer-thinned execution."""
         if not indices:
             raise ValueError("Paged H3 selected block window cannot be empty.")
@@ -151,32 +195,30 @@ class PagedTensorStore:
         if indices[0] < 0 or indices[-1] >= self.manifest.num_blocks:
             upper = self.manifest.num_blocks - 1
             raise IndexError(f"Paged H3 selected block indices must remain inside 0..{upper}.")
-        return self._load_many(tuple(self.manifest.blocks[index] for index in indices))
+        return self._load_many(
+            tuple(self.manifest.blocks[index] for index in indices), skip_adaln=skip_adaln
+        )
 
     def _load(self, record: PageRecord) -> dict[str, mx.array]:
         return self._load_many((record,))
 
-    def _load_many(self, records: tuple[PageRecord, ...]) -> dict[str, mx.array]:
+    def _load_many(
+        self, records: tuple[PageRecord, ...], *, skip_adaln: bool = False
+    ) -> dict[str, mx.array]:
         if self._active is not None:
             raise RuntimeError(
                 f"Paged H3 page {self._active_name!r} is still active; release it before loading "
                 f"{records[0].file!r}."
             )
+        if self._cache_skip_adaln is not None and self._cache_skip_adaln != skip_adaln:
+            # A schedule rebuild must reload its AdaLN tensors without retaining setup pages.
+            self.clear_retained_cache()
+        self._cache_skip_adaln = skip_adaln
         values: dict[str, mx.array] = {}
         actual_bytes = 0
         for record in records:
-            loaded = dict(mx.load(str(self.manifest.root / record.file)))
-            if len(loaded) != record.tensor_count:
-                raise ValueError(
-                    f"Paged H3 page {record.file!r} contains {len(loaded)} tensors; "
-                    f"the manifest declares {record.tensor_count}."
-                )
+            loaded = self._load_record(record, skip_adaln=skip_adaln)
             page_bytes = sum(value.nbytes for value in loaded.values())
-            if page_bytes != record.tensor_bytes:
-                raise ValueError(
-                    f"Paged H3 page {record.file!r} describes {page_bytes} tensor bytes; "
-                    f"the manifest declares {record.tensor_bytes}."
-                )
             overlap = values.keys() & loaded.keys()
             if overlap:
                 raise ValueError(
@@ -189,6 +231,54 @@ class PagedTensorStore:
         self.peak_page_bytes = max(self.peak_page_bytes, actual_bytes)
         self.pages_loaded += len(records)
         return values
+
+    def _load_record(self, record: PageRecord, *, skip_adaln: bool) -> dict[str, mx.array]:
+        if self._cache_enabled and record.file in self._retained:
+            self.raw_cache_hits += 1
+            self.adaln_bytes_avoided += self._retained_adaln_bytes[record.file]
+            return self._retained[record.file]
+        if self._cache_enabled:
+            self.raw_cache_misses += 1
+        started = time.perf_counter()
+        try:
+            loaded = dict(mx.load(str(self.manifest.root / record.file)))
+            self.disk_page_loads += 1
+            if len(loaded) != record.tensor_count:
+                raise ValueError(
+                    f"Paged H3 page {record.file!r} contains {len(loaded)} tensors; "
+                    f"the manifest declares {record.tensor_count}."
+                )
+            page_bytes = sum(value.nbytes for value in loaded.values())
+            if page_bytes != record.tensor_bytes:
+                raise ValueError(
+                    f"Paged H3 page {record.file!r} describes {page_bytes} tensor bytes; "
+                    f"the manifest declares {record.tensor_bytes}."
+                )
+            # Logical payload described by opened files, not physical storage reads: MLX load
+            # is lazy, and the operating system may already have cached these file pages.
+            self.file_tensor_bytes += page_bytes
+        finally:
+            self.disk_load_seconds += time.perf_counter() - started
+        avoided = 0
+        if skip_adaln:
+            avoided = sum(v.nbytes for k, v in loaded.items() if ".adaln_proj." in k)
+            loaded = {k: v for k, v in loaded.items() if ".adaln_proj." not in k}
+            self.adaln_bytes_avoided += avoided
+        retained_size = sum(v.nbytes for v in loaded.values())
+        if (
+            self._cache_enabled
+            and record is not self.manifest.fixed
+            and self.retained_bytes + retained_size <= self.cache_budget_bytes
+        ):
+            # Pin the first fitting pages. Streaming pages never evict them during later scans.
+            started = time.perf_counter()
+            mx.eval(loaded)
+            self.cache_materialize_seconds += time.perf_counter() - started
+            self._retained[record.file] = loaded
+            self._retained_adaln_bytes[record.file] = avoided
+            self.retained_bytes += retained_size
+            self.peak_retained_bytes = max(self.peak_retained_bytes, self.retained_bytes)
+        return loaded
 
     def release(self) -> None:
         self._active = None
@@ -215,6 +305,8 @@ class PagedBlockExecutor:
         self.quant_config = quant_config
         self.window_size = int(window_size)
         self.query_chunk_size: int | None = None
+        self.head_chunk_size: int | None = None
+        self.ffn_row_chunk_size: int | None = None
         self.sol_config = None
         self.vsa_h3_config = None
         self.vdn_runtime = None
@@ -243,12 +335,15 @@ class PagedBlockExecutor:
         self.projection_wrapped_by_block: dict[int, tuple[int, int]] = {}
         self.pages_avoided = 0
         self.skip_adaln = False
-        self.adaln_bytes_avoided = 0
         self.adapter_file_opens = 0
 
     @property
     def num_blocks(self) -> int:
         return self.manifest.num_blocks
+
+    @property
+    def adaln_bytes_avoided(self) -> int:
+        return self.store.adaln_bytes_avoided
 
     @contextmanager
     def window(self, start: int):
@@ -273,10 +368,11 @@ class PagedBlockExecutor:
         if not indices:
             raise ValueError("Paged H3 cannot materialize an empty selected block window.")
         setup_started = time.perf_counter()
-        values = self.store.load_blocks(indices)
+        values = {}
         blocks = []
         adapter_cache = {}
         try:
+            values = self.store.load_blocks(indices, skip_adaln=self.skip_adaln)
             for index in indices:
                 block = TransformerBlock(self.config)
                 if self.quant_config is not None:
@@ -288,6 +384,8 @@ class PagedBlockExecutor:
                     if key.startswith(prefix)
                 }
                 expected = {key for key, _ in tree_flatten(block.parameters())}
+                if self.skip_adaln:
+                    expected = {key for key in expected if not key.startswith("adaln_proj.")}
                 missing = sorted(expected - local.keys())
                 unexpected = sorted(local.keys() - expected)
                 if missing or unexpected:
@@ -299,19 +397,11 @@ class PagedBlockExecutor:
                 if self.skip_adaln:
                     from .adaln import CachedOnlyModulation
 
-                    self.adaln_bytes_avoided += sum(
-                        value.nbytes
-                        for name, value in local.items()
-                        if name.startswith("adaln_proj.")
-                    )
-                    local = {
-                        name: value
-                        for name, value in local.items()
-                        if not name.startswith("adaln_proj.")
-                    }
                     block.adaln_proj = CachedOnlyModulation()
                 block.update(tree_unflatten(list(local.items())))
                 block.attn.query_chunk_size = self.query_chunk_size
+                block.attn.head_chunk_size = self.head_chunk_size
+                block.mlp.row_chunk_size = self.ffn_row_chunk_size
                 block.attn.sol_config = self.sol_config
                 block.attn.vsa_h3_config = self.vsa_h3_config
                 block.attn.vdn_runtime = self.vdn_runtime
@@ -352,6 +442,9 @@ class PagedBlockExecutor:
             compute_started = time.perf_counter()
             yield blocks
             self.window_compute_seconds += time.perf_counter() - compute_started
+        except BaseException:
+            self.store.clear_retained_cache()
+            raise
         finally:
             self.adapter_file_opens += len(adapter_cache)
             adapter_cache.clear()
@@ -361,6 +454,7 @@ class PagedBlockExecutor:
 
     def close(self) -> None:
         self.prefetch.close()
+        self.store.clear_retained_cache()
 
     def report(self) -> dict[str, int | float | bool | str]:
         return {
@@ -381,7 +475,19 @@ class PagedBlockExecutor:
             "window_setup_seconds": self.window_setup_seconds,
             "window_compute_seconds": self.window_compute_seconds,
             "skip_cached_adaln": self.skip_adaln,
-            "adaln_bytes_avoided": self.adaln_bytes_avoided,
+            "adaln_bytes_avoided": self.store.adaln_bytes_avoided,
+            "raw_cache_policy": "experimental_pinned",
+            "raw_cache_statistics_scope": "since_last_cache_configuration",
+            "paging_statistics_scope": "executor_lifetime",
+            "raw_cache_budget_bytes": self.store.cache_budget_bytes,
+            "raw_cache_retained_bytes": self.store.retained_bytes,
+            "raw_cache_peak_bytes": self.store.peak_retained_bytes,
+            "raw_cache_hits": self.store.raw_cache_hits,
+            "raw_cache_misses": self.store.raw_cache_misses,
+            "disk_page_loads": self.store.disk_page_loads,
+            "page_file_tensor_bytes": self.store.file_tensor_bytes,
+            "disk_load_seconds": self.store.disk_load_seconds,
+            "raw_cache_materialize_seconds": self.store.cache_materialize_seconds,
             "adapter_file_opens": self.adapter_file_opens,
             **self.prefetch.report(),
         }

@@ -5063,6 +5063,42 @@ class WeeToddH3LowMemoryTuning:
         return (tuned,)
 
 
+class WeeToddH3PagingSettings:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "config": ("WEETODD_H3_CONFIG",),
+                "paging_cache_gb": (
+                    "FLOAT",
+                    {
+                        "default": 0.0, "min": 0.0, "max": 16.0, "step": 1.0,
+                        "tooltip": (
+                            "Experimental extra memory budget in decimal GB for pinned raw H3 "
+                            "weight pages. Zero disables retention. Requires a paged checkpoint; "
+                            "retained pages are released after sampling. This is extra weight "
+                            "memory, not a total process memory limit."
+                        ),
+                    },
+                ),
+            }
+        }
+
+    RETURN_TYPES = ("WEETODD_H3_CONFIG",)
+    RETURN_NAMES = ("config",)
+    FUNCTION = "apply"
+    CATEGORY = "WeeTodd/H3/sampling"
+    DESCRIPTION = (
+        "Experimental bounded raw-page retention trades extra memory for fewer repeated H3 "
+        "checkpoint loads. Disabled by default; original quantization is preserved."
+    )
+
+    def apply(self, config, paging_cache_gb):
+        tuned = replace(config, paging_cache_gb=paging_cache_gb)
+        tuned.validate()
+        return (tuned,)
+
+
 class WeeToddH3Generate:
     @classmethod
     def INPUT_TYPES(cls):
@@ -5084,6 +5120,8 @@ class WeeToddH3Generate:
 
     def generate(self, model, config, prompt, filename_prefix):
         config.validate()
+        if config.paging_cache_gb > 0:
+            raise ValueError("Experimental page retention requires the composable H3 Sampler.")
         prepare_low_memory_stage("pipeline", config.memory_mode)
         progress = None
         check_interrupted = None
@@ -5194,6 +5232,7 @@ NODE_CLASS_MAPPINGS = {
     "WeeToddH3DirectPublishChain": WeeToddH3DirectPublishChain,
     "WeeToddH3ModelLoader": WeeToddH3ModelLoader,
     "WeeToddH3GenerationConfig": WeeToddH3GenerationConfig,
+    "WeeToddH3PagingSettings": WeeToddH3PagingSettings,
     "WeeToddH3LowMemoryTuning": WeeToddH3LowMemoryTuning,
     "WeeToddH3Generate": WeeToddH3Generate,
     "WeeToddH3Unload": WeeToddH3Unload,
@@ -5251,6 +5290,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "WeeToddH3DirectPublishChain": "WeeTodd H3 Direct Publish Chained Timeline (MLX)",
     "WeeToddH3ModelLoader": "WeeTodd H3 Model Loader (MLX)",
     "WeeToddH3GenerationConfig": "WeeTodd H3 Generation Config",
+    "WeeToddH3PagingSettings": "WeeTodd H3 Paging Settings (Experimental)",
     "WeeToddH3LowMemoryTuning": "WeeTodd H3 Low-Memory Tuning (MLX)",
     "WeeToddH3Generate": "WeeTodd H3 Generate Video + Audio",
     "WeeToddH3Unload": "WeeTodd H3 Unload MLX Runtime",

@@ -6,10 +6,15 @@ WeeTodd keeps each model engine behind a separate ComfyUI adapter. H3 generation
 and audio as one synchronized latent contract. Weighted components load only when the graph runs
 and can unload between Qwen3-VL, transformer, video VAE, and audio VAE stages.
 
-- 55 composable nodes under `WeeTodd/H3`
-- 127 registered nodes across all engines and media utilities; 46 shipped UI workflows
+- 56 composable nodes under `WeeTodd/H3`
+- 128 registered nodes across all engines and media utilities; 46 shipped UI workflows
 
 See [implementation status](STATUS.md) for current capabilities and qualification limits.
+
+Studio now shows native render progress and per-version measurements, with guided LTX 2.5
+control/Ingredients/MSR setup. H3 has an optional retained-page budget shared by Studio, headless
+jobs and the experimental H3 Paging Settings node. It is off by default; full-size 36 GB speed
+qualification remains open. See [progress and paging controls](studio/README.md#progress-measurements-and-h3-page-retention).
 
 An optional [Draw Things integration](studio/README.md#draw-things--experimental) adds remote image
 assets and audiovisual clips to Studio, portable headless jobs, and ComfyUI through a shared gRPC
@@ -1477,6 +1482,7 @@ This table is generated from the registered node contracts. Run
 | H3 Direct Publish Chained Timeline (MLX) | Decode an H3 latent chain by VAE stage, remove duplicated joins, force exact 24 fps / 32 kHz duration, and atomically publish one MP4. | H3 — Output | Experimental |
 | H3 Model Loader (MLX) | Describe an MLX MiniMax H3 checkpoint. Weights load lazily at generation time. | H3 — Core and convenience | Legacy/convenience |
 | H3 Generation Config | Choose a clearly labeled aspect ratio and move the short-edge size slider, or use exact dimensions. The canvas stays on H3's 32-pixel grid. Optional hot-path experiments default off. | H3 — Core and convenience | Recommended |
+| H3 Paging Settings (Experimental) | Experimental bounded raw-page retention trades extra memory for fewer repeated H3 checkpoint loads. Disabled by default; original quantization is preserved. | H3 — Sampling and acceleration | Experimental |
 | H3 Low-Memory Tuning (MLX) | Apply optional MLX attention-head and feed-forward row chunking without invalidating older Generation Config workflows. | H3 — Sampling and acceleration | Supported |
 | H3 Generate Video + Audio | Generate synchronized video and audio with MiniMax H3 through MLX. | H3 — Core and convenience | Legacy/convenience |
 | H3 Unload MLX Runtime | Release state held by the monolithic H3 runtime. | H3 — Core and convenience | Legacy/convenience |

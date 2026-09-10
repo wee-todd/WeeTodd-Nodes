@@ -701,6 +701,9 @@ class MiniMaxH3Pipeline:
             audio_condition_strength,
         )
         self._ensure_cache(timestep_table, drop_adaln, verbose)
+        paged = getattr(self.dit, "paged_blocks", None)
+        if paged is not None:
+            paged.store.begin_cache()
         if fun_control is not None:
             expected_control_shape = expected_initial_video_shape
             if tuple(fun_control.latent.shape) != expected_control_shape:

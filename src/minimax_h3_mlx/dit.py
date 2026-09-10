@@ -827,6 +827,9 @@ class MiniMaxH3DiT(nn.Module):
             block.attn.head_chunk_size = chunk_size
         for block in self.blocks:
             block.attn.head_chunk_size = chunk_size
+        paged = getattr(self, "paged_blocks", None)
+        if paged is not None:
+            paged.head_chunk_size = chunk_size
 
     def set_ffn_row_chunk_size(self, chunk_size: int | None) -> None:
         """Bound the SwiGLU intermediate by processing independent packed rows."""
@@ -836,6 +839,9 @@ class MiniMaxH3DiT(nn.Module):
             block.mlp.row_chunk_size = chunk_size
         for block in self.blocks:
             block.mlp.row_chunk_size = chunk_size
+        paged = getattr(self, "paged_blocks", None)
+        if paged is not None:
+            paged.ffn_row_chunk_size = chunk_size
 
     def set_sol_attention_config(self, config) -> None:
         """Install either the Sol experiment or the trained FastH3 VSA-H3 policy."""

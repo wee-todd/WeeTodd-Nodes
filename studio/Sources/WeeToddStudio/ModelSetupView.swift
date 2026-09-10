@@ -78,6 +78,7 @@ struct ModelSetupView: View {
       ScrollViewReader { proxy in
         ScrollView {
           VStack(alignment: .leading, spacing: 18) {
+            Text(preset.description).font(.callout).foregroundStyle(.secondary)
             existingModels
             componentChoices
             memoryPolicy

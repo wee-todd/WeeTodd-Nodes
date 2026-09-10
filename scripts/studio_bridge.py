@@ -176,6 +176,24 @@ def compose_recipe(request):
     selected = clip.get("profileID", "auto")
     if selected == "auto":
         candidates = [p for p in available if p["engine"] == engine and p["task"] == task]
+        if engine == "ltx25" and task == "control":
+            from wee_todd_mlx.model_setup import ltx25_recipe_control_families
+            from wee_todd_mlx.task_conditioning import CONTROL_FAMILIES
+
+            required = {
+                CONTROL_FAMILIES.get(a.get("controlType", "canny_edges"))
+                for a in clip.get("attachments", []) if a["role"] == "control"
+            }
+            candidates = []
+            for profile in available:
+                if profile["engine"] != engine:
+                    continue
+                try:
+                    families = ltx25_recipe_control_families(profile["id"])
+                except (OSError, ValueError, KeyError, TypeError):
+                    continue
+                if None not in required and required <= families:
+                    candidates.append(profile)
         # LTX 2.5's basic distilled pipeline can transport keyframes and one frozen audio input.
         if not candidates and engine == "ltx25" and task in {"fflf", "a2v"}:
             candidates = [
@@ -195,8 +213,9 @@ def compose_recipe(request):
     if recipe["engine"] != engine:
         raise ValueError("Selected recipe belongs to another model family.")
     recipe = copy.deepcopy(recipe)
-    for key in ("reference_images", "conditioning"):
-        recipe.pop(key, None)
+    recipe.pop("reference_images", None)
+    # Media belongs to the clip. Preserve imported contract options, never hidden paths.
+    imported_contract = recipe.pop("conditioning", {})
     config = recipe["config"]
     for key, value in (
         ("width", clip["generationWidth"]),
@@ -207,6 +226,8 @@ def compose_recipe(request):
         config[key] = value
     if clip.get("negativePrompt") and engine != "h3":
         config["negative_prompt"] = clip["negativePrompt"]
+    if engine == "h3" and clip.get("h3PagingCacheGB") is not None:
+        config["paging_cache_gb"] = clip["h3PagingCacheGB"]
     assets = {a["id"]: a for a in project["assets"] + request.get("globalAssets", [])}
     inputs, loras = [], []
     fps = 24 if engine == "h3" else config.get("frame_rate", 24)
@@ -244,13 +265,39 @@ def compose_recipe(request):
         elif role == "control":
             item.update(role="control", control_type=attachment.get("controlType", "canny_edges"))
         elif role == "reference" and engine == "ltx25":
+            previous = next((
+                i for i in imported_contract.get("inputs", [])
+                if i.get("role") == "reference" and i.get("path")
+                and str(Path(i["path"]).expanduser().resolve()) == item["path"]
+            ), {})
+
+            def reference_option(editor_key, contract_key, default,
+                                 current=attachment, original=previous):
+                value = current.get(editor_key)
+                return original.get(contract_key, default) if value is None else value
+
             item.update(
-                reference_role="subject", description=attachment.get("description") or asset["name"]
+                reference_role=reference_option("referenceRole", "reference_role", "subject"),
+                description=attachment.get("description") or asset["name"],
+                reference_priority=reference_option(
+                    "referencePriority", "reference_priority", "auto"
+                ),
+                reference_frames=reference_option("referenceFrames", "reference_frames", "auto"),
+                reference_size_policy=reference_option(
+                    "referenceSizePolicy", "reference_size_policy", "sol_auto"
+                ),
+                attention_strength=reference_option("attentionStrength", "attention_strength", 1.0),
             )
         elif role == "reference" and engine == "ltx23":
             item.update(role="control", control_type="ingredients_reference_sheet")
         inputs.append(item)
-    contract = {"version": 1, "task": task, "inputs": inputs}
+    contract = {
+        key: value for key, value in imported_contract.items()
+        if key not in {"version", "task", "inputs", "extension"}
+    }
+    contract.update(version=1, task=task, inputs=inputs)
+    if imported_contract.get("task") != task:
+        contract.pop("audio_policy", None)
     if task == "extension":
         source = clip.get("extensionSource") or clip.get("sourcePath")
         if not source:
@@ -1180,7 +1227,8 @@ def main():
     parser.add_argument(
         "command",
         choices=[
-            "dt-discover", "dt-estimate", "dt-generate-image", "dt-prepare-clip", "dt-generate-clip",
+            "dt-discover", "dt-estimate", "dt-generate-image",
+            "dt-prepare-clip", "dt-generate-clip",
             "setup-catalog",
             "setup-scan",
             "setup-create",
@@ -1207,8 +1255,10 @@ def main():
     if args.command.startswith("dt-"):
         from studio_drawthings import dispatch
 
-        result = dispatch(args.command, request, args.output,
-                          progress=lambda event: emit(event="progress", message="Draw Things generating…"))
+        result = dispatch(
+            args.command, request, args.output,
+            progress=lambda event: emit(event="progress", message="Draw Things generating…"),
+        )
     elif args.command == "setup-catalog":
         from wee_todd_mlx.model_setup import setup_catalog
 

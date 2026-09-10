@@ -89,6 +89,7 @@ def render_h3(recipe, target):
         read_embedded_video_audio,
         read_media,
     )
+    from wee_todd_mlx.progress import render_progress
     from wee_todd_mlx.task_conditioning import validate_conditioning
 
     task_report = validate_conditioning(recipe)
@@ -139,7 +140,16 @@ def render_h3(recipe, target):
         RUNTIME,
     )
 
+    sampling_finished = False
+
     def prepare(stage):
+        labels = {
+            "text_encoder": "Encoding prompt and references",
+            "transformer": "Loading transformer",
+            "video_vae": "Decoding video" if sampling_finished else "Encoding images",
+            "audio_vae": "Decoding audio" if sampling_finished else "Encoding audio",
+        }
+        render_progress(stage, labels[stage])
         return prepare_low_memory_stage(stage, config.memory_mode)
 
     attention = None
@@ -340,7 +350,9 @@ def render_h3(recipe, target):
                 continuation=continuation,
                 preview_config=components.preview_override,
                 prepare_stage=lambda: prepare("transformer"),
-                step_callback=lambda done, total: print(f"evaluation {done}/{total}", flush=True),
+                step_callback=lambda done, total: render_progress(
+                    "sampling", "Sampling", completed=done, total=total
+                ),
                 fun_control_spec=fun_control_spec,
                 fun_control_latent=fun_control_latent,
             )
@@ -353,6 +365,7 @@ def render_h3(recipe, target):
             or latents.sol_attention_report.get("fallback_calls") != 0
         ):
             raise RuntimeError("Native VSA execution proof failed")
+        sampling_finished = True
         publish_target = (
             target if extension_source is None else target.with_name("generated-window.mp4")
         )
@@ -398,6 +411,8 @@ def render_h3(recipe, target):
                 "extension": extension_metadata,
             },
             "evaluations": latents.transformer_evaluations,
+            "sampling_seconds": latents.total_seconds,
+            "paging": latents.paging_report,
             "attention": latents.sol_attention_report,
             "vdn": latents.vdn_report,
             "preview": latents.preview_report,
@@ -421,6 +436,7 @@ def render_h3(recipe, target):
 
 
 def render_ltx(recipe, target):
+    from wee_todd_mlx.progress import render_progress
     if recipe.get("loras") and (
         recipe["engine"] == "ltx25" or not isinstance(recipe["loras"], dict)
     ):
@@ -493,13 +509,16 @@ def render_ltx(recipe, target):
             "task"
         ] == "extension"
         generation_target = target.with_name("generated-window.mp4") if extension else target
+        render_progress("encoding", "Loading models and encoding conditioning")
         result = RUNTIME.generate_to_file(
             spec,
             config,
             effective_prompt,
             generation_target,
             unload_after=True,
-            step_callback=lambda done, total: print(f"evaluation {done}/{total}", flush=True),
+            step_callback=lambda done, total: render_progress(
+                "sampling", "Sampling", completed=done, total=total
+            ),
             **conditioning_kwargs,
         )
         if extension:
@@ -566,6 +585,7 @@ def main():
         parser.error("Unsupported recipe format/engine")
     sys.meta_path.insert(0, NoComfyImports())
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+    from wee_todd_mlx.progress import render_progress
     assert_isolated()
     output = args.output_directory.resolve()
     output.mkdir(parents=True, exist_ok=False)
@@ -577,6 +597,7 @@ def main():
         "status": "failed",
     }
     try:
+        render_progress("preflight", "Validating models and conditioning")
         from wee_todd_mlx.asset_registry import AssetRegistry, resolve_recipe
 
         recipe, resolution = resolve_recipe(
@@ -605,12 +626,19 @@ def main():
         if any(record["runtime_loaded"]):
             raise RuntimeError("A weighted runtime was not released")
         record["isolation"] = assert_isolated()
+        render_progress("publishing", "Verifying finished movie")
         record["mp4_sha256"] = hashlib.sha256(Path(record["video"]).read_bytes()).hexdigest()
         record["status"] = "success"
     except BaseException as exc:
         record["error"] = f"{type(exc).__name__}: {exc}"
         raise
     finally:
+        import resource
+
+        # macOS reports bytes; Linux reports KiB. Each native recipe has its own process.
+        record["process_peak_rss_bytes"] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * (
+            1 if sys.platform == "darwin" else 1024
+        )
         (output / "result.json").write_text(json.dumps(record, indent=2) + "\n")
     print(
         json.dumps(

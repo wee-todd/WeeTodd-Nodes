@@ -41,6 +41,28 @@ from wee_todd_nodes.nodes import (
 )
 
 
+def test_paging_settings_is_opt_in_and_preserves_generation_config():
+    from wee_todd_nodes.runtime import H3GenerationConfig
+
+    original = H3GenerationConfig(steps=7, seed=99)
+    node = NODE_CLASS_MAPPINGS["WeeToddH3PagingSettings"]()
+    tuned, = node.apply(original, 4.0)
+    assert tuned == replace(original, paging_cache_gb=4.0)
+    assert original.paging_cache_gb == 0
+    assert node.INPUT_TYPES()["required"]["paging_cache_gb"][1]["default"] == 0.0
+    with pytest.raises(ValueError, match="paging_cache_gb"):
+        node.apply(original, float("nan"))
+
+
+def test_legacy_generate_rejects_paging_cache_before_loading():
+    from wee_todd_nodes.runtime import H3GenerationConfig
+
+    with pytest.raises(ValueError, match="H3 Sampler"):
+        NODE_CLASS_MAPPINGS["WeeToddH3Generate"]().generate(
+            None, H3GenerationConfig(paging_cache_gb=4), "test", "test"
+        )
+
+
 def test_h3_low_memory_tuning_is_composable():
     from wee_todd_nodes.runtime import H3GenerationConfig
 
@@ -608,7 +630,7 @@ def test_hires_fix_resolves_target_and_preserves_audio_contract(monkeypatch):
 
 
 def test_expected_nodes_are_registered():
-    assert len(NODE_CLASS_MAPPINGS) == 127
+    assert len(NODE_CLASS_MAPPINGS) == 128
     assert "WeeToddLTX23LoRALoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3ComponentLoader" in NODE_CLASS_MAPPINGS
     assert "WeeToddH3QuantizedTransformerLoader" in NODE_CLASS_MAPPINGS

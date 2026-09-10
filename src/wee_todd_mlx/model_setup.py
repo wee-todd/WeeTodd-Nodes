@@ -83,9 +83,57 @@ def setup_catalog() -> list[dict]:
                     components=components,
                 )
             )
+    for suffix, task, label, key, guidance in (
+        (
+            "control",
+            "control",
+            "IC-LoRA control",
+            "control_lora_path",
+            "Attach a preprocessed guide video as Control, then choose its matching guide type.",
+        ),
+        (
+            "ingredients",
+            "control",
+            "Ingredients reference sheet",
+            "ingredients_lora_path",
+            "Use an image asset as Ingredients reference sheet. Choose at least 121 output frames "
+            "(5 seconds at 24 fps) and describe the sheet and generated scene in the prompt.",
+        ),
+        (
+            "msr",
+            "ref2va",
+            "MSR image references",
+            "msr_lora_path",
+            "Use one to five image assets as MSR references. Describe each image and choose its "
+            "subject, object, clothing or background role in Conditioning. "
+            "Only one background is allowed.",
+        ),
+    ):
+        base = next(p for p in result if p["id"] == "ltx25-text")
+        result.append(
+            dict(
+                id=f"ltx25-{suffix}",
+                name=f"LTX 2.5 · {label}",
+                engine="ltx25",
+                task=task,
+                description=f"Distilled full-resolution single-stage generation. {guidance} "
+                "Select the dedicated compatible adapter below; "
+                "ordinary style LoRAs cannot replace it.",
+                components=[
+                    dict(c) for c in base["components"] if c["key"] != "spatial_upscaler_path"
+                ]
+                + [dict(key=key, label=f"LTX 2.5 {label} adapter", kind="file", accepts=["file"])],
+            )
+        )
     for preset in result:
         if preset["engine"] == "ltx25":
             preset["description"] += " " + LTX25_DISTILLED_NOTICE
+            if preset["task"] == "fflf":
+                preset["description"] += (
+                    " In Media & Assets, import an image, select it, then choose Use in clip → "
+                    "First frame. Select this recipe and prepare the clip. "
+                    "Reference is the separate MSR route."
+                )
     return result
 
 
@@ -308,6 +356,22 @@ def _ltx23_candidate(key, path, *, mode="distilled"):
 
 
 def _ltx25_candidate(key, path):
+    if key in {"control_lora_path", "ingredients_lora_path", "msr_lora_path"}:
+        from ltx25_mlx.transformer import inspect_ltx25_ic_lora, inspect_ltx25_msr_lora
+
+        if key == "msr_lora_path":
+            inspect_ltx25_msr_lora(path)
+            return
+        report = inspect_ltx25_ic_lora(path)
+        family = report.get("adapter_family")
+        allowed = (
+            {"ingredients_reference_sheet"}
+            if key == "ingredients_lora_path"
+            else {"union_control", "motion_track", "crossview_warp"}
+        )
+        if report.get("adapter_role") != "ic_lora" or family not in allowed:
+            raise ValueError(f"{key}: select a matching IC-LoRA adapter; found {family!r}")
+        return
     if path.is_dir():
         # Validate bounded support data before the runtime parses its manifest.
         _json(path / "paged_manifest.json")
@@ -360,6 +424,62 @@ def _ltx25_candidate(key, path):
         raise ValueError(f"{key}: header does not identify a compatible LTX 2.5 component")
 
 
+def ltx25_recipe_control_families(recipe_path) -> set[str]:
+    """Inspect task adapters for automatic routing; full render preflight still follows.
+
+    Neither profile names nor user-editable labels establish adapter compatibility.
+    Bound JSON and safetensors reads before invoking native header inspectors.
+    """
+    recipe = _json(Path(recipe_path))
+    if recipe.get("engine") != "ltx25":
+        return set()
+    config = _object(recipe.get("config", {}), "config")
+    if config.get("pipeline_mode", "distilled") != "distilled":
+        return set()
+    components = _object(recipe.get("components", {}), "components")
+    adapters = components.get("ic_loras", [])
+    if not isinstance(adapters, list):
+        raise ValueError("ic_loras must be an array")
+    families = set()
+    if adapters:
+        from ltx25_mlx.transformer import inspect_ltx25_ic_lora
+
+        for adapter in adapters:
+            if not isinstance(adapter, (list, tuple)) or len(adapter) != 2:
+                raise ValueError("Each IC-LoRA needs a path and strength")
+            if (
+                type(adapter[1]) not in {int, float}
+                or not math.isfinite(adapter[1])
+                or adapter[1] <= 0
+            ):
+                raise ValueError("IC-LoRA strength must be finite and positive")
+            source = Path(adapter[0]).expanduser()
+            inspect_safetensors_header(source)
+            report = inspect_ltx25_ic_lora(source)
+            if report.get("adapter_role") == "ic_lora":
+                families.add(report.get("adapter_family"))
+        return families
+    transformer = components.get("transformer_path")
+    if not transformer:
+        return families
+    source = Path(transformer).expanduser()
+    if source.is_dir():
+        from ltx25_mlx.paged_checkpoint import LTX25PagedManifest
+
+        _json(source / "paged_manifest.json")
+        metadata = LTX25PagedManifest.load(source).metadata
+    else:
+        metadata = _decoded_metadata(inspect_safetensors_header(source))
+    baked = metadata.get("weetodd_baked_loras", [])
+    if not isinstance(baked, list) or not all(isinstance(item, dict) for item in baked):
+        raise ValueError("Malformed baked adapter metadata")
+    return {
+        item["adapter_family"]
+        for item in baked
+        if item.get("adapter_role") == "ic_lora" and isinstance(item.get("adapter_family"), str)
+    }
+
+
 def _ltx_recipe_config(engine, components, memory_mode, task):
     if engine == "ltx23":
         from ltx23_mlx.runtime import LTX23GenerationConfig, LTX23ModelSpec
@@ -377,10 +497,16 @@ def _ltx_recipe_config(engine, components, memory_mode, task):
     else:
         from ltx25_mlx.runtime import LTX25ComponentSpec, LTX25GenerationConfig
 
+        single_stage = bool(components.get("ic_loras"))
         config = LTX25GenerationConfig(
-            low_memory=True, low_ram_streaming=memory_mode == "lower_memory"
+            low_memory=True,
+            low_ram_streaming=memory_mode == "lower_memory",
+            ic_lora_single_stage=single_stage,
+            stage2_steps=0 if single_stage else 3,
         )
-        report = LTX25ComponentSpec(**components).validate(config.pipeline_mode)
+        report = LTX25ComponentSpec(**components).validate(
+            config.pipeline_mode, require_spatial_upscaler=not single_stage
+        )
         config.validate(scale_factors=tuple(report["video_scale_factors"]))
     return asdict(config), report
 
@@ -470,6 +596,15 @@ def _recipe(preset, components, memory_mode, memory_gb):
     ]
     if engine == "ltx25":
         warnings.append(LTX25_DISTILLED_NOTICE)
+        components = dict(components)
+        for key in ("control_lora_path", "ingredients_lora_path", "msr_lora_path"):
+            if key not in components:
+                continue
+            adapter = components[key]
+            if key != "msr_lora_path":
+                components.pop(key)
+            components["ic_loras"] = [[adapter, 1.0]]
+            components.setdefault("spatial_upscaler_path", "")
     if memory_mode == "automatic" and memory_gb is not None and memory_gb <= 64:
         memory_mode = "lower_memory"
         warnings.append(

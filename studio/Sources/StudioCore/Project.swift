@@ -69,6 +69,11 @@ public struct Attachment: Codable, Identifiable, Equatable {
   public var loraGroupName: String?
   public var controlType = "canny_edges"
   public var description = ""
+  public var referenceRole: String?
+  public var referencePriority: String?
+  public var referenceFrames: String?
+  public var referenceSizePolicy: String?
+  public var attentionStrength: Double?
   public init(assetID: UUID, role: MediaRole, time: Double = 0) {
     self.assetID = assetID
     self.role = role
@@ -124,11 +129,13 @@ public struct RenderVersion: Codable, Identifiable, Equatable {
   public var seed: Int
   public var prompt: String
   public var recipePath: String
-  public init(path: String, seed: Int, prompt: String, recipePath: String) {
+  public var stats: RenderStats?
+  public init(path: String, seed: Int, prompt: String, recipePath: String, stats: RenderStats? = nil) {
     self.path = path
     self.seed = seed
     self.prompt = prompt
     self.recipePath = recipePath
+    self.stats = stats
   }
 }
 public struct Clip: Codable, Identifiable, Equatable {
@@ -157,6 +164,7 @@ public struct Clip: Codable, Identifiable, Equatable {
   public var depthDirectory = ""
   public var motionDirectory = ""
   public var motionFidelity: MotionFidelitySettings?
+  public var h3PagingCacheGB: Double?
   public var motionResult: MotionFidelityResult?
   public var motionRecipeID: String?
   public var motionPrompt: String?

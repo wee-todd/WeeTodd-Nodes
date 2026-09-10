@@ -222,6 +222,20 @@ struct LiveStatus: View {
       if bridge.busy {
         ProgressView().controlSize(.small)
         Text(bridge.message).lineLimit(1)
+        if bridge.fraction > 0 {
+          ProgressView(value: bridge.fraction).frame(width: 70)
+            .help("Progress within the current stage")
+        }
+        SwiftUI.TimelineView(.periodic(from: .now, by: 1)) { context in
+          if let started = bridge.startedAt {
+            Text(RenderStats.duration(context.date.timeIntervalSince(started)))
+              .monospacedDigit().help("Elapsed time for this operation")
+          }
+          if let updated = bridge.lastOutputAt, context.date.timeIntervalSince(updated) >= 15 {
+            Text("Last output \(RenderStats.duration(context.date.timeIntervalSince(updated))) ago")
+              .foregroundStyle(.secondary).help("Time since renderer output; a long step may still be running")
+          }
+        }
         Button("Cancel") { bridge.cancel() }
       } else {
         Circle().fill(Theme.mint).frame(width: 5, height: 5)

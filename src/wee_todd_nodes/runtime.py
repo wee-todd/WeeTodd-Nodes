@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gc
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from threading import RLock
@@ -40,8 +41,16 @@ class H3GenerationConfig:
     projection_backend: str = "auto"
     sampling_method: str = "euler"
     inference_optimization: str = "off"
+    paging_cache_gb: float = 0.0
 
     def validate(self) -> None:
+        if (
+            isinstance(self.paging_cache_gb, bool)
+            or not isinstance(self.paging_cache_gb, (int, float))
+            or not math.isfinite(self.paging_cache_gb)
+            or not 0 <= self.paging_cache_gb <= 16
+        ):
+            raise ValueError("paging_cache_gb must be finite and between 0 and 16 GB")
         if self.inference_optimization not in {
             "off", "transient_q8", "compiled_adaln", "combined",
         }:
@@ -82,6 +91,15 @@ class H3GenerationConfig:
             )
         if self.sampling_method not in {"euler", "res_multistep"}:
             raise ValueError("sampling_method must be euler or res_multistep")
+
+    def validate_paging(self, transformer: str | Path, block_residency="checkpoint_default"):
+        """Reject incompatible retention requests before constructing weighted components."""
+        if self.paging_cache_gb == 0:
+            return
+        if block_residency != "checkpoint_default":
+            raise ValueError("paging_cache_gb requires checkpoint_default block residency.")
+        if not (Path(transformer).expanduser() / "paged_manifest.json").is_file():
+            raise ValueError("paging_cache_gb requires a paged H3 transformer.")
 
     @property
     def attention_query_chunk_size(self) -> int | None:

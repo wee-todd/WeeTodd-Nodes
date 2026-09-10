@@ -228,6 +228,7 @@ class H3TransformerCache:
     ) -> H3Latents:
         spec.validate()
         config.validate()
+        config.validate_paging(spec.transformer, block_residency)
         if refinement_mode not in {"spatial", "motion"}:
             raise ValueError("Unknown H3 refinement mode.")
         if refinement_evaluations is not None:
@@ -676,6 +677,11 @@ class H3TransformerCache:
                         raise RuntimeError(update.reject_reason)
 
                 try:
+                    paging_executor = getattr(self._sampler.dit, "paged_blocks", None)
+                    if config.paging_cache_gb > 0 and paging_executor is None:
+                        raise ValueError("paging_cache_gb requires a paged H3 transformer.")
+                    if paging_executor is not None:
+                        paging_executor.store.configure_cache(int(config.paging_cache_gb * 1e9))
                     vdn_runtime = getattr(self._sampler.dit, "vdn_runtime", None)
                     if vdn_runtime is not None:
                         vdn_runtime.begin_run()
@@ -731,6 +737,8 @@ class H3TransformerCache:
                         fun_control=fun_control,
                     )
                 finally:
+                    if paging_executor is not None:
+                        paging_executor.store.clear_retained_cache()
                     if preview_session is not None:
                         preview_session.release()
                 from minimax_h3_mlx.projection import mpp_runtime_status

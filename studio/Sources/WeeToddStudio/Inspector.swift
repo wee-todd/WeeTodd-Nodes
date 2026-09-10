@@ -134,7 +134,9 @@ struct ClipInspector: View {
         Text(
           clip.engine == .drawThings
             ? "Use one image asset as the First Frame. It is center-cropped to the clip dimensions. Other media roles are not yet supported by this connection."
-            : "Use an asset as a first frame, reference, audio driver or control. Compatible task adapters come from the selected recipe."
+            : clip.engine == .ltx25
+              ? "For image to video: import an image in Media & Assets, select it, then choose Use in clip → First frame. Use the LTX 2.5 Image to video recipe. MSR references and Ingredients sheets have separate setup recipes and require their dedicated adapters."
+              : "Use an asset as a first frame, reference, audio driver or control. Compatible task adapters come from the selected recipe."
         ).font(.system(size: 11)).foregroundStyle(.secondary)
       }
       ForEach(clip.attachments.filter { $0.role != .lora }) { a in AttachmentRow(attachment: a) }
@@ -153,6 +155,17 @@ struct ClipInspector: View {
       DisclosureGroup("Advanced generation") {
         VStack(alignment: .leading, spacing: 10) {
           if clip.engine != .movie {
+            if clip.engine == .h3 {
+              Picker("H3 page cache", selection: binding(\.h3PagingCacheGB)) {
+                Text("Recipe default").tag(Optional<Double>.none)
+                Text("Off").tag(Optional(0.0))
+                ForEach([4.0, 8, 12, 16], id: \.self) { value in
+                  Text("\(Int(value)) GB").tag(Optional(value))
+                }
+              }
+              Text("Experimental: retains extra weight pages between denoising steps. This is a cache budget, not a total RAM cap. Off is the default.")
+                .font(.caption2).foregroundStyle(.secondary)
+            }
             HStack {
               Text("Render size")
               TextField("Width", value: binding(\.generationWidth), format: .number)
@@ -204,6 +217,9 @@ struct ClipInspector: View {
         }.font(.system(size: 11)).padding(.top, 8)
       }.font(.system(size: 11))
       if !clip.versions.isEmpty {
+        if let selectedVersion = clip.versions.last(where: { $0.path == clip.sourcePath }) {
+          RenderStatsView(stats: selectedVersion.stats)
+        }
         DisclosureGroup("Versions · \(clip.versions.count)") {
           ForEach(clip.versions.reversed()) { v in
             Button {
@@ -221,6 +237,7 @@ struct ClipInspector: View {
                 Text("Seed \(v.seed)").foregroundStyle(.secondary)
               }
             }.font(.caption)
+            RenderStatsView(stats: v.stats)
           }
         }.font(.system(size: 11))
       }
@@ -271,9 +288,19 @@ struct AttachmentRow: View {
           Text("Depth").tag("depth_map")
           Text("Pose").tag("pose_skeleton")
           Text("Motion tracks").tag("motion_track")
+          if store.selectedClip?.engine == .ltx25 {
+            Text("Ingredients reference sheet").tag("ingredients_reference_sheet")
+          }
+          if store.selectedClip?.engine == .ltx25 {
+            Text("Crossview warp").tag("crossview_warp")
+          }
           Text("HED edges").tag("hed_edges")
           Text("MLSD lines").tag("mlsd_lines")
         }.labelsHidden()
+        if attachment.controlType == "ingredients_reference_sheet" {
+          Text("Use a still reference sheet with the Ingredients adapter. LTX 2.5 requires at least 121 frames (5 seconds at 24 fps). Describe the sheet and intended video in the prompt.")
+            .font(.caption2).foregroundStyle(.secondary)
+        }
       }
       HStack {
         Text("Strength")
@@ -287,8 +314,61 @@ struct AttachmentRow: View {
           "Describe this reference",
           text: Binding(get: { attachment.description }, set: { v in edit { $0.description = v } })
         ).font(.caption).textFieldStyle(.roundedBorder)
+        if store.selectedClip?.engine == .ltx25 {
+          msrControls
+        }
       }
     }.padding(9).background(Theme.raised, in: RoundedRectangle(cornerRadius: 7))
+  }
+  private func referenceBinding(_ key: WritableKeyPath<Attachment, String?>) -> Binding<String> {
+    Binding(
+      get: { attachment[keyPath: key] ?? "" },
+      set: { v in edit { $0[keyPath: key] = v.isEmpty ? nil : v } })
+  }
+  private var msrControls: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      Picker("MSR role", selection: referenceBinding(\.referenceRole)) {
+        Text("Recipe default · otherwise subject").tag("")
+        Text("Subject").tag("subject")
+        Text("Object").tag("object")
+        Text("Clothing").tag("clothing")
+        Text("Background").tag("background")
+      }
+      Picker("Priority", selection: referenceBinding(\.referencePriority)) {
+        Text("Recipe default").tag("")
+        Text("Automatic").tag("auto")
+        Text("Primary").tag("primary")
+        Text("Supporting").tag("supporting")
+        Text("Background").tag("background")
+      }
+      Picker("Reference frames", selection: referenceBinding(\.referenceFrames)) {
+        Text("Recipe default").tag("")
+        Text("Automatic").tag("auto")
+        Text("25").tag("25")
+        Text("33").tag("33")
+      }
+      Picker("Reference sizing", selection: referenceBinding(\.referenceSizePolicy)) {
+        Text("Recipe default").tag("")
+        Text("Automatic").tag("sol_auto")
+        Text("Quality").tag("quality")
+        Text("Balanced").tag("balanced")
+        Text("Speed").tag("speed")
+      }
+      Toggle("Override attention strength", isOn: Binding(
+        get: { attachment.attentionStrength != nil },
+        set: { value in edit { $0.attentionStrength = value ? 1 : nil } }))
+      if attachment.attentionStrength != nil {
+        HStack {
+          Text("Attention")
+          Slider(value: Binding(
+            get: { attachment.attentionStrength ?? 1 },
+            set: { v in edit { $0.attentionStrength = v } }), in: 0...1)
+          Text("\(attachment.attentionStrength ?? 1, specifier: "%.2f")").monospacedDigit()
+        }
+      }
+      Text("MSR uses 1–5 still images and at most one background. Select the MSR recipe with its dedicated adapter. Reference frames control the reference encoding, not clip duration.")
+        .foregroundStyle(.secondary)
+    }.font(.caption2)
   }
   func edit(_ body: (inout Attachment) -> Void) {
     store.editClip { c in

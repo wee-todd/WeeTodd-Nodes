@@ -2,12 +2,28 @@
 
 Reconciled 2026-09-09 against the local source and saved acceptance evidence.
 
+Follow-up 2026-09-10: Studio now displays native stage/evaluation progress, elapsed/last-output
+time, and measured statistics for new render versions. LTX 2.5 guided setup includes dedicated
+IC-LoRA control, Ingredients and MSR routes with compatible attachment controls. H3 head/FFN chunk
+settings propagate into deferred blocks. An experimental 0–16 GB retained raw-page budget is shared
+by Studio, headless recipes and the composable ComfyUI sampler; default 0 preserves no retention.
+Cache budget, quantized/LoRA parity and success/failure/cancellation cleanup have focused tests.
+Full-size cache timing and post-fix chunk performance on a physical 36 GB Mac remain unqualified.
+
+Community report, 36 GB M3 Max (user-measured, source artifacts not independently inspected):
+LTX 2.5 T2V at 768×448, 121 frames, 8+3 distilled, paged Q8 transformer/Gemma completed in
+164.8 s (reported sampling 148.9 s), with reported complete process peak 9.20 GB. H3 first-frame
+generation at 768×448 using the Q8 vision encoder completed in 1750 s (sampling 1628 s), with
+reported process peak 7.72 GB, staged peak 6.24 GB and 8 ms AV drift. This establishes a reported
+baseline for those recipes, not universal physical-36-GB qualification. The older BF16 comparison
+used 672×384, so its 552 s timing is not a matched-resolution paging benchmark.
+
 ## Shared renderer and ComfyUI
 
 The shared Python/MLX backend runs through ComfyUI or `scripts/render_headless.py`.
 The headless process blocks ComfyUI and node-catalog imports. It accepts versioned JSON
 recipes and records resolved assets, effective conditioning, results, and runtime unloading.
-The catalog contains 127 nodes and 46 UI workflows. Static validation establishes portable
+The catalog contains 128 nodes and 46 UI workflows. Static validation establishes portable
 contracts; it does not establish that every workflow has local models and selected input media.
 
 | Engine | Implemented | Qualification limits |

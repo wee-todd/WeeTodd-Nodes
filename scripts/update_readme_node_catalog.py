@@ -59,6 +59,7 @@ RECOMMENDED = {
     "WeeToddLTX23Preflight",
 }
 EXPERIMENTAL = {
+    "WeeToddH3PagingSettings",
     "WeeToddDrawThingsConnection",
     "WeeToddDrawThingsDiscover",
     "WeeToddDrawThingsRequest",

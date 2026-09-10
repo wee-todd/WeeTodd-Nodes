@@ -28,6 +28,7 @@ def preflight_recipe(recipe):
         )
         config = H3GenerationConfig(**recipe["config"])
         config.validate()
+        config.validate_paging(spec.resolved_paths()["transformer"])
         report = preflight_components(
             spec,
             H3PreflightRequest(

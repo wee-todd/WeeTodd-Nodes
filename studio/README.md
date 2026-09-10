@@ -128,6 +128,66 @@ Setup creates component recipes, while **Prepare clip** validates the final clip
 If a reference/image clip still needs attention, attach the required media and follow its Actions entry.
 For a complete CLI walkthrough, see [download and create an LTX 2.5 recipe](../examples/headless/README.md#download-and-create-an-ltx-25-recipe).
 
+## Progress, measurements, and H3 page retention
+
+Native renders now send live stage/evaluation updates to the status bar. Sampling shows its own
+progress, followed by decoding/publication; the bar is not an estimated whole-job percentage.
+Elapsed time and the age of the last renderer output remain visible during long steps. A quiet
+interval alone does not mean the renderer has stalled. Cancellation remains attached to the job.
+
+New render versions retain measured render time and available memory/timing statistics. Select a
+version to see its summary or expand **Versions** to compare takes. Older projects still open;
+historical versions without saved statistics show no invented measurements. **Process peak** is
+renderer RSS, while **Instrumented stages** and **MLX generation** describe different MLX counter
+scopes. Do not add those peaks or treat them as total system RAM. LTX **Pre-decode pipeline** time
+includes encoding, model loading, sampling and latent upscaling; H3 reports transformer sampling.
+
+For H3, **Advanced generation → H3 page cache** offers Recipe default, Off, or 4/8/12/16 GB.
+The recipe setting is `config.paging_cache_gb` (0–16 decimal GB; default 0). This is extra retained
+raw transformer weight memory, not a limit on total generation memory or a promise of fit.
+Start with Off versus 4 GB using identical prompt, seed, dimensions, schedule and storage. Compare
+the measured process/MLX peaks as well as wall time; return to Off if memory pressure increases.
+The cache pins a bounded subset of quantized pages between evaluations and releases it after each
+sampling run, including cancellation/failure. It requires a paged transformer and cannot be
+combined with full block residency. A page larger than the remaining budget is bypassed.
+
+ComfyUI exposes the same setting through **H3 Paging Settings (Experimental)** between Generation
+Config and the composable H3 Sampler. Headless movie/clip jobs carry the selected value. H3
+`result.json` includes paging counters, retained peak/budget bytes, and loading/setup/compute timing.
+Cache counters cover the configured run; other pager counters identify their executor-lifetime
+scope. File-load calls are not measurements of physical disk reads. The cache avoids some reloads
+but does not remove module construction or attention computation. Tiny FP32/Q8/LoRA tests establish
+parity and cache behavior; a full-size speedup on a 36 GB Mac has not yet been measured.
+
+Head and FFN chunk controls now reach newly loaded paged blocks. Previous automatic/lower-memory
+comparisons could therefore exercise effectively identical transformer settings. Rebaseline after
+updating: smaller chunks can reduce workspace but add dispatch overhead, so the fix alone is not
+a speedup claim. Query chunking and the retained-page budget are separate controls.
+
+## LTX 2.5 images, controls, and references
+
+For ordinary image-to-video, select the **LTX 2.5 Image to video** recipe, import/select an image,
+and choose **Use in clip → First frame · Image to video**. Prepare the clip after attaching it.
+The Reference role selects MSR conditioning and requires its separate adapter recipe.
+
+Guided setup now also offers **IC-LoRA control**, **Ingredients reference sheet**, and **MSR image
+references**. Import the corresponding dedicated adapter in addition to the existing model
+components. Setup checks its tensor headers and compatibility; a style LoRA cannot substitute.
+These recipes use the existing distilled full-resolution single-stage renderer. They are separate
+from the basic image preset and do not require a spatial upscaler for that single-stage route.
+
+- **Control:** attach a preprocessed guide video as Control and choose its matching guide type
+  (such as depth, pose, motion tracks or crossview). The recipe's adapter must support that type.
+- **Ingredients:** attach one image using **Ingredients reference sheet · IC-LoRA**, use at least
+  121 output frames, and describe the sheet and intended scene in the prompt.
+- **MSR:** attach one to five images as **MSR reference · dedicated adapter**, describe each, and
+  choose subject/object/clothing/background, priority, reference frames, sizing and attention
+  strength in Conditioning. Only one background is allowed. Recipe default preserves matching-image
+  options from an imported recipe; removed attachments never leave hidden recipe media active.
+
+These routes reuse shared renderer validation and remain subject to adapter and memory constraints.
+First-frame success on 36 GB does not establish MSR/control memory fit or reference quality.
+
 ## H3 reference clips with paged Q8 models
 
 Import a recipe produced by `scripts/prepare_h3_reference_recipe.py`, select **H3 Reference Q8

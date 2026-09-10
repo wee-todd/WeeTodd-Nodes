@@ -74,6 +74,54 @@ def test_store_requires_release_between_pages_and_tracks_bytes(tmp_path):
     assert store.active_page is None
 
 
+def test_raw_page_cache_pins_within_budget_and_avoids_real_disk_loads(tmp_path, monkeypatch):
+    manifest = convert_to_paged_checkpoint(_source(tmp_path), tmp_path / "paged")
+    store = PagedTensorStore(manifest)
+    disk_loads = []
+    original_load = mx.load
+
+    def tracked_load(filename, *args, **kwargs):
+        disk_loads.append(filename)
+        return original_load(filename, *args, **kwargs)
+
+    monkeypatch.setattr(mx, "load", tracked_load)
+    store.configure_cache(24)
+    # Schedule preparation must not populate the pending cache.
+    store.load_block(0)
+    store.release()
+    assert store.retained_bytes == 0
+    store.begin_cache()
+    for _ in range(3):
+        for index in (0, 1):
+            values = store.load_block(index)
+            mx.eval(values)
+            np.testing.assert_array_equal(np.asarray(next(iter(values.values()))), index + 2)
+            values.clear()
+            store.release()
+            assert store.retained_bytes <= 24
+    assert len(disk_loads) == 5  # preparation + first traversal + uncached page each repeat
+    assert store.disk_page_loads == 5
+    assert store.raw_cache_hits == 2
+    assert store.retained_bytes == 24
+    assert store.peak_retained_bytes == 24
+    store.clear_retained_cache()
+    assert store.retained_bytes == 0
+
+
+def test_raw_page_cache_zero_or_undersized_budget_never_retains(tmp_path):
+    manifest = convert_to_paged_checkpoint(_source(tmp_path), tmp_path / "paged")
+    store = PagedTensorStore(manifest)
+    for budget in (0, 23):
+        store.configure_cache(budget)
+        store.begin_cache()
+        for _ in range(2):
+            values = store.load_block(0)
+            mx.eval(values)
+            store.release()
+        assert store.retained_bytes == 0
+        assert store.raw_cache_hits == 0
+
+
 def test_block_window_releases_after_cancellation_exception(tmp_path):
     manifest = convert_to_paged_checkpoint(_source(tmp_path), tmp_path / "paged")
     store = PagedTensorStore(manifest)
@@ -213,6 +261,53 @@ def test_paged_forward_and_modulation_cache_match_resident_model(tmp_path):
     paged.paged_blocks.close()
 
 
+@pytest.mark.parametrize(
+    ("setter", "component", "attribute"),
+    [
+        ("set_attention_head_chunk_size", "attn", "head_chunk_size"),
+        ("set_ffn_row_chunk_size", "mlp", "row_chunk_size"),
+    ],
+)
+def test_paged_chunk_controls_reach_new_windows_and_can_be_reset(
+    tmp_path, setter, component, attribute
+):
+    config = _tiny_dit_config()
+    mx.random.seed(49)
+    resident = MiniMaxH3DiT(config)
+    source = tmp_path / "full"
+    source.mkdir()
+    (source / "config.json").write_text(json.dumps(asdict(config)))
+    mx.save_safetensors(
+        str(source / "model.safetensors"), dict(tree_flatten(resident.parameters()))
+    )
+    convert_to_paged_checkpoint(source, tmp_path / "paged")
+    paged = load_paged_dit(tmp_path / "paged", window_size=2, prefetch=False)
+    pager = paged.paged_blocks
+    args = _tiny_inputs(config)
+    try:
+        # Defaults, changes after prior windows, and reset must all reach future blocks.
+        for chunk_size in (None, 1, 2, None):
+            getattr(resident, setter)(chunk_size)
+            getattr(paged, setter)(chunk_size)
+            for start in (0, 2):
+                with pager.window(start) as blocks:
+                    for block in blocks:
+                        assert getattr(getattr(block, component), attribute) == chunk_size
+            with pager.selected_window((0, 2)) as blocks:
+                for block in blocks:
+                    assert getattr(getattr(block, component), attribute) == chunk_size
+            expected = resident(*args)
+            actual = paged(*args)
+            mx.eval(expected, actual)
+            for observed, reference in zip(actual, expected, strict=True):
+                np.testing.assert_allclose(
+                    np.asarray(observed), np.asarray(reference), rtol=1e-5, atol=1e-5
+                )
+            assert pager.store.active_page is None
+    finally:
+        pager.close()
+
+
 def test_paged_mpp_backend_wraps_each_materialized_bf16_block(tmp_path, monkeypatch):
     config = _tiny_dit_config()
     mx.random.seed(44)
@@ -308,6 +403,98 @@ def test_quantized_paged_forward_matches_resident_model(tmp_path):
     np.testing.assert_array_equal(np.asarray(actual_audio), np.asarray(expected_audio))
 
 
+@pytest.mark.parametrize("quantized", [False, True])
+def test_retained_pages_match_uncached_forward_exclude_adaln_and_release(tmp_path, quantized):
+    from minimax_h3_mlx.adaln import drop_adaln_weights
+
+    config = _tiny_dit_config()
+    mx.random.seed(51)
+    resident = MiniMaxH3DiT(config)
+    source = tmp_path / "full"
+    source.mkdir()
+    (source / "config.json").write_text(json.dumps(asdict(config)))
+    if quantized:
+        recipe = QuantConfig(bits=8, group_size=32, quantize_adaln=True, adaln_bits=8)
+        quantize_dit(resident, recipe)
+        (source / "quant_config.json").write_text(json.dumps(asdict(recipe)))
+    mx.save_safetensors(
+        str(source / "model.safetensors"), dict(tree_flatten(resident.parameters()))
+    )
+    convert_to_paged_checkpoint(source, tmp_path / "paged")
+    paged = load_paged_dit(tmp_path / "paged", window_size=2, prefetch=False)
+    pager = paged.paged_blocks
+    args = _tiny_inputs(config)
+    cache = ModulationCache.build(paged, args[3], dtype=mx.float32)
+    drop_adaln_weights(paged)
+    expected = paged(*args, modulation_cache=cache)
+    mx.eval(expected)
+    page_zero = mx.load(str(tmp_path / "paged" / pager.manifest.blocks[0].file))
+    budget = sum(v.nbytes for k, v in page_zero.items() if ".adaln_proj." not in k)
+    pager.store.configure_cache(budget)
+    pager.store.begin_cache()
+    for _ in range(3):
+        actual = paged(*args, modulation_cache=cache)
+        mx.eval(actual)
+        for observed, reference in zip(actual, expected, strict=True):
+            np.testing.assert_array_equal(np.asarray(observed), np.asarray(reference))
+    report = pager.report()
+    assert report["raw_cache_hits"] == 2
+    assert report["raw_cache_retained_bytes"] == budget
+    assert report["raw_cache_retained_bytes"] < pager.manifest.blocks[0].tensor_bytes
+    assert report["raw_cache_budget_bytes"] == budget
+    # Rebuilding a schedule must restore AdaLN weights and invalidate inference-only pages.
+    rebuilt = ModulationCache.build(paged, args[3], dtype=mx.float32)
+    for previous, current in zip(cache.tables, rebuilt.tables, strict=True):
+        for a, b in zip(previous, current, strict=True):
+            np.testing.assert_array_equal(np.asarray(a), np.asarray(b))
+    assert pager.store.retained_bytes == 0
+    drop_adaln_weights(paged)
+    pager.store.begin_cache()
+    with pytest.raises(KeyboardInterrupt):
+        with pager.window(0):
+            assert pager.store.retained_bytes == budget
+            raise KeyboardInterrupt
+    assert pager.store.retained_bytes == 0
+    assert pager.store.active_page is None
+    pager.store.begin_cache()
+    with pager.window(0):
+        pass
+    pager.close()
+    assert pager.store.retained_bytes == 0
+
+
+@pytest.mark.parametrize("drop_adaln", [False, True])
+def test_pipeline_starts_raw_cache_after_modulation_preparation(tmp_path, drop_adaln):
+    from minimax_h3_mlx.pipeline import MiniMaxH3Pipeline
+
+    config = _tiny_dit_config()
+    source = tmp_path / "full"
+    source.mkdir()
+    resident = MiniMaxH3DiT(config)
+    (source / "config.json").write_text(json.dumps(asdict(config)))
+    mx.save_safetensors(
+        str(source / "model.safetensors"), dict(tree_flatten(resident.parameters()))
+    )
+    convert_to_paged_checkpoint(source, tmp_path / "paged")
+    paged = load_paged_dit(tmp_path / "paged", window_size=2, prefetch=False)
+    pager = paged.paged_blocks
+    pager.store.configure_cache(1_000_000)
+    pipeline = MiniMaxH3Pipeline(paged, None, None, None)
+    try:
+        result = pipeline.sample_latents(
+            mx.zeros((1, 3, config.text_dim)), np.full(3, TAG_TEXT, dtype=np.int32),
+            duration_seconds=2.5, num_inference_steps=3, width=32, height=32, verbose=False,
+            drop_adaln=drop_adaln,
+        )
+        mx.eval(result.video_latents, result.audio_latents)
+        assert pager.store.raw_cache_hits >= config.num_layers
+        assert pager.store.raw_cache_misses == config.num_layers
+        assert pager.store.retained_bytes > 0
+        assert pager.skip_adaln == drop_adaln
+    finally:
+        pager.close()
+
+
 def test_paged_block_lora_matches_resident_adapter(tmp_path):
     config = _tiny_dit_config()
     mx.random.seed(6)
@@ -363,6 +550,14 @@ def test_paged_block_lora_matches_resident_adapter(tmp_path):
     np.testing.assert_array_equal(np.asarray(skipped[1]), np.asarray(expected_audio))
     assert paged.paged_blocks.adaln_bytes_avoided > 0
     assert paged.paged_blocks.adapter_file_opens - opens == (config.num_layers + 1) // 2
+    paged.paged_blocks.store.configure_cache(1_000_000)
+    paged.paged_blocks.store.begin_cache()
+    for _ in range(2):
+        retained = paged(*args, modulation_cache=paged_cache)
+        mx.eval(retained)
+        np.testing.assert_array_equal(np.asarray(retained[0]), np.asarray(expected_video))
+        np.testing.assert_array_equal(np.asarray(retained[1]), np.asarray(expected_audio))
+    assert paged.paged_blocks.store.raw_cache_hits > 0
     rebuilt = ModulationCache.build(paged, args[3], dtype=mx.float32)
     assert not paged.paged_blocks.skip_adaln
     for old, new in zip(paged_cache.tables, rebuilt.tables, strict=True):
