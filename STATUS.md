@@ -88,6 +88,24 @@ Preparation fell **91.7 to 78.4 seconds**; unchanged compute took 454.0 versus 4
 The observed total improvement is 1.2%, with peak process footprint unchanged at **9.50 GiB**
 and transformer/video MLX peaks unchanged at 5.31/6.58 GiB. Qualification limits above still apply.
 
+The next DT-weight pass overlaps preparation of one next block with current-block computation.
+It reuses the existing executor and exact native weight values, with a worker-owned Metal stream
+and read-only SQLite handles. Normal-memory, resolved-MPP, single-block, cached-modulation runs
+with no retained-page budget enable it; low-memory, standard MLX, selected-block windows and
+retained-page caches keep sequential preparation. Failure, cancellation and close drain the worker;
+source-change errors release prepared arrays even while the exception traceback remains alive.
+
+The integrated matched M3 Ultra render completed in **546.8 seconds (9:07)** versus 605.3 seconds
+(10:05), with a byte-identical video/audio MP4, 931 consumed lookahead blocks and all weighted
+stages unloaded. Sampling/setup fell **550.5 to 490.8 seconds**. Process footprint was **9.48 GiB**
+and overall MLX peak stayed **6.58 GiB**; transformer MLX peak rose **5.31 to 5.91 GiB**. The observed
+elapsed improvement is **9.7%**; a same-workload prototype took 570.7 seconds, so desktop variance
+remains material. That prototype had a single 13.56 GiB footprint sample at shutdown; the spike
+did not recur in the integrated run. Neither new attention tiles nor FP16 attention inputs improved
+the measured baseline and neither was promoted. DT sampler parity, a saved ComfyUI DT-file graph
+and physical-36-GB qualification remain open. Six I2V/FFLF setup notes now correctly identify
+their selected vision encoder and explain the optional Q8 vision-paged selector change.
+
 ## Shared renderer and ComfyUI
 
 The shared Python/MLX backend runs through ComfyUI or `scripts/render_headless.py`.

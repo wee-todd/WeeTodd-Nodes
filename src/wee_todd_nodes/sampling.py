@@ -700,6 +700,14 @@ class H3TransformerCache:
                         raise ValueError("paging_cache_gb requires a paged H3 transformer.")
                     if paging_executor is not None:
                         paging_executor.store.configure_cache(int(config.paging_cache_gb * 1e9))
+                        configure_lookahead = getattr(
+                            paging_executor, "configure_weight_lookahead", None
+                        )
+                        if configure_lookahead is not None:
+                            configure_lookahead(
+                                config.memory_mode == "normal"
+                                and config.projection_backend != "mlx"
+                            )
                     vdn_runtime = getattr(self._sampler.dit, "vdn_runtime", None)
                     if vdn_runtime is not None:
                         vdn_runtime.begin_run()

@@ -1,18 +1,87 @@
 """H3 tensor-layout adapter for original Draw Things checkpoints.
 
 Uses the existing H3 block executor and sampler. Source files remain read-only;
-only the active block window is decoded. Native H3's BF16/FP32 arithmetic policy
-is retained, so this is not a claim of Draw Things GPU numerical parity.
+accelerated single-block execution may prepare one additional block ahead.
+Native H3's BF16/FP32 arithmetic policy is retained, so this is not a claim of
+Draw Things GPU numerical parity.
 """
 
 from __future__ import annotations
 
 import time
+from concurrent.futures import ThreadPoolExecutor, wait
+from contextlib import contextmanager
 from pathlib import Path
+from threading import local
 
 import numpy as np
 
 from .dt_tensor_store import DTTensorStore
+
+
+class BlockLookahead:
+    """Own at most one prepared block; callers consume slots on the sampling thread.
+
+    The prepare callback owns its worker-thread resources. Closing waits for an
+    in-flight preparation before releasing its result, including on cancellation.
+    """
+
+    def __init__(self, prepare):
+        self.prepare = prepare
+        self.pool = None
+        self.future = None
+        self.index = None
+        self.closed = False
+
+    def start(self, index):
+        if self.closed:
+            raise RuntimeError("DT block lookahead is closed.")
+        if self.future is not None:
+            raise RuntimeError("DT block lookahead already has a pending block.")
+        if self.pool is None:
+            self.pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="h3-dt-lookahead")
+        self.index = index
+        self.future = self.pool.submit(self.prepare, index)
+
+    def take(self, index):
+        if self.future is None:
+            return None
+        if index != self.index:
+            self.discard()
+            return None
+        future, self.future = self.future, None
+        self.index = None
+        return future.result()
+
+    def discard(self):
+        future, self.future = self.future, None
+        self.index = None
+        if future is not None:
+            future.cancel()
+            wait((future,))
+
+    def close(self):
+        self.closed = True
+        try:
+            if self.pool is not None:
+                self.pool.shutdown(wait=True, cancel_futures=True)
+        finally:
+            self.future = None
+            self.index = None
+            self.pool = None
+
+
+def weight_lookahead_eligible(
+    *, enabled, decode_backend, window_size, skip_adaln, projection_backend, cache_budget_bytes
+):
+    return (
+        enabled
+        and decode_backend == "mlx"
+        and window_size == 1
+        and skip_adaln
+        and projection_backend == "mpp_experimental"
+        and cache_budget_bytes == 0
+    )
 
 
 def unpair_rotary(value, *, heads=56, head_dim=128, rotary_dim=96, array_module=np):
@@ -199,17 +268,66 @@ def load_dt_h3_dit(path: str | Path, *, window_size=1, decode_backend="mlx"):
             self.mapping = DTH3Mapping(
                 self.source, array_module=mx if decode_backend == "mlx" else np
             )
+            self.lookahead = BlockLookahead(self._prepare_block)
+            self.worker_local = local()
+            self.lookahead_hits = 0
+            self.lookahead_wait_seconds = 0.0
+            self.lookahead_peak_bytes = 0
+            self.lookahead_source_report = {}
+
+        def _prepare_block(self, index):
+            from .dt_mlx_decode import DTMLXTensorStore
+
+            # MLX stream registration and SQLite connections are thread-owned.
+            # Complete evaluation before transferring the arrays to the sampler.
+            if not hasattr(self.worker_local, "stream"):
+                self.worker_local.stream = mx.new_stream(mx.gpu)
+            self.source._check()
+            started = time.perf_counter()
+            with mx.stream(self.worker_local.stream), DTMLXTensorStore(path) as source:
+                mapping = DTH3Mapping(source, array_module=mx)
+                values = _load_native_record(mapping, str(index), skip_adaln=True)
+                try:
+                    self.source._check()
+                except BaseException:
+                    values.clear()
+                    raise
+                return values, source.report(), time.perf_counter() - started
 
         def _load_record(self, record, *, skip_adaln):
             self.source._check()
+            if record.file == "fixed" or not skip_adaln or self.cache_budget_bytes:
+                self.lookahead.discard()
             if self._cache_enabled and record.file in self._retained:
                 self.raw_cache_hits += 1
                 return self._retained[record.file]
             started = time.perf_counter()
-            before = self.source.payload_bytes_read
-            values = _load_native_record(self.mapping, record.file, skip_adaln=skip_adaln)
-            self.file_tensor_bytes += self.source.payload_bytes_read - before
-            self.disk_load_seconds += time.perf_counter() - started
+            prepared = self.lookahead.take(record.file)
+            if prepared is None:
+                before = self.source.payload_bytes_read
+                values = _load_native_record(self.mapping, record.file, skip_adaln=skip_adaln)
+                self.file_tensor_bytes += self.source.payload_bytes_read - before
+                self.disk_load_seconds += time.perf_counter() - started
+            else:
+                # Revalidate after waiting too: the file may have changed since preparation.
+                try:
+                    self.source._check()
+                except BaseException:
+                    prepared[0].clear()
+                    raise
+                values, source_report, elapsed = prepared
+                self.lookahead_hits += 1
+                self.lookahead_wait_seconds += time.perf_counter() - started
+                self.lookahead_peak_bytes = max(
+                    self.lookahead_peak_bytes, sum(v.nbytes for v in values.values())
+                )
+                for key, value in source_report.items():
+                    if isinstance(value, (int, float)) and not isinstance(value, bool):
+                        self.lookahead_source_report[key] = (
+                            self.lookahead_source_report.get(key, 0) + value
+                        )
+                self.file_tensor_bytes += source_report["payload_bytes_read"]
+                self.disk_load_seconds += elapsed
             self.disk_page_loads += 1
             size = sum(v.nbytes for v in values.values())
             if self._cache_enabled:
@@ -222,19 +340,67 @@ def load_dt_h3_dit(path: str | Path, *, window_size=1, decode_backend="mlx"):
             return values
 
     class DirectExecutor(PagedBlockExecutor):
+        weight_lookahead_enabled = False
+
+        def configure_weight_lookahead(self, enabled):
+            self.store.lookahead.discard()
+            self.weight_lookahead_enabled = bool(enabled)
+
+        def _lookahead_eligible(self):
+            return weight_lookahead_eligible(
+                enabled=self.weight_lookahead_enabled,
+                decode_backend=decode_backend,
+                window_size=self.window_size,
+                skip_adaln=self.skip_adaln,
+                projection_backend=self.projection_backend,
+                cache_budget_bytes=self.store.cache_budget_bytes,
+            )
+
+        @contextmanager
+        def _selected_window(self, indices, prefetch_after):
+            if prefetch_after is None or not self._lookahead_eligible():
+                self.store.lookahead.discard()
+            completed = False
+            try:
+                with super()._selected_window(indices, prefetch_after) as blocks:
+                    if (
+                        self._lookahead_eligible()
+                        and prefetch_after is not None
+                        and prefetch_after < self.num_blocks
+                    ):
+                        self.store.lookahead.start(str(prefetch_after))
+                    yield blocks
+                completed = True
+            finally:
+                if not completed:
+                    self.store.lookahead.discard()
+
         def close(self):
             try:
+                self.store.lookahead.close()
                 super().close()
                 self.store.release()
             finally:
                 self.store.source.close()
 
         def report(self):
+            source_report = self.store.source.report()
+            for key, value in self.store.lookahead_source_report.items():
+                source_report[key] += value
             return {
                 **super().report(),
-                **self.store.source.report(),
+                **source_report,
                 "weight_decode_backend": decode_backend,
                 "execution_dtype": "native_bf16_fp32",
+                "weight_lookahead_enabled": self.weight_lookahead_enabled,
+                "weight_lookahead_eligible": self._lookahead_eligible(),
+                "weight_lookahead_max_blocks": 1,
+                "weight_lookahead_hits": self.store.lookahead_hits,
+                "weight_lookahead_wait_seconds": self.store.lookahead_wait_seconds,
+                "weight_lookahead_peak_bytes": self.store.lookahead_peak_bytes,
+                "weight_lookahead_statistics_scope": (
+                    "consumed blocks; preparation overlaps compute"
+                ),
             }
 
     store = DirectStore()

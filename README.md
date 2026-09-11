@@ -302,8 +302,9 @@ remain the performance default.
 Import the three `.ckpt` files and an existing H3 tokenizer folder, or use the small **H3 tokenizer ·
 For Draw Things model reuse** download (about 11.51 MB, no weights). See the
 [Studio and CLI instructions](studio/README.md#reuse-local-draw-things-h3-models).
-The adapter decodes/reorders one transformer block at a time in memory and uses the native
-BF16/FP32 arithmetic policy. Packed int8 and palette weights now expand through bounded Metal
+The adapter executes one transformer block at a time with native BF16/FP32 arithmetic;
+eligible accelerated runs can prepare one additional block ahead. Packed int8 and palette
+weights now expand through bounded Metal
 kernels, and layout transforms stay on the GPU. Raw/ezm7 tensors retain the CPU reader. This changes
 weight preparation, not projection precision or sampler math, and writes no converted weights.
 It does not inherit DT's Swift/Metal sampler speed or numerical results.
@@ -364,6 +365,30 @@ versus 612.7 seconds (10:13), with the entire video/audio MP4 byte-identical. Pr
 **1.2%** in this desktop comparison; unchanged block computation took 454.0 versus 449.5 seconds,
 offsetting part of the preparation gain. All weighted stages unloaded. This does not establish
 new device-memory requirements or Draw Things numerical/sampler parity.
+
+Normal-memory DT-weight recipes with Automatic or explicit MPP projections now prepare the next
+block while the current block computes. This uses one worker-owned Metal stream and at most one
+additional decoded block, with no disk cache or model conversion. Fixed weights and initial
+modulation preparation remain sequential. The worker finishes before ownership transfers, and
+cancellation, failure or unloading drains its work and releases the prepared weights.
+
+This is limited to resolved MPP execution, single-block windows, cached modulation and zero
+retained-page budget. **MLX** projections or the **Lower memory** policy disable it; selected or
+skipped-block windows and explicit retained-page caches keep their existing path. Results report
+`weight_lookahead_hits`, `weight_lookahead_peak_bytes` and `weight_lookahead_wait_seconds`.
+Preparation and compute timings overlap and must not be added as independent wall-clock costs.
+One extra native block is about 0.72 GiB before temporary decoding buffers; this is a speed/memory
+trade-off and does not qualify the normal-memory route on a physical 36 GB Mac.
+
+The integrated M3 Ultra/256 GiB run completed in **546.8 seconds (9:07)** versus 605.3 seconds
+(10:05), a **9.7%** elapsed reduction, with the full video/audio MP4 byte-identical and all weighted
+stages unloaded. Sampling/setup fell from 550.5 to 490.8 seconds; 931 next-block preparations were
+consumed. Overall MLX peak stayed **6.58 GiB** and process footprint was **9.48 versus 9.50 GiB**,
+while transformer MLX peak rose from **5.31 to 5.91 GiB**. The same-workload prototype took
+570.7 seconds (9:31), so these desktop timings are not a fixed speed guarantee. A one-sample
+13.56 GiB process-footprint spike at prototype shutdown did not recur in the integrated run.
+These runs use fresh processes/prompt caches without purging OS caches; they do not establish
+Draw Things sampler parity or physical-36-GB qualification.
 
 The matched DT-weight render at 512×512, 124 frames, 24 fps, stereo 32 kHz audio and 19 Euler
 evaluations fell from **924.5 to 724.5 seconds (21.6% less time)** on an M3 Ultra with 256 GiB RAM.

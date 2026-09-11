@@ -14,6 +14,7 @@ NOTE_TITLE = "Setup and model downloads"
 H3_OFFICIAL = "https://huggingface.co/MiniMaxAI/MiniMax-H3"
 H3_Q8_TRANSFORMER = "https://huggingface.co/Vayden/MiniMax-H3-MLX-q8-extended-paged"
 H3_Q8_QWEN = "https://huggingface.co/Vayden/Qwen3-VL-32B-H3-MLX-q8-paged"
+H3_Q8_VISION_QWEN = "https://huggingface.co/Vayden/Qwen3-VL-32B-H3-MLX-q8-vision-paged"
 H3_Q8_VAE = "https://huggingface.co/Vayden/MiniMax-H3-Video-VAE-MLX-Q8"
 DRBAPH_V4 = (
     "https://huggingface.co/drbaph/MiniMax-H3-Turbo-Lora-ComfyUI/blob/main/"
@@ -204,12 +205,29 @@ def _model_note(path: Path, workflow: dict) -> str:
     )
 
     if "q8_extended_paged" in component_text:
+        encoder = component_values[3] if len(component_values) > 3 else ""
+        if encoder == "MiniMax-H3/FL2VA/text_encoder":
+            encoder_lines = [
+                f"- [Selected vision-capable resident Qwen3-VL encoder]({H3_OFFICIAL})",
+                "  Keep the complete encoder under "
+                "`ComfyUI/models/MiniMax-H3/FL2VA/text_encoder`, as selected in Component Loader.",
+                f"- Optional: [preconverted Q8 vision encoder]({H3_Q8_VISION_QWEN}).",
+                "  To use paging, save the complete package under "
+                "`ComfyUI/models/MiniMax-H3/text_encoders/q8-vision-paged` and",
+                "  change **Component Loader → text_encoder** to "
+                "`MiniMax-H3/text_encoders/q8-vision-paged`.",
+                "  The text-only Q8 paged encoder cannot encode these image inputs.",
+            ]
+        else:
+            encoder_lines = [
+                f"- [Qwen3-VL Q8 paged conditioner]({H3_Q8_QWEN})",
+                "  Save it under `ComfyUI/models/MiniMax-H3/text_encoders/q8-paged`.",
+            ]
         lines.extend(
             [
                 f"- [Q8-extended paged transformer]({H3_Q8_TRANSFORMER})",
                 "  Save it under `ComfyUI/models/MiniMax-H3/transformers/q8_extended_paged`.",
-                f"- [Qwen3-VL Q8 paged conditioner]({H3_Q8_QWEN})",
-                "  Save it under `ComfyUI/models/MiniMax-H3/text_encoders/q8-paged`.",
+                *encoder_lines,
                 f"- [MiniMax H3 video VAE MLX Q8]({H3_Q8_VAE})",
                 "  Save it under `ComfyUI/models/MiniMax-H3/vae/q8`.",
             ]

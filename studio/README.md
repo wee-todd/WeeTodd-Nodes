@@ -113,6 +113,21 @@ video/audio, unchanged MLX peaks, and effectively unchanged process footprint (*
 reduction is from one desktop comparison; unchanged block computation also ran faster, so batching
 does not account for every second saved. Physical 36 GB qualification remains open.
 
+Normal-memory DT recipes with **Automatic** projections can now prepare one decoded transformer
+block ahead while the current block computes. The renderer enables this only for its resolved
+MPP path, one-block paging, cached modulation and no retained-page cache. It uses about 0.72 GiB
+for the additional block plus temporary preparation buffers. **MLX** projections or **Lower memory**
+disable it. It creates no converted model files and releases the worker and prepared weights on
+unload, failure or cancellation. Exported headless jobs and composable ComfyUI nodes use the same
+behavior. Render reports include lookahead hits, weight bytes and waiting time; overlapping
+preparation/compute timings cannot be summed as separate elapsed stages.
+
+The integrated 512×512/124-frame/19-evaluation M3 Ultra run completed in **9:07 versus 10:05**
+(9.7% less time), with a byte-identical video/audio MP4 and all weighted stages unloaded. Process
+footprint was **9.48 GiB** and overall MLX peak remained **6.58 GiB**; transformer MLX peak rose
+from 5.31 to 5.91 GiB. The earlier same-workload prototype took 9:31, so elapsed gains vary.
+This is desktop evidence for the tested recipe, not physical-36-GB or DT sampler parity.
+
 The same setup is available from the CLI, without writing a recipe by hand:
 
 ```bash
