@@ -67,6 +67,16 @@ video/audio MP4 and all weighted runtimes unloaded. Total time is effectively un
 OS file caches were not purged. Block preparation fell from 131.9 to 109.4 seconds, but compute
 time increased in this desktop run. Do not claim an overall speed improvement from this pass.
 
+The following DT preparation pass batches one cached-modulation block's GPU decoding and native
+layout/dtype conversion, retaining eager fixed-weight and initial AdaLN loading. The same complete
+recipe finished in **612.7 seconds (10:13)** versus 649.7 seconds, with a byte-identical video/audio
+MP4, 950 batches, all weighted stages unloaded and no retained weight cache. Preparation fell from
+109.4 to 91.7 seconds. Process footprint stayed effectively flat at **9.51 versus 9.48 GiB**;
+transformer/video MLX peaks remained 5.31/6.58 GiB. Total elapsed time was 5.7% lower in this single
+desktop comparison; unchanged block computation also ran faster (449.5 versus 463.6 seconds), so
+the full elapsed gain is not attributable to batching alone. This does not extend hardware or
+saved ComfyUI DT-file workflow qualification.
+
 ## Shared renderer and ComfyUI
 
 The shared Python/MLX backend runs through ComfyUI or `scripts/render_headless.py`.

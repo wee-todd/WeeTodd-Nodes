@@ -13,6 +13,77 @@ from minimax_h3_mlx.dt_mlx_decode import DTMLXTensorStore  # noqa: E402
 from minimax_h3_mlx.dt_tensor_store import DTTensorStore  # noqa: E402
 
 
+def test_batched_materialization_preserves_native_weights_and_owned_lifetime(tmp_path):
+    from minimax_h3_mlx.dt_h3_checkpoint import _native_arrays
+
+    q = np.arange(-128, 128, dtype=np.int8).reshape(2, 128)
+    scales = np.array([0.1, -0.3], dtype=np.float16)
+    path = checkpoint(tmp_path, 0x8A1E9B, q.shape, q.tobytes() + scales.tobytes(), trailer=True)
+    with DTTensorStore(path) as cpu:
+        expected = mx.array(cpu.read("w")).astype(mx.bfloat16)
+        mx.eval(expected)
+    with DTMLXTensorStore(path) as store:
+        actual = store.materialize(
+            lambda: _native_arrays({"blocks.0.weight": store.read("w")}, evaluate=False)
+        )["blocks.0.weight"]
+        assert store.report()["batched_materializations"] == 1
+        assert store.report()["deferred_decoded_tensors"] == 1
+        assert store.report()["batched_materialization_seconds"] > 0
+        # A subsequent ordinary read still completes synchronously and retains F16 values.
+        eager = store.read("w")
+        assert eager.dtype == mx.float16
+        assert store.report()["deferred_decoded_tensors"] == 1
+    assert actual.dtype == mx.bfloat16
+    assert bool(mx.array_equal(actual, expected))
+    assert bool(mx.array_equal(eager.astype(mx.bfloat16), expected))
+
+
+@pytest.mark.parametrize("error", [ValueError, KeyboardInterrupt])
+def test_failed_materialization_restores_eager_reads_and_preserves_error(tmp_path, error):
+    path = checkpoint(tmp_path, 0x8A1E9B, (1, 4), bytes(128) + bytes(2), trailer=True)
+    with DTMLXTensorStore(path) as store:
+        def fail():
+            store.read("w")
+            raise error("preparation failed")
+
+        with pytest.raises(error, match="preparation failed"):
+            store.materialize(fail)
+        assert store.report()["batched_materializations"] == 0
+        assert store.report()["deferred_decoded_tensors"] == 1
+        assert bool(mx.array_equal(store.read("w"), mx.zeros((1, 4))))
+        assert store.report()["deferred_decoded_tensors"] == 1
+
+
+@pytest.mark.parametrize("file,skip,batches", [("fixed", True, 0), ("0", False, 0), ("0", True, 1)])
+def test_native_record_batches_only_blocks_without_adaln(tmp_path, file, skip, batches):
+    from minimax_h3_mlx.dt_h3_checkpoint import _load_native_record
+
+    source = np.array([[3, -3, 127, 0]], dtype=np.int8)
+    payload = source.tobytes() + bytes(124) + np.array([0.1], dtype=np.float16).tobytes()
+    path = checkpoint(tmp_path, 0x8A1E9B, source.shape, payload, trailer=True)
+    with DTMLXTensorStore(path) as store:
+        class Mapping:
+            xp = mx
+
+            def block(self, index, *, skip_adaln):
+                assert index == 0 and skip_adaln == skip
+                return {"weight": store.read("w")}
+
+            def fixed(self):
+                return {"video_patch_proj.weight": store.read("w")}
+
+        mapping = Mapping()
+        mapping.store = store
+        result = _load_native_record(mapping, file, skip_adaln=skip)
+        dtype = mx.float32 if file == "fixed" else mx.bfloat16
+        expected = mx.array(
+            (source.astype(np.float32) * np.float32(np.float16(0.1))).astype(np.float16)
+        ).astype(dtype)
+        assert bool(mx.array_equal(next(iter(result.values())), expected))
+        assert store.report()["batched_materializations"] == batches
+        assert store.report()["deferred_decoded_tensors"] == batches
+
+
 def test_mapped_payload_is_released_before_returning_owned_gpu_output(tmp_path, monkeypatch):
     import mmap
     import weakref

@@ -101,6 +101,18 @@ process footprint**, down from 16.35 GiB, with a byte-identical video/audio MP4.
 speed. Peak MLX allocation fell from 12.53 to 6.58 GiB. These measurements use fresh renderer
 processes and fresh prompt caches, without clearing OS file caches, and do not qualify 36 GB Macs.
 
+Cached-modulation DT blocks now prepare as one GPU batch, avoiding a wait after each tensor while
+preserving the same weight values and sampler. Fixed weights and initial modulation preparation
+remain eager. This is part of the shared renderer, requires no new model download or settings
+change, and retains no weights after a block is released. Batch preparation timing is reported
+separately from tensor decode submission timing.
+
+The matched M3 Ultra run with batching completed in **10:13 versus 10:50**, with byte-identical
+video/audio, unchanged MLX peaks, and effectively unchanged process footprint (**9.51 versus
+9.48 GiB**). Block preparation fell from 109.4 to 91.7 seconds. The observed 5.7% total-time
+reduction is from one desktop comparison; unchanged block computation also ran faster, so batching
+does not account for every second saved. Physical 36 GB qualification remains open.
+
 The same setup is available from the CLI, without writing a recipe by hand:
 
 ```bash

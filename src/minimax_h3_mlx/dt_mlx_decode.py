@@ -63,6 +63,36 @@ class DTMLXTensorStore(DTTensorStore):
         self.mapped_payload_reads = 0
         self.mapped_payload_bytes = 0
         self.mapped_payload_fallbacks = 0
+        self._defer_decode = False
+        self.deferred_decoded_tensors = 0
+        self.batched_materializations = 0
+        self.batched_materialization_seconds = 0.0
+
+    def materialize(self, prepare):
+        """Prepare one bounded block and complete its graph in a single evaluation.
+
+        Packed inputs are owned MLX copies before their file windows close. The caller
+        must restrict this to one block without AdaLN weights; fixed weights and the
+        initial modulation pass retain eager reads. No arrays are retained by the store.
+        """
+        import mlx.core as mx
+
+        self._check()
+        if self._defer_decode:
+            raise RuntimeError("DT block materialization cannot be nested.")
+        self._defer_decode = True
+        started = time.perf_counter()
+        values = None
+        try:
+            values = prepare()
+            mx.eval(values)
+            self._check()
+            self.batched_materializations += 1
+            return values
+        finally:
+            values = None
+            self._defer_decode = False
+            self.batched_materialization_seconds += time.perf_counter() - started
 
     @contextmanager
     def _payload_window(self, offset, length):
@@ -158,7 +188,10 @@ class DTMLXTensorStore(DTTensorStore):
                 output_dtypes=[mx.uint16],
             )[0]
             out = bits.view(mx.float16)
-        mx.eval(out)  # Bound pending inputs and include actual GPU completion in timing.
+        if self._defer_decode:
+            self.deferred_decoded_tensors += 1
+        else:
+            mx.eval(out)
         elapsed = time.perf_counter() - started
         self.decode_seconds += elapsed
         self.gpu_decode_seconds += elapsed
@@ -176,4 +209,10 @@ class DTMLXTensorStore(DTTensorStore):
             "mapped_payload_reads": self.mapped_payload_reads,
             "mapped_payload_bytes": self.mapped_payload_bytes,
             "mapped_payload_fallbacks": self.mapped_payload_fallbacks,
+            "deferred_decoded_tensors": self.deferred_decoded_tensors,
+            "batched_materializations": self.batched_materializations,
+            "batched_materialization_seconds": self.batched_materialization_seconds,
+            "decode_timing_scope": (
+                "eager completion or deferred submission; batches timed separately"
+            ),
         }

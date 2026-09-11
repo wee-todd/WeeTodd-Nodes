@@ -112,7 +112,7 @@ class DTH3Mapping:
         return values
 
 
-def _native_arrays(values):
+def _native_arrays(values, *, evaluate=True):
     import mlx.core as mx
 
     from .load import is_fp32_key
@@ -121,8 +121,28 @@ def _native_arrays(values):
     for key in list(values):
         array = values.pop(key)
         out[key] = mx.array(array).astype(mx.float32 if is_fp32_key(key) else mx.bfloat16)
-        mx.eval(out[key])
+        if evaluate:
+            mx.eval(out[key])
     return out
+
+
+def _load_native_record(mapping, record_file, *, skip_adaln):
+    import mlx.core as mx
+
+    batch = mapping.xp is mx and record_file != "fixed" and skip_adaln
+
+    def prepare():
+        if record_file == "fixed":
+            values = mapping.fixed()
+        else:
+            index = int(record_file)
+            values = {
+                f"blocks.{index}.{k}": v
+                for k, v in mapping.block(index, skip_adaln=skip_adaln).items()
+            }
+        return _native_arrays(values, evaluate=not batch)
+
+    return mapping.store.materialize(prepare) if batch else prepare()
 
 
 def load_dt_h3_dit(path: str | Path, *, window_size=1, decode_backend="mlx"):
@@ -170,15 +190,7 @@ def load_dt_h3_dit(path: str | Path, *, window_size=1, decode_backend="mlx"):
                 return self._retained[record.file]
             started = time.perf_counter()
             before = self.source.payload_bytes_read
-            if record.file == "fixed":
-                values = self.mapping.fixed()
-            else:
-                index = int(record.file)
-                values = {
-                    f"blocks.{index}.{k}": v
-                    for k, v in self.mapping.block(index, skip_adaln=skip_adaln).items()
-                }
-            values = _native_arrays(values)
+            values = _load_native_record(self.mapping, record.file, skip_adaln=skip_adaln)
             self.file_tensor_bytes += self.source.payload_bytes_read - before
             self.disk_load_seconds += time.perf_counter() - started
             self.disk_page_loads += 1

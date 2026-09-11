@@ -326,6 +326,25 @@ qualified memory improvement, not evidence of an overall speed improvement. Both
 fresh renderer processes with fresh prompt caches; OS file caches were not purged. Physical
 36 GB hardware and a saved ComfyUI DT-file graph remain unqualified.
 
+Once timestep modulation is cached, the DT loader now evaluates each block's decoded weights and
+native layout/dtype conversions together. Fixed components and the initial uncached modulation
+pass retain eager loading. This removes per-tensor GPU waits without changing weight values,
+sampling arithmetic, or file-mapping lifetime. Temporary preparation memory rises by about
+0.43 GiB in the 50-block probe; completed-render results determine the overall memory cost.
+`batched_materializations` and `batched_materialization_seconds` report this work. For batched
+reads, the older decode counters include submission but not deferred GPU completion; use total
+block preparation or batch duration for comparisons. No additional weight cache or disk copy is
+created, and a failed or interrupted batch restores ordinary eager reads.
+
+The same complete M3 Ultra recipe with batched preparation finished in **612.7 seconds (10:13)**,
+versus 649.7 seconds (10:50), with a byte-identical video/audio MP4. Block preparation fell from
+**109.4 to 91.7 seconds**; 950 batches completed. Peak process footprint stayed effectively flat
+at **9.51 versus 9.48 GiB**, and transformer/video MLX peaks were unchanged at 5.31/6.58 GiB.
+The observed total-time reduction was **5.7%** in this single desktop comparison. Unchanged block
+computation also ran faster (449.5 versus 463.6 seconds), so do not attribute the entire elapsed
+gain to batching. All weighted stages unloaded; hardware and workflow qualification limits above
+still apply.
+
 The matched DT-weight render at 512×512, 124 frames, 24 fps, stereo 32 kHz audio and 19 Euler
 evaluations fell from **924.5 to 724.5 seconds (21.6% less time)** on an M3 Ultra with 256 GiB RAM.
 The entire MP4 was byte-identical. Process-footprint peak fell from **18.07 to 16.35 GiB**; overall
