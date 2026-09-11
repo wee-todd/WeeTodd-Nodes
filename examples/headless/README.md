@@ -71,6 +71,32 @@ the preflight/render commands below with that file. The lower-memory policy enab
 savings; it is not a measured 36 GB fit guarantee. Reference/control tasks need their additional
 media and compatible adapters; the distilled base package does not include those adapters.
 
+## LTX 2.5 images and ordinary LoRAs
+
+For a first-frame clip, use the same compatible recipe with a timed keyframe:
+
+```json
+"conditioning": {
+  "version": 1,
+  "task": "fflf",
+  "inputs": [
+    {"id": "first", "kind": "image", "role": "keyframe", "path": "/local/media/first.png", "frame_index": 0, "strength": 1.0}
+  ]
+}
+```
+
+The task name also covers first-only, last-only and first/last clips. For ordinary LTX 2.5
+LoRAs, add ordered path/strength pairs inside `components`:
+
+```json
+"loras": [["/local/models/style.safetensors", 0.75]]
+```
+
+Use compatible transformer LoRAs; MSR and IC controls require their dedicated task fields and
+conditioning. Studio's LoRA library writes this same native recipe format. Run preflight again
+after changing adapters or media. If an older runner reports `PosixPath is not JSON serializable`
+while writing the LoRA result, update the renderer; no model conversion is needed.
+
 ## Download H3 components
 
 Use the same compatible Python environment and Hugging Face access described above. For text,

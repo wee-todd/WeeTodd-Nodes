@@ -257,3 +257,36 @@ def test_incomplete_output_blocks_matrix_advance_and_persists_status(monkeypatch
     report = json.loads((tmp_path / "headless-validation.json").read_text())
     assert len(report) == 1
     assert report[0]["status"] == "running_or_incomplete"
+
+
+def test_ltx25_lora_preflight_is_json_serializable(monkeypatch, tmp_path):
+    import ltx25_mlx.transformer as transformer
+    from ltx25_mlx.runtime import LTX25ComponentSpec, LTX25GenerationConfig
+    from wee_todd_mlx.headless_preflight import preflight_recipe
+
+    monkeypatch.setattr(
+        LTX25ComponentSpec, "validate", lambda *a, **k: {"video_scale_factors": [8, 32, 32]}
+    )
+    monkeypatch.setattr(LTX25GenerationConfig, "validate", lambda *a, **k: None)
+    adapter = tmp_path / "adapter.safetensors"
+    adapter.touch()
+    monkeypatch.setattr(
+        transformer, "inspect_ltx25_lora", lambda p: {"path": Path(p), "adapter_pairs": 480}
+    )
+    recipe = {
+        "format": "weetodd-headless-v2",
+        "engine": "ltx25",
+        "prompt": "test",
+        "config": {},
+        "components": {
+            "transformer_path": "t",
+            "text_encoder_path": "e",
+            "video_vae_path": "v",
+            "audio_vae_path": "a",
+            "spatial_upscaler_path": "u",
+            "loras": [[str(adapter), 0.4]],
+        },
+    }
+    report = preflight_recipe(recipe)
+    decoded = json.loads(json.dumps(report))
+    assert decoded["adapters"][0]["path"] == str(adapter)

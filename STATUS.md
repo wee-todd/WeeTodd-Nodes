@@ -2,6 +2,24 @@
 
 Reconciled 2026-09-09 against the local source and saved acceptance evidence.
 
+Follow-up 2026-09-11: matched LTX 2.5 Q8-paged T2V at 768×448, 121 frames and the
+8+3 schedule measured 64.20 seconds on the repeated baseline versus 64.18 seconds with an
+experimental one-block GPU-weight lookahead. Both complete video/audio MP4s were byte-identical;
+MLX peak remained 8.06 GiB. The first baseline's 72.65 seconds included additional encoder and
+compilation warming, so its apparent improvement is not credited to lookahead. First-frame
+conditioning measured 70.37 versus 71.35 seconds, and two-subject MSR measured 149.36 versus
+148.32 seconds, again with byte-identical paired movies. The rank-450 adapter stress test at
+strength 0.3 measured 110.09 versus 107.72 seconds with the same movie hash; that single 2.2%
+difference is not a repeat-qualified speed claim. This does not justify changing LTX
+acceleration defaults or porting the candidate to LTX 2.3. Tests used an M3 Ultra with 256 GiB,
+fresh renderer processes, and unpurged OS caches; they do not qualify a physical 36 GB machine.
+Native DT cold/warm comparison remains pending an unlocked desktop and matched LTX 2.3 weights.
+
+The same validation found and fixed a headless LTX 2.5 LoRA result-serialization error:
+inspection paths are now JSON strings, so valid adapter preflight/generation can save `result.json`.
+No weights or strengths change. First-frame and ordinary-LoRA recipe examples now document the
+existing shared format. Studio managed runtimes need their source refreshed to receive the fix.
+
 Follow-up 2026-09-10: Studio now displays native stage/evaluation progress, elapsed/last-output
 time, and measured statistics for new render versions. LTX 2.5 guided setup includes dedicated
 IC-LoRA control, Ingredients and MSR routes with compatible attachment controls. H3 head/FFN chunk

@@ -187,7 +187,10 @@ def preflight_recipe(recipe):
         if spec.loras:
             from ltx25_mlx.transformer import inspect_ltx25_lora
 
-            adapters = [inspect_ltx25_lora(path) for path, _ in spec.loras]
+            adapters = []
+            for path, _strength in spec.loras:
+                adapter = inspect_ltx25_lora(path)
+                adapters.append({**adapter, "path": str(adapter["path"])})
     else:
         raise ValueError(f"Unsupported engine: {engine}")
     return {

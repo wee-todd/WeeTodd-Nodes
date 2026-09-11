@@ -1718,6 +1718,14 @@ runtime, use the updated app's **Set Up Managed Renderer** to refresh its source
 Studio now shows the renderer's specific preparation or generation error; **Show Log** retains
 the full traceback.
 
+### An LTX 2.5 LoRA job reports `PosixPath is not JSON serializable`
+
+Update the renderer and retry in a new output directory. Older headless runners could validate
+and even render a compatible LoRA successfully, then fail when saving its inspection path in
+`result.json`. The preflight report now serializes that path correctly. Existing weights and
+LoRA strengths are preserved. For an app-managed runtime, refresh the renderer through the
+updated app's **Set Up Managed Renderer**. See the [image and LoRA recipe examples](examples/headless/README.md#ltx-25-images-and-ordinary-loras).
+
 ### A workflow opens with shifted widget values
 
 Restart ComfyUI and reload the current workflow. Do not repair shifted fields manually. The saved
