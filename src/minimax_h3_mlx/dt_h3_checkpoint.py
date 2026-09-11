@@ -56,19 +56,36 @@ class DTH3Mapping:
         def read(name):
             return self.read(prefix + name, index)
 
-        q, k, v = (read(name) for name in ("q", "k", "v"))
+        def native_group(roles, layout):
+            reader = getattr(self.store, "read_native_group", None)
+            if refiner or not skip_adaln or self.xp is np or reader is None:
+                return None
+            names = [f"__dit__[t-{role}-{index}-0]" for role in roles]
+            value = reader(names, layout=layout)
+            if value is not None:
+                self.consumed.update(names)
+            return value
+
+        qkv = native_group(("q", "k", "v"), "qkv")
+        if qkv is None:
+            q, k, v = (read(name) for name in ("q", "k", "v"))
+            if not refiner:
+                q, k = (unpair_rotary(a, array_module=self.xp) for a in (q, k))
+            qkv = fuse_qkv(q, k, v, array_module=self.xp)
+        fc1 = native_group(("gate", "up"), "fc1")
+        if fc1 is None:
+            fc1 = self.xp.concatenate([read("gate"), read("up")])
         qn, kn = (read(name).reshape(-1) for name in ("norm_q", "norm_k"))
         if not refiner:
-            q, k = (unpair_rotary(a, array_module=self.xp) for a in (q, k))
             qn, kn = (unpair_rotary(a, heads=1, array_module=self.xp) for a in (qn, kn))
         values = {
             "norm1.weight": read("norm1").reshape(-1),
             "norm2.weight": read("norm2").reshape(-1),
-            "attn.qkv_proj.weight": fuse_qkv(q, k, v, array_module=self.xp),
+            "attn.qkv_proj.weight": qkv,
             "attn.q_norm.weight": qn,
             "attn.k_norm.weight": kn,
             "attn.out_proj.weight": read("o"),
-            "mlp.fc1.weight": self.xp.concatenate([read("gate"), read("up")]),
+            "mlp.fc1.weight": fc1,
             "mlp.fc2.weight": read("down"),
         }
         if not refiner and not skip_adaln:

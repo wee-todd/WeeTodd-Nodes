@@ -58,15 +58,22 @@ def test_msr_editor_maps_all_controls_and_preserves_recipe_options(tmp_path, mon
     assert item["attention_strength"] == 0.4
 
 
-def test_removing_clip_attachments_clears_imported_media(tmp_path, monkeypatch):
+@pytest.mark.parametrize("task", ["a2v", "ref2va"])
+def test_removing_clip_attachments_respects_selected_recipe_tasks(tmp_path, monkeypatch, task):
     request, compose = recipe_request(tmp_path)
     clip = request["project"]["clips"][0]
     clip["attachments"] = []
     profile = Path(clip["profileID"])
     recipe = json.loads(profile.read_text())
-    recipe["conditioning"] = dict(version=1, task="ref2va", inputs=[{"id": "obsolete"}])
+    recipe["conditioning"] = dict(version=1, task=task, inputs=[{"id": "obsolete"}])
     profile.write_text(json.dumps(recipe))
     monkeypatch.setattr("wee_todd_mlx.task_conditioning.validate_conditioning", lambda r: {})
+    if task == "ref2va":
+        # A reference-only recipe cannot silently become T2V when attachments disappear.
+        with pytest.raises(ValueError, match="ltx25 t2v.*selected recipe"):
+            compose(request)
+        assert json.loads(profile.read_text()) == recipe
+        return
     recipe, _ = compose(request)
     assert recipe["conditioning"]["inputs"] == []
     assert recipe["conditioning"]["task"] == "t2v"
@@ -293,7 +300,7 @@ def test_automatic_control_refuses_recipe_with_no_matching_adapter(tmp_path, mon
     ]
     request["project"]["assets"] = [dict(id="guide", kind="video", path="/tmp/guide", name="Guide")]
     monkeypatch.setattr("wee_todd_mlx.task_conditioning.validate_conditioning", lambda r: {})
-    with pytest.raises(ValueError, match="compatible ltx25 control"):
+    with pytest.raises(ValueError, match="ltx25 control"):
         compose(request)
 
 

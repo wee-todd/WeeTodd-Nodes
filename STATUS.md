@@ -77,6 +77,17 @@ desktop comparison; unchanged block computation also ran faster (449.5 versus 46
 the full elapsed gain is not attributable to batching alone. This does not extend hardware or
 saved ComfyUI DT-file workflow qualification.
 
+The subsequent native-layout pass fuses compatible DT int8 Q/K/V and gate/up decoding, ordering,
+and BF16 conversion while preserving intermediate FP16 rounding. Other codecs, rounding modes,
+fixed weights and initial modulation loading retain the existing path. All 50 real blocks matched
+bitwise. Alternating preparation probes fell from 4.10/4.12 to 3.41/3.39 seconds, with temporary
+MLX preparation peaks reduced from 1.72 to 1.08 GiB. The same complete M3 Ultra render finished
+in **605.3 seconds (10:05)** versus 612.7 seconds, with a byte-identical video/audio MP4, 1,900
+fused groups, all stages unloaded, no retained weight cache and no persistent converted weights.
+Preparation fell **91.7 to 78.4 seconds**; unchanged compute took 454.0 versus 449.5 seconds.
+The observed total improvement is 1.2%, with peak process footprint unchanged at **9.50 GiB**
+and transformer/video MLX peaks unchanged at 5.31/6.58 GiB. Qualification limits above still apply.
+
 ## Shared renderer and ComfyUI
 
 The shared Python/MLX backend runs through ComfyUI or `scripts/render_headless.py`.

@@ -329,8 +329,8 @@ fresh renderer processes with fresh prompt caches; OS file caches were not purge
 Once timestep modulation is cached, the DT loader now evaluates each block's decoded weights and
 native layout/dtype conversions together. Fixed components and the initial uncached modulation
 pass retain eager loading. This removes per-tensor GPU waits without changing weight values,
-sampling arithmetic, or file-mapping lifetime. Temporary preparation memory rises by about
-0.43 GiB in the 50-block probe; completed-render results determine the overall memory cost.
+sampling arithmetic, or file-mapping lifetime. The initial batched implementation raised temporary
+preparation memory by about 0.43 GiB in the 50-block probe; the fused layout pass below reduces it.
 `batched_materializations` and `batched_materialization_seconds` report this work. For batched
 reads, the older decode counters include submission but not deferred GPU completion; use total
 block preparation or batch duration for comparisons. No additional weight cache or disk copy is
@@ -344,6 +344,26 @@ The observed total-time reduction was **5.7%** in this single desktop comparison
 computation also ran faster (449.5 versus 463.6 seconds), so do not attribute the entire elapsed
 gain to batching. All weighted stages unloaded; hardware and workflow qualification limits above
 still apply.
+
+Compatible int8 Q/K/V and gate/up groups now unpack directly into the native BF16 layout in a
+single Metal kernel per group. The conversion preserves DT's intermediate FP16 rounding, the
+rotary channel order, and per-head QKV ordering. This removes intermediate decoded copies and
+separate gather/concatenate/cast operations. Other codecs and rounding policies retain the prior
+path; fixed weights and the initial modulation pass are unchanged. `native_layout_groups` reports
+the number of fused groups. No weights are retained between passes or written to disk.
+
+All 50 real transformer blocks matched the prior native weight values bit for bit. Alternating
+50-block preparation probes measured **4.10/4.12 seconds before versus 3.41/3.39 seconds after**,
+with temporary MLX preparation peaks falling from **1.72 to 1.08 GiB**. These are preparation-only
+measurements, not complete generation times or minimum device RAM requirements.
+
+The same full M3 Ultra recipe with fused layout preparation completed in **605.3 seconds (10:05)**
+versus 612.7 seconds (10:13), with the entire video/audio MP4 byte-identical. Preparation fell from
+**91.7 to 78.4 seconds** and 1,900 fused groups completed. Peak process footprint remained
+**9.50 GiB**, with unchanged transformer/video MLX peaks of 5.31/6.58 GiB. Total time improved
+**1.2%** in this desktop comparison; unchanged block computation took 454.0 versus 449.5 seconds,
+offsetting part of the preparation gain. All weighted stages unloaded. This does not establish
+new device-memory requirements or Draw Things numerical/sampler parity.
 
 The matched DT-weight render at 512×512, 124 frames, 24 fps, stereo 32 kHz audio and 19 Euler
 evaluations fell from **924.5 to 724.5 seconds (21.6% less time)** on an M3 Ultra with 256 GiB RAM.

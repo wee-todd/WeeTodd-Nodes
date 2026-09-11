@@ -67,6 +67,72 @@ class DTMLXTensorStore(DTTensorStore):
         self.deferred_decoded_tensors = 0
         self.batched_materializations = 0
         self.batched_materialization_seconds = 0.0
+        self.native_layout_groups = 0
+
+    def read_native_group(self, names, *, layout):
+        """Read a bounded int8 group directly into H3's BF16 weight layout.
+
+        Unsupported codecs/rounding return None before reading payloads so the
+        caller can use ordinary reads. All spans and input allocation limits are
+        checked before GPU allocation. The combined output is at most three
+        individually bounded tensors; neither it nor the payloads are retained.
+        """
+        import mlx.core as mx
+
+        from .dt_native_layout import decode_group
+
+        if layout not in {"qkv", "fc1"} or len(names) != (3 if layout == "qkv" else 2):
+            raise ValueError("Invalid native DT tensor group.")
+        records = [self._record(name) for name in names]
+        if self.rounding != "nearest" or any(r.codec & ~_EXTERNAL != _I8X for r in records):
+            return None
+        shape = records[0].shape
+        if (
+            len(shape) != 2
+            or any(r.shape != shape for r in records)
+            or (layout == "qkv" and shape[0] % 128)
+        ):
+            raise ValueError("Invalid native DT tensor group shape.")
+        if any(r.elements * 2 > self.max_tensor_bytes for r in records):
+            raise ValueError("DT decoded tensor allocation limit exceeded.")
+        if records[0].elements * len(records) >= 2**32:
+            raise ValueError("DT native tensor group index limit exceeded.")
+        for name in names:
+            self.validate_tensor(name)
+        started = time.perf_counter()
+        inputs = []
+        for record in records:
+            blob = self._inline(record)
+            if record.codec & _EXTERNAL:
+                offset, length, _ = self._span(record, blob)
+                payload = self._payload_window(offset, length)
+            else:
+                self.payload_bytes_read += len(blob)
+                payload = nullcontext(blob)
+            with payload as blob:
+                inputs.extend(
+                    [
+                        mx.array(np.frombuffer(blob, dtype=np.int8, count=record.elements)),
+                        mx.array(
+                            np.frombuffer(
+                                blob, dtype="<f2", offset=(record.elements + 127) // 128 * 128
+                            )
+                        ),
+                    ]
+                )
+        out = decode_group(inputs, shape, layout=layout)
+        if self._defer_decode:
+            self.deferred_decoded_tensors += len(records)
+        else:
+            mx.eval(out)
+        self._check()
+        elapsed = time.perf_counter() - started
+        self.decode_seconds += elapsed
+        self.gpu_decode_seconds += elapsed
+        self.gpu_decoded_tensors += len(records)
+        self.tensors_read += len(records)
+        self.native_layout_groups += 1
+        return out
 
     def materialize(self, prepare):
         """Prepare one bounded block and complete its graph in a single evaluation.
@@ -212,6 +278,7 @@ class DTMLXTensorStore(DTTensorStore):
             "deferred_decoded_tensors": self.deferred_decoded_tensors,
             "batched_materializations": self.batched_materializations,
             "batched_materialization_seconds": self.batched_materialization_seconds,
+            "native_layout_groups": self.native_layout_groups,
             "decode_timing_scope": (
                 "eager completion or deferred submission; batches timed separately"
             ),
