@@ -71,6 +71,8 @@ def preflight_recipe(recipe):
         config = LTX23GenerationConfig(**recipe["config"])
         config.validate()
         task = task_report["contract"]["task"]
+        if config.pipeline_mode == "distilled_single_stage" and task != "t2v":
+            raise ValueError("Single-pass distilled currently supports text-to-video only")
         if task in {"fflf", "a2v", "extension"}:
             import inspect
 

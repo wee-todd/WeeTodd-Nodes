@@ -634,6 +634,40 @@ this generic loader. Files can come from any source, but they must match support
 projection and scaling contracts; this is not a promise that arbitrary LoRAs or arbitrary model
 families are interchangeable.
 
+### LTX 2.3 single-pass distilled 1.1
+
+Studio **Model setup → LTX 2.3 · Text to video · Single-pass distilled 1.1** creates an
+explicit full-resolution T2V recipe with generated audio. Select an existing MLX distilled 1.1
+bundle and a local Gemma 3 12B encoder, create the recipe, then use it for the selected LTX 2.3
+T2V clip. This option is separate from the existing two-stage distilled preset.
+
+The starting settings are **8 evaluations, Shift 5, CFG 1, STG 0**, staged unloading and streamed
+transformer weights. Steps and Shift are editable in Studio and ComfyUI; changing them changes
+the tested recipe. The linear trailing schedule runs directly at the requested dimensions, with
+no spatial-upscaler or refinement pass. This is not the fixed two-stage distilled sigma table.
+First/last frames, audio inputs, IC-LoRA/reference tasks and extension retain their existing routes;
+the new mode rejects those inputs rather than discarding them. Standard LTX 2.3 LoRAs use the
+existing loader; artistic quality depends on the selected adapter and strength.
+
+Use `pipeline_mode="distilled_single_stage"` in **LTX 2.3 Generation Config**. The node resolves
+CFG/STG to 1/0 and refinement to zero for this mode; the resolved settings output shows these
+values. Keep `low_memory=true` and `low_ram_streaming=true` for the tested memory policy.
+The model directory needs `transformer-distilled-1.1.safetensors` (or its matching numbered shards),
+plus connector, video encoder/decoder, audio VAE and vocoder files. No Dev alias or spatial
+upscaler is needed. Select the actual converted 1.1 checkpoint; renaming another variant is not
+conversion or proof of model identity. The matched recipe used Q8 weights and Q8 QAT Gemma.
+
+[ComfyUI API example](examples/ltx23_t2va_single_pass_distilled_api.json) ·
+[Headless recipe example](examples/headless/ltx23_single_pass_distilled_t2v.json) ·
+[CLI setup instructions](examples/headless/README.md#ltx-23-single-pass-distilled-11)
+
+The production headless route completed a 768×448, 121-frame, 25 fps, eight-evaluation test in
+**91.1 seconds** on M3 Ultra/256 GB and produced a byte-identical audio/video MP4 to the matched
+research run (~90 seconds). Peak process RSS was **19.0 GiB**; MLX allocator peak was **30.1 GiB**.
+These are different counters, not additive. Sampling progress reported 1/8 through 8/8, and
+weights were unloaded after completion. This establishes parity for that recipe, not a quality
+comparison with two-stage generation or a memory-fit guarantee for physical 36 GB Macs.
+
 ### LTX 2.3 model bundle
 
 The shipped two-stage workflow selects an existing MLX bundle at `ComfyUI/models/LTX-2.3/q8`
@@ -1637,7 +1671,7 @@ This table is generated from the registered node contracts. Run
 | LTX 2.3 Ingredients Reference Sheet | Prepare one black-background Ingredients sheet and its trained two-part prompt. Use Dev two_stage mode, 768x448, 121+ frames, 24 fps, and adapter strength 1.4 in the loader. | LTX 2.3 — Conditioning | Experimental |
 | LTX 2.3 Model Loader (MLX) | Select a local LTX 2.3 MLX bundle. No weights load in this node. | LTX 2.3 — Loaders | Supported |
 | LTX 2.3 LoRA Loader (MLX) | Attach a local standard LTX 2.3 LoRA; chain nodes for ordered stacks. Alpha -1 uses file metadata or rank. Runs on all stages with resident float/Q4/Q8 or low-RAM block-streamed transformers. Task/control adapters use separate loaders and cannot currently be combined with generic LoRAs. | LTX 2.3 — Loaders | Experimental |
-| LTX 2.3 Generation Config | Configure LTX 2.3 mode, canvas, duration, steps, guidance, and memory policy. | LTX 2.3 — Core | Supported |
+| LTX 2.3 Generation Config | Configure LTX 2.3 mode, canvas, duration, steps, guidance, and memory policy. Single-pass distilled 1.1 T2V adds editable steps/Shift with fixed CFG 1 and STG 0. | LTX 2.3 — Core | Supported |
 | LTX 2.3 Preflight | Validate the selected LTX 2.3 bundle and mode-specific components before allocation. | LTX 2.3 — Loaders | Recommended |
 | LTX 2.3 Generate Video + Audio | Generate synchronized LTX 2.3 video and 48 kHz stereo audio through MLX. | LTX 2.3 — Core | Experimental |
 | LTX 2.3 Upscaler Loader | Select and preflight a learned LTX 2.3 spatial latent upscaler. | LTX 2.3 — Loaders | Experimental |

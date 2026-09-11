@@ -277,7 +277,13 @@ class WeeToddLTX23GenerationConfig:
         return {
             "required": {
                 "pipeline_mode": (
-                    ["two_stage", "two_stage_hq", "distilled", "one_stage"],
+                    [
+                        "two_stage",
+                        "two_stage_hq",
+                        "distilled",
+                        "one_stage",
+                        "distilled_single_stage",
+                    ],
                     {"default": "two_stage"},
                 ),
                 "width": ("INT", {"default": 704, "min": 64, "max": 1920, "step": 32}),
@@ -302,7 +308,12 @@ class WeeToddLTX23GenerationConfig:
                 ),
                 "stage2_steps": (
                     "INT",
-                    {"default": 0, "min": 0, "max": 20, "tooltip": "Zero selects 3 steps."},
+                    {
+                        "default": 0,
+                        "min": 0,
+                        "max": 20,
+                        "tooltip": "Zero selects 3 steps; single-pass distilled has no refinement.",
+                    },
                 ),
                 "cfg_scale": ("FLOAT", {"default": 3.0, "min": 0.0, "max": 20.0, "step": 0.1}),
                 "stg_scale": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 20.0, "step": 0.1}),
@@ -319,7 +330,17 @@ class WeeToddLTX23GenerationConfig:
                             "qualified legacy topology for other controls."
                         ),
                     },
-                )
+                ),
+                "shift": (
+                    "FLOAT",
+                    {
+                        "default": 5.0,
+                        "min": 1.0,
+                        "max": 20.0,
+                        "step": 0.1,
+                        "tooltip": "Single-pass distilled only; leave 5 for other modes.",
+                    },
+                ),
             },
         }
 
@@ -343,8 +364,16 @@ class WeeToddLTX23GenerationConfig:
         low_memory,
         low_ram_streaming,
         ic_lora_topology="auto",
+        shift=5.0,
     ):
-        recommended = {"two_stage": 30, "two_stage_hq": 15, "distilled": 8, "one_stage": 30}
+        single = pipeline_mode == "distilled_single_stage"
+        recommended = {
+            "two_stage": 30,
+            "two_stage_hq": 15,
+            "distilled": 8,
+            "one_stage": 30,
+            "distilled_single_stage": 8,
+        }
         resolved_seed = secrets.randbelow(0x80000000) if seed < 0 else seed
         config = LTX23GenerationConfig(
             pipeline_mode=pipeline_mode,
@@ -354,9 +383,10 @@ class WeeToddLTX23GenerationConfig:
             frame_rate=frame_rate,
             seed=resolved_seed,
             stage1_steps=stage1_steps or recommended[pipeline_mode],
-            stage2_steps=stage2_steps or 3,
-            cfg_scale=cfg_scale,
-            stg_scale=stg_scale,
+            stage2_steps=0 if single else stage2_steps or 3,
+            cfg_scale=1 if single else cfg_scale,
+            stg_scale=0 if single else stg_scale,
+            shift=shift,
             low_memory=low_memory,
             low_ram_streaming=low_ram_streaming,
             ic_lora_topology=ic_lora_topology,
@@ -514,7 +544,7 @@ class WeeToddLTX23Generate:
                         + (
                             config.stage2_steps
                             if extension is None
-                            and config.pipeline_mode != "one_stage"
+                            and config.pipeline_mode not in {"one_stage", "distilled_single_stage"}
                             and resolve_ic_topology(
                                 model, config, "control" if control is not None else None
                             )

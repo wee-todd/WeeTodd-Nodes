@@ -173,3 +173,29 @@ Output directories must be new. FFmpeg must be available to the renderer (or sup
 recipe’s `ffmpeg` field). In Studio, **Import model recipes…** accepts the edited file. Clip
 geometry, duration, seed and prompt override the corresponding recipe values. Final media preflight
 is authoritative; importing a recipe does not qualify every future clip’s settings.
+
+## LTX 2.3 single-pass distilled 1.1
+
+Use the [single-pass example](ltx23_single_pass_distilled_t2v.json), replacing both component
+paths and the prompt. It uses the existing MLX distilled 1.1 bundle directly. Keep its config,
+split/quantization metadata, connector, video VAEs, audio VAE and vocoder together. Gemma is a
+separate local encoder directory. This route requires no spatial upscaler or Dev-named copy.
+
+Guided setup creates the same contract without editing JSON:
+
+```bash
+python scripts/setup_models.py create ltx23-text-single-pass \
+  --component model_dir=/path/to/ltx-2.3-mlx-q8 \
+  --component gemma_model=/path/to/gemma-3-12b-it-qat-8bit \
+  --profiles-directory /path/to/recipes --memory-mode lower_memory
+python scripts/render_headless.py --recipe /path/to/recipes/created-recipe.json \
+  --output-directory /path/to/new-preflight-directory --preflight-only
+python scripts/render_headless.py --recipe /path/to/recipes/created-recipe.json \
+  --output-directory /path/to/new-render-directory
+```
+
+Each invocation requires a new output directory, including preflight. No model download is
+implicit. Setup starts at eight evaluations, Shift 5, CFG 1/STG 0 and zero refinement steps.
+`config.stage1_steps` and `config.shift` can be changed; the eight-step/Shift-5 combination is the
+matched tested configuration. The recipe is T2V with generated audio only. Studio clip exports
+retain these fields and use this same renderer. Physical 36 GB qualification remains open.

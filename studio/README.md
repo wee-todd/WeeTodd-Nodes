@@ -43,6 +43,20 @@ Runtime settings, autosave, global assets, recipes, previews and jobs live under
 `~/Library/Application Support/WeeTodd Studio`. User media and model weights stay in their existing
 locations. `WEETODD_STUDIO_DATA` selects a separate data directory for isolated development tests.
 
+## LTX 2.3 single-pass text-to-video
+
+In Model setup, select **LTX 2.3 · Text to video · Single-pass distilled 1.1**. Import the existing
+MLX distilled 1.1 bundle and a local Gemma 3 12B encoder, create the recipe, then choose **Use Recipe
+for Selected Clip** on an LTX 2.3 T2V clip. The recipe uses eight evaluations, Shift 5 and staged
+unloading with streamed weights. The inspector exposes editable Steps and Shift, fixed CFG 1,
+and no refinement pass. Existing two-stage recipes keep their behavior.
+
+This route creates synchronized video and audio directly at the clip dimensions. It currently
+supports T2V; use the existing recipes for image, reference, audio conditioning and extension.
+Exported clips and movie jobs preserve the same mode and settings. No model copies are needed.
+See the [single-pass documentation](../README.md#ltx-23-single-pass-distilled-11) for model layout,
+ComfyUI usage and measured validation. Physical 36 GB qualification remains open.
+
 ## Reuse local Draw Things H3 models
 
 In **Studio Settings → Model setup**, select **MiniMax H3 · Draw Things models · Text to video**.

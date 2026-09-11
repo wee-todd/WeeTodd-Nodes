@@ -116,6 +116,8 @@ def validate_stack(specs, model_dir, mode, *, low_ram_streaming=False):
     stem = "transformer-distilled" if mode == "distilled" else "transformer-dev"
     # Match the active upstream selection: distilled prefers a versioned file;
     # dev enters through its exact path (the split reader expands numbered shards).
+    if mode == "distilled_single_stage":
+        stem = "transformer-distilled-1.1"
     versioned = sorted(root.glob(stem + "-*.safetensors")) if mode == "distilled" else []
     selected = versioned[-1] if versioned else root / (stem + ".safetensors")
     files = (

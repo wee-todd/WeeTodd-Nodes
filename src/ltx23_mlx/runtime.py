@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gc
 import inspect
+import math
 import tempfile
 import time
 from contextlib import contextmanager
@@ -29,6 +30,7 @@ LTX23_CONFIG_MODES = (
     "two_stage_hq",
     "distilled",
     "one_stage",
+    "distilled_single_stage",
 )
 
 LTX23_IC_TOPOLOGIES = (
@@ -60,6 +62,8 @@ def _required_files(mode: str) -> tuple[str, ...]:
             "spatial_upscaler_x2_v1_1_config.json",
             "spatial_upscaler_x2_v1_1",
         )
+    if mode == "distilled_single_stage":
+        return (*common, "transformer-distilled-1.1")
     if mode == "distilled":
         return (
             *common,
@@ -159,6 +163,7 @@ class LTX23GenerationConfig:
     low_memory: bool = True
     low_ram_streaming: bool = False
     ic_lora_topology: str = "auto"
+    shift: float = 5.0
 
     @property
     def num_frames(self) -> int:
@@ -172,7 +177,7 @@ class LTX23GenerationConfig:
     def validate(self) -> None:
         if self.pipeline_mode not in LTX23_CONFIG_MODES:
             raise ValueError(f"Unsupported LTX 2.3 pipeline mode: {self.pipeline_mode!r}.")
-        modulus = 32 if self.pipeline_mode == "one_stage" else 64
+        modulus = 32 if self.pipeline_mode in {"one_stage", "distilled_single_stage"} else 64
         if self.width < modulus or self.height < modulus:
             raise ValueError(f"LTX 2.3 dimensions must be at least {modulus} pixels.")
         if self.width % modulus or self.height % modulus:
@@ -185,14 +190,23 @@ class LTX23GenerationConfig:
             raise ValueError("LTX 2.3 duration must be between 0.25 and 30 seconds.")
         if not 1.0 <= self.frame_rate <= 60.0:
             raise ValueError("LTX 2.3 frame rate must be between 1 and 60 fps.")
-        if self.stage1_steps < 1 or self.stage2_steps < 1:
+        if self.pipeline_mode == "distilled_single_stage":
+            if self.cfg_scale != 1 or self.stg_scale != 0 or self.stage2_steps != 0:
+                raise ValueError("Single-pass distilled requires CFG 1, STG 0, and no refinement")
+            if type(self.stage1_steps) is not int or not 1 <= self.stage1_steps <= 100:
+                raise ValueError("Single-pass distilled steps must be an integer in [1, 100]")
+        if not math.isfinite(self.shift) or not 1 <= self.shift <= 20:
+            raise ValueError("LTX 2.3 Shift must be finite and between 1 and 20")
+        if self.pipeline_mode != "distilled_single_stage" and self.shift != 5:
+            raise ValueError("Shift is only supported for single-pass distilled")
+        if self.stage1_steps < 1 or (
+            self.stage2_steps < 1 and self.pipeline_mode != "distilled_single_stage"
+        ):
             raise ValueError("LTX 2.3 stage step counts must be positive.")
         if self.cfg_scale < 0 or self.stg_scale < 0:
             raise ValueError("LTX 2.3 guidance scales must be zero or positive.")
         if self.ic_lora_topology not in LTX23_IC_TOPOLOGIES:
-            raise ValueError(
-                f"Unsupported LTX 2.3 IC-LoRA topology: {self.ic_lora_topology!r}."
-            )
+            raise ValueError(f"Unsupported LTX 2.3 IC-LoRA topology: {self.ic_lora_topology!r}.")
         if (self.num_frames - 1) % 8:
             raise AssertionError("LTX 2.3 frame normalization failed to produce 8n+1 frames.")
 
@@ -232,6 +246,10 @@ def _pipeline_class(mode: str):
         "control": "ICLoraPipeline",
         "extension": "RetakePipeline",
     }
+    if mode == "distilled_single_stage":
+        from .single_stage import LTX23SingleStageDistilledPipeline
+
+        return LTX23SingleStageDistilledPipeline
     if mode == "extension_distilled":
         from .distilled_extension import LTX23DistilledExtendPipeline
 
@@ -329,10 +347,11 @@ class LTX23RuntimeCache:
     def get(self, spec: LTX23ModelSpec, config: LTX23GenerationConfig, *, conditioning_task=None):
         config.validate()
         validate_ic_stack(spec, config)
+        if config.pipeline_mode == "distilled_single_stage" and conditioning_task:
+            raise ValueError("Single-pass distilled currently supports text-to-video only")
         ic_topology = resolve_ic_topology(spec, config, conditioning_task)
         if conditioning_task == "extension" and (
-            config.pipeline_mode not in {"one_stage", "distilled"}
-            or spec.ic_loras
+            config.pipeline_mode not in {"one_stage", "distilled"} or spec.ic_loras
         ):
             raise ValueError(
                 "LTX 2.3 extension requires Dev one_stage or distilled without IC-LoRAs"
@@ -389,9 +408,7 @@ class LTX23RuntimeCache:
                         "low_memory": config.low_memory,
                         **task_options,
                     }
-                    if "low_ram_streaming" in inspect.signature(
-                        pipeline_class.__init__
-                    ).parameters:
+                    if "low_ram_streaming" in inspect.signature(pipeline_class.__init__).parameters:
                         constructor_options["low_ram_streaming"] = config.low_ram_streaming
                     self._pipeline = pipeline_class(**constructor_options)
                     if spec.loras:
@@ -458,6 +475,10 @@ class LTX23RuntimeCache:
             if image_inputs
             else None
         )
+        if config.pipeline_mode == "distilled_single_stage" and (
+            conditioning_task or image_path is not None or spec.ic_loras
+        ):
+            raise ValueError("Single-pass distilled currently supports text-to-video only")
         ic_topology = resolve_ic_topology(spec, config, conditioning_task)
         if spec.ic_loras or control_inputs is not None:
             if image_path is not None or image_inputs or audio_path is not None:
@@ -586,7 +607,9 @@ class LTX23RuntimeCache:
             "seed": config.seed,
             "image": image_path,
         }
-        if config.pipeline_mode == "one_stage":
+        if config.pipeline_mode == "distilled_single_stage":
+            kwargs.update(num_steps=config.stage1_steps, shift=config.shift)
+        elif config.pipeline_mode == "one_stage":
             kwargs.update(
                 num_steps=config.stage1_steps,
                 cfg_scale=config.cfg_scale,
@@ -646,12 +669,12 @@ class LTX23RuntimeCache:
         expected_steps = config.stage1_steps
         if (
             conditioning_task != "extension"
-            and config.pipeline_mode != "one_stage"
+            and config.pipeline_mode not in {"one_stage", "distilled_single_stage"}
             and ic_topology
             in {
-            "two_stage_dev",
-            "two_stage_clean",
-            "control_refine",
+                "two_stage_dev",
+                "two_stage_clean",
+                "control_refine",
             }
         ):
             expected_steps += config.stage2_steps
@@ -696,8 +719,23 @@ class LTX23RuntimeCache:
                 "num_frames": config.num_frames,
                 "delivered_duration_seconds": config.delivered_duration_seconds,
                 "pipeline_mode": config.pipeline_mode,
+                "sampling": (
+                    {
+                        "schedule": "linear_trailing",
+                        "shift": config.shift,
+                        "evaluations": config.stage1_steps,
+                        "audio_cfg": 1,
+                        "video_cfg": 1,
+                        "transformer": "transformer-distilled-1.1",
+                    }
+                    if config.pipeline_mode == "distilled_single_stage"
+                    else None
+                ),
                 "ic_lora_topology_effective": (
-                    "none" if extension_input is not None else ic_topology
+                    "none"
+                    if extension_input is not None
+                    or config.pipeline_mode == "distilled_single_stage"
+                    else ic_topology
                 ),
                 "conditioning_task": conditioning_task,
                 "audio_policy": (

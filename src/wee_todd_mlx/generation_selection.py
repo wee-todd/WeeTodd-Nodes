@@ -137,7 +137,11 @@ def generation_descriptor(recipe):
     refinement = None
     if not h3:
         steps = config.get("stage1_steps", 8 if engine == "ltx25" else 30)
-        refinement = config.get("stage2_steps", 3) if mode != "one_stage" else None
+        refinement = (
+            config.get("stage2_steps", 3)
+            if mode not in {"one_stage", "distilled_single_stage"}
+            else None
+        )
         if engine == "ltx25" and config.get("stage1_sampler") == "euler_ancestral_cfg_pp":
             from ltx25_mlx.runtime import LTX25_CFG_PP_SCHEDULES
 
@@ -153,7 +157,8 @@ def generation_descriptor(recipe):
             topology == "auto" and ic and ic[0].get("family") == "motion_track"
         ):
             refinement = None
-    cfg_editable = not h3 and mode != "distilled" and not ic
+    single = engine == "ltx23" and mode == "distilled_single_stage"
+    cfg_editable = not h3 and mode not in {"distilled", "distilled_single_stage"} and not ic
     controls = {
         "evaluations": steps,
         "refinementSteps": refinement,
@@ -162,16 +167,18 @@ def generation_descriptor(recipe):
         else config.get("video_cfg_scale", 1.0)
         if engine == "ltx25"
         else config.get("cfg_scale", 3.0),
-        "shift": None,
+        "shift": config.get("shift", 5) if single else None,
         "stepsEditable": ordinary or (engine == "ltx23" and mode != "distilled" and not ic),
         "refinementStepsEditable": engine == "ltx23"
         and refinement is not None
         and mode != "distilled"
         and not ic,
         "cfgEditable": cfg_editable,
-        "shiftEditable": False,
+        "shiftEditable": single,
         "stepsExplanation": "Actual Euler evaluations; the recipe stores one extra schedule point."
         if ordinary
+        else "Actual full-resolution evaluations; the tested setting is 8."
+        if single
         else "Stage-one schedule steps. Fixed schedules cannot be overridden."
         if not h3
         else "Fixed checkpoint schedule; preserve its declared evaluation count."
@@ -184,7 +191,9 @@ def generation_descriptor(recipe):
         else "Distilled guidance is fixed."
         if not cfg_editable
         else "Guidance scale for the selected native pipeline.",
-        "shiftExplanation": "This native adapter does not expose a Shift override.",
+        "shiftExplanation": "Linear trailing schedule Shift; the tested setting is 5."
+        if single
+        else "This native adapter does not expose a Shift override.",
     }
     return {
         "supportedTasks": supported_tasks(recipe),
@@ -393,6 +402,7 @@ def resolve_generation_selection(selection, clip, profiles, capabilities):
             "steps": "steps" if clip["engine"] == "h3" else "stage1_steps",
             "refinementSteps": "stage2_steps",
             "cfg": "video_cfg_scale" if clip["engine"] == "ltx25" else "cfg_scale",
+            "shift": "shift",
         }[key]
         config[target] = value + 1 if key == "steps" and clip["engine"] == "h3" else value
     policy = selection.get("memoryPolicy", "paged" if preset == "lowMemory" else "recipe")

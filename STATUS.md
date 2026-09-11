@@ -13,7 +13,26 @@ strength 0.3 measured 110.09 versus 107.72 seconds with the same movie hash; tha
 difference is not a repeat-qualified speed claim. This does not justify changing LTX
 acceleration defaults or porting the candidate to LTX 2.3. Tests used an M3 Ultra with 256 GiB,
 fresh renderer processes, and unpurged OS caches; they do not qualify a physical 36 GB machine.
-Native DT cold/warm comparison remains pending an unlocked desktop and matched LTX 2.3 weights.
+Matched LTX 2.3 comparison is now complete: distilled 1.1 Q8, Q8 QAT Gemma, 768×448,
+121 frames, 25 fps, eight evaluations, CFG 1/STG 0 and linear trailing Shift 5. Native DT
+measured 103.0 s from a fresh process and 87.0 s warm, with its canvas cleared before each run.
+WeeTodd's staged/streamed research route measured 90.2/90.3 s; a resident variant measured
+89.3/87.7 s but raised process physical-footprint high-water from 21.3 to 128.8 GiB. It is not
+promoted as the default. DT peaked at 31.6 GiB on that physical-footprint counter. These are
+single pairs with OS caches intact; DT and MLX quantization/RNG differ, so equal seeds do not
+establish cross-engine pixel or quality parity.
+
+The validated route is now available as an explicit LTX 2.3 single-pass distilled 1.1 T2V
+preset in Studio, headless setup and ComfyUI Generation Config. It selects the actual versioned
+checkpoint, requires no Dev alias or upscaler, keeps staged/streamed memory defaults, and exposes
+Steps and Shift with fixed audio/video guidance. Existing two-stage and conditioning routes
+remain unchanged. The normal headless client completed the matched case in 91.1 s with the
+exact same complete MP4 hash as the research route, eight progress callbacks and no retained
+runtime. Process peak RSS was 19.0 GiB and MLX allocator peak was 30.1 GiB (different counters
+from physical footprint). Tests cover checkpoint selection, task rejection, controls, generic
+LoRA target validation, real sampler evaluation counts and staged cleanup on success/failure/
+cancellation. Selected Python tests (658), Swift tests (60), packaging and workflow checks pass.
+Full-size saved ComfyUI execution and physical 36 GB qualification remain open.
 
 The same validation found and fixed a headless LTX 2.5 LoRA result-serialization error:
 inspection paths are now JSON strings, so valid adapter preflight/generation can save `result.json`.

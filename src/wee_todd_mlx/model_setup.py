@@ -83,6 +83,28 @@ def setup_catalog() -> list[dict]:
                     components=components,
                 )
             )
+    result.append(
+        dict(
+            id="ltx23-text-single-pass",
+            name="LTX 2.3 · Text to video · Single-pass distilled 1.1",
+            engine="ltx23",
+            task="t2v",
+            pipeline_mode="distilled_single_stage",
+            description="Full-resolution text-to-video with generated audio. Eight evaluations, "
+            "Shift 5, fixed guidance and staged unloading with streamed weights. "
+            "Uses the distilled 1.1 transformer; no spatial upscaler required. "
+            "Steps and Shift are editable; other values change the tested recipe.",
+            components=[
+                dict(
+                    key=k,
+                    label=("LTX 2.3 MLX distilled 1.1 bundle" if k == "model_dir" else n),
+                    kind=t,
+                    accepts=[t],
+                )
+                for k, n, t in groups["ltx23"]
+            ],
+        )
+    )
     for suffix, task, label, key, guidance in (
         (
             "control",
@@ -315,7 +337,13 @@ def _validate_candidate(preset, key, path):
         task = {"t2v": "t2va", "fflf": "fl2va", "ref2va": "ref2va"}[preset["task"]]
         _h3_candidate(key, path, task)
     elif preset["engine"] == "ltx23":
-        _ltx23_candidate(key, path, mode="two_stage" if preset["task"] == "fflf" else "distilled")
+        _ltx23_candidate(
+            key,
+            path,
+            mode=preset.get(
+                "pipeline_mode", "two_stage" if preset["task"] == "fflf" else "distilled"
+            ),
+        )
     else:
         _ltx25_candidate(key, path)
 
@@ -365,7 +393,7 @@ def _ltx23_candidate(key, path, *, mode="distilled"):
             raise ValueError(f"LTX 2.3 bundle is missing {name}")
         for weight in weights:
             header = inspect_safetensors_header(weight, include_tensors=True)
-            if name in {"transformer-distilled", "transformer-dev"}:
+            if name in {"transformer-distilled", "transformer-dev", "transformer-distilled-1.1"}:
                 metadata = _decoded_metadata(header)
                 version = str(metadata.get("model_version", ""))
                 if not version and (path / "split_model.json").is_file():
@@ -373,7 +401,7 @@ def _ltx23_candidate(key, path, *, mode="distilled"):
                     config = _json(path / "config.json")
                     if (
                         manifest.get("format") == "split"
-                        and name.removeprefix("transformer-")
+                        and name.removeprefix("transformer-").removesuffix("-1.1")
                         in manifest.get("transformer_variants", [])
                         and config.get("model_type") == "AudioVideo"
                         and config.get("in_channels") == 128
@@ -514,15 +542,19 @@ def ltx25_recipe_control_families(recipe_path) -> set[str]:
     }
 
 
-def _ltx_recipe_config(engine, components, memory_mode, task):
+def _ltx_recipe_config(engine, components, memory_mode, task, pipeline_mode=None):
     if engine == "ltx23":
         from ltx23_mlx.runtime import LTX23GenerationConfig, LTX23ModelSpec
 
+        single = pipeline_mode == "distilled_single_stage"
         config = LTX23GenerationConfig(
-            pipeline_mode="two_stage" if task == "fflf" else "distilled",
+            pipeline_mode=pipeline_mode or ("two_stage" if task == "fflf" else "distilled"),
+            stage2_steps=0 if single else 3,
+            cfg_scale=1 if single else 3,
+            stg_scale=0 if single else 1,
             stage1_steps=30 if task == "fflf" else 8,
             low_memory=True,
-            low_ram_streaming=memory_mode == "lower_memory",
+            low_ram_streaming=single or memory_mode == "lower_memory",
         )
         config.validate()
         spec = LTX23ModelSpec(**components)
@@ -686,7 +718,9 @@ def _recipe(preset, components, memory_mode, memory_gb):
         ).to_dict()
         warnings.extend(report["warnings"])
     else:
-        fields, report = _ltx_recipe_config(engine, components, memory_mode, preset["task"])
+        fields, report = _ltx_recipe_config(
+            engine, components, memory_mode, preset["task"], preset.get("pipeline_mode")
+        )
         warnings.append(
             "LTX memory depends on live activation and cache sizes; no measured peak "
             "or memory-fit guarantee is available during setup."

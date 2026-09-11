@@ -179,7 +179,8 @@ NOTE_OVERRIDES = {
     ),
     "WeeToddH3Unload": "Release state held by the monolithic H3 runtime.",
     "WeeToddLTX23GenerationConfig": (
-        "Configure LTX 2.3 mode, canvas, duration, steps, guidance, and memory policy."
+        "Configure LTX 2.3 mode, canvas, duration, steps, guidance, and memory policy. "
+        "Single-pass distilled 1.1 T2V adds editable steps/Shift with fixed CFG 1 and STG 0."
     ),
     "WeeToddLTX23Preflight": (
         "Validate the selected LTX 2.3 bundle and mode-specific components before allocation."

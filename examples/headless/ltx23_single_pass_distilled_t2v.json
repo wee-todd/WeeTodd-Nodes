@@ -1,0 +1,32 @@
+{
+  "format": "weetodd-headless-v2",
+  "engine": "ltx23",
+  "candidate": "ltx23-text-single-pass",
+  "components": {
+    "model_dir": "/REPLACE/WITH/YOUR/MODELS/ltx-2.3-mlx-q8",
+    "gemma_model": "/REPLACE/WITH/YOUR/MODELS/gemma-3-12b-it-qat-8bit"
+  },
+  "config": {
+    "pipeline_mode": "distilled_single_stage",
+    "width": 768,
+    "height": 448,
+    "duration_seconds": 4.8,
+    "frame_rate": 25,
+    "seed": 584293325,
+    "stage1_steps": 8,
+    "stage2_steps": 0,
+    "cfg_scale": 1,
+    "stg_scale": 0,
+    "low_memory": true,
+    "low_ram_streaming": true,
+    "ic_lora_topology": "auto",
+    "shift": 5.0
+  },
+  "prompt": "Describe your scene, its motion, camera and sound here.",
+  "conditioning": {
+    "version": 1,
+    "task": "t2v",
+    "inputs": [],
+    "audio_policy": "generated"
+  }
+}

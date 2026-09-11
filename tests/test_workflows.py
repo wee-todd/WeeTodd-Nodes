@@ -274,6 +274,7 @@ def test_ltx23_standalone_ui_workflow_links_are_consistent():
             True,
             False,
             "auto",
+            5.0,
         ]
     for link_id, origin_id, origin_slot, target_id, target_slot, link_type in workflow["links"]:
         assert link_id in nodes[origin_id]["outputs"][origin_slot]["links"]
