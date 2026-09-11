@@ -35,7 +35,8 @@ palette8, ezm7 and F16 storage without writing converted weights. Guided setup c
 references for H3 T2V; the shared headless/composable-node path reuses the existing sampler and
 staged lifecycle. Qwen language layers load sequentially with bounded embedding-row reads. Video
 and audio decoders load from the original combined DT VAE. Image/reference/audio-input modes,
-other DT model families, optional accelerators and 36 GB hardware are not qualified. The complete
+other DT model families, accelerators other than verified MPP projections and 36 GB hardware are
+not qualified. The complete
 DT-weight headless render completed at 512×512/124 frames/19 Euler evaluations in 924.5 seconds
 with an 18.07 GiB process-footprint peak and 8.3 ms A/V duration drift. All weighted runtimes
 unloaded. Sampled frames were coherent; broad quality and a saved ComfyUI DT-file render remain
@@ -49,6 +50,22 @@ remain read-only, one block stays active, and all runtimes unloaded. All 534 map
 and the exhaustive finite-half-scale/int8 rounding check matched the CPU decoder. Block preparation
 fell from 320.7 to 134.4 seconds; direct packed-int8 projections and physical 36 GB qualification
 remain open. Existing DT-file recipes use this preparation path automatically.
+
+Verified Automatic MPP projections subsequently reduced the same render to 651.4 seconds
+(10:51), with byte-identical video/audio and unchanged 16.35 GiB process footprint. All four
+projection signatures passed the runtime gate. New normal-memory DT recipes select Automatic;
+existing clips retain their settings and can opt in through the Projection control.
+
+The next memory pass retains original F16 video decoder weights with FP32 activations, omits
+the unused encoder, and evaluates each decoder block before building the next graph. DT transformer
+reads use bounded read-only mappings with ordinary-read fallback; no mapped weight cache is kept.
+These paths share the same Studio, headless and composable-node renderer. The matched complete
+512×512/124-frame/19-evaluation M3 Ultra (256 GiB) render peaks at **9.48 GiB process footprint**
+(42.0% below 16.35 GiB) and **6.58 GiB MLX allocation** (previously 12.53 GiB), with a byte-identical
+video/audio MP4 and all weighted runtimes unloaded. Total time is effectively unchanged at
+649.7 versus 651.4 seconds. Both runs used fresh renderer processes and fresh prompt caches;
+OS file caches were not purged. Block preparation fell from 131.9 to 109.4 seconds, but compute
+time increased in this desktop run. Do not claim an overall speed improvement from this pass.
 
 ## Shared renderer and ComfyUI
 

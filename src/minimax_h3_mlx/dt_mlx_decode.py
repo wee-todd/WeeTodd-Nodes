@@ -7,8 +7,10 @@ MLX is imported only when a weighted tensor is requested.
 
 from __future__ import annotations
 
+import mmap
 import struct
 import time
+from contextlib import contextmanager, nullcontext
 from functools import lru_cache
 
 import numpy as np
@@ -58,6 +60,47 @@ class DTMLXTensorStore(DTTensorStore):
         super().__init__(*args, **kwargs)
         self.gpu_decoded_tensors = 0
         self.gpu_decode_seconds = 0.0
+        self.mapped_payload_reads = 0
+        self.mapped_payload_bytes = 0
+        self.mapped_payload_fallbacks = 0
+
+    @contextmanager
+    def _payload_window(self, offset, length):
+        """Expose one bounded read-only window until its owned array has materialized.
+
+        The context closes the mapping even when an exception retains its traceback.
+        Neither model arrays nor the store retain a view into the original file.
+        Mapping faults occur during array copying and are included in decode time.
+        """
+        self._check()
+        if length > self.max_tensor_bytes:
+            raise ValueError("DT tensor read allocation limit exceeded.")
+        size = self._payload_identity[2] if self._payload_identity else 0
+        if offset < 0 or length < 0 or offset > size or length > size - offset:
+            raise ValueError("DT tensor span extends outside the model file.")
+        if not length:
+            yield b""
+            return
+        start = time.perf_counter()
+        base = offset // mmap.ALLOCATIONGRANULARITY * mmap.ALLOCATIONGRANULARITY
+        try:
+            region = mmap.mmap(
+                self._payload_fd, length + offset - base, access=mmap.ACCESS_READ, offset=base
+            )
+        except (OSError, ValueError):
+            self.mapped_payload_fallbacks += 1
+            yield super()._pread(offset, length)
+            return
+        view = memoryview(region)[offset - base :]
+        self.read_seconds += time.perf_counter() - start
+        self.payload_bytes_read += length
+        self.mapped_payload_reads += 1
+        self.mapped_payload_bytes += length
+        try:
+            yield view
+        finally:
+            view.release()
+            region.close()
 
     def read(self, name):
         record = self._record(name)
@@ -73,14 +116,21 @@ class DTMLXTensorStore(DTTensorStore):
         block = None
         if record.codec & _EXTERNAL:
             offset, length, block = self._span(record, blob)
-            blob = self._pread(offset, length)
+            payload = self._payload_window(offset, length)
         else:
             self.payload_bytes_read += len(blob)
             if codec == _Q8P:
                 block = struct.unpack_from("<I", blob)[0]
                 blob = blob[4:]
+            payload = nullcontext(blob)
+        with payload as blob:
+            return self._decode_packed(record, blob, block)
+
+    def _decode_packed(self, record, blob, block):
         import mlx.core as mx
 
+        n = record.elements
+        codec = record.codec & ~_EXTERNAL
         started = time.perf_counter()
         if codec == _I8X:
             cols = record.shape[-1]
@@ -123,4 +173,7 @@ class DTMLXTensorStore(DTTensorStore):
             "weight_decode_backend": "mlx",
             "gpu_decoded_tensors": self.gpu_decoded_tensors,
             "gpu_decode_seconds": self.gpu_decode_seconds,
+            "mapped_payload_reads": self.mapped_payload_reads,
+            "mapped_payload_bytes": self.mapped_payload_bytes,
+            "mapped_payload_fallbacks": self.mapped_payload_fallbacks,
         }

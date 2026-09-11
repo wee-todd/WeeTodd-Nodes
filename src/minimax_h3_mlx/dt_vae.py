@@ -12,7 +12,7 @@ from .dt_source import dt_source
 from .dt_tensor_store import DTTensorStore
 
 
-def _assign(model, values):
+def _assign(model, values, *, storage_dtype=None):
     import mlx.core as mx
     from mlx.utils import tree_flatten, tree_unflatten
 
@@ -24,7 +24,7 @@ def _assign(model, values):
                 f"DT VAE tensor mapping mismatch at {key}: {value.shape}, "
                 f"expected {expected.get(key)}"
             )
-        array = mx.array(value).astype(mx.float32)
+        array = mx.array(value).astype(storage_dtype or mx.float32)
         mx.eval(array)
         model.update(tree_unflatten([(key, array)]))
         seen.add(key)
@@ -34,7 +34,7 @@ def _assign(model, values):
     return model
 
 
-def video_values(store):
+def video_values(store, *, decode_only=False):
     def read(role, index=0, parameter=0, decoder=True):
         section = "video_decoder" if decoder else "video_encoder"
         return store.read(f"__{section}__[t-{role}-{index}-{parameter}]")
@@ -69,6 +69,9 @@ def video_values(store):
             )
             yield prefix + "ff.w2." + suffix, read("ff_down", i, param)
 
+    if decode_only:
+        return
+
     def encoder_pair(source, target, index=0):
         for param, suffix in ((0, "weight"), (1, "bias")):
             a = read(source, index, param, decoder=False)
@@ -95,14 +98,41 @@ def video_values(store):
 
 
 def load_dt_video_vae(directory):
+    import mlx.core as mx
+    import mlx.nn as nn
+
     from .video_vae import VideoVAE, VideoVAEConfig
+
+    class DecodeOnlyVideoVAE(VideoVAE):
+        def encode(self, *_):
+            raise ValueError("DT direct video encoder is not yet qualified; use text-to-video.")
+
+    class BoundedBlock(nn.Module):
+        def __init__(self, block):
+            super().__init__()
+            self.block = block
+
+        def __call__(self, x, rotary):
+            # Source weights remain lossless F16; FP32 inputs retain FP32 arithmetic.
+            # Finish this block before building the next graph so promoted weights and
+            # activation intermediates do not accumulate across the decoder stack.
+            result = self.block(x, rotary)
+            mx.eval(result)
+            return result
 
     wrapper = json.loads((Path(directory) / "config.json").read_text())
     config = VideoVAEConfig(
         latents_mean=tuple(wrapper["latents_mean"]), latents_std=tuple(wrapper["latents_std"])
     )
+    model = DecodeOnlyVideoVAE(config)
+    del model.encoder
+    del model.quant_conv
     with DTTensorStore(dt_source(directory, "video_vae")) as store:
-        return _assign(VideoVAE(config), video_values(store))
+        _assign(model, video_values(store, decode_only=True), storage_dtype=mx.float16)
+    model.decoder.transformer_blocks = [
+        BoundedBlock(block) for block in model.decoder.transformer_blocks
+    ]
+    return model
 
 
 def load_dt_audio_vae(directory):

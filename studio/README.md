@@ -89,6 +89,18 @@ The matched normal-memory M3 Ultra run with Automatic projections completed in *
 remained **16.35 GiB** and MLX peaks were unchanged. This qualifies the measured configuration,
 not lower-memory settings or other hardware.
 
+Existing DT recipes also receive bounded read-only transformer payload mapping and compact video
+decoder storage automatically. The video decoder keeps the original F16 weights, uses FP32
+activations, and completes one block at a time to bound temporary memory. It does not load the
+unused encoder. No new model download, conversion, permanent weight cache or settings change is
+required. Other native model loaders and DT server/cloud clips use their existing paths.
+
+The matched 512×512/124-frame/19-evaluation M3 Ultra (256 GiB) render now peaks at **9.48 GiB
+process footprint**, down from 16.35 GiB, with a byte-identical video/audio MP4. Total time was
+**10:50 versus 10:51**, effectively unchanged; this pass improves memory rather than overall
+speed. Peak MLX allocation fell from 12.53 to 6.58 GiB. These measurements use fresh renderer
+processes and fresh prompt caches, without clearing OS file caches, and do not qualify 36 GB Macs.
+
 The same setup is available from the CLI, without writing a recipe by hand:
 
 ```bash

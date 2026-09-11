@@ -91,8 +91,27 @@ def describe_dt_reference(directory, component):
         for record in records:
             if record.codec & 0x10000000:
                 store._span(record, store._inline(record))
+        if component == "video_vae":
+            # Validate the original combined VAE inventory, but decoding loads only F16
+            # decoder weights. Include a conservatively sized FP32 promotion buffer.
+            decoder = {
+                n: store.records[n]
+                for n in expected_inventory(component)
+                if n.startswith("__video_decoder__")
+            }
+            blocks = {}
+            for name, record in decoder.items():
+                index = name.rsplit("-", 2)[1]
+                blocks[index] = blocks.get(index, 0) + record.elements * 2
+            total = sum(record.elements * 2 for record in decoder.values())
+            return {
+                "source": source,
+                "tensor_count": len(decoder),
+                "tensor_bytes": total,
+                "window_bytes": total + 2 * max(blocks.values()),
+            }
         total = sum(r.elements * 2 for r in records)
-        # One language layer plus bounded embedding lookups; VAEs execute in FP32.
+        # One language layer plus bounded embedding lookups; audio VAE storage is FP32.
         window = 1100000000 if component == "text_encoder" else total * 2
         return {
             "source": source,

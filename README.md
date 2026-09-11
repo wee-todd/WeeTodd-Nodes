@@ -308,6 +308,24 @@ kernels, and layout transforms stay on the GPU. Raw/ezm7 tensors retain the CPU 
 weight preparation, not projection precision or sampler math, and writes no converted weights.
 It does not inherit DT's Swift/Metal sampler speed or numerical results.
 
+DT transformer payloads now use bounded, read-only file mappings while copying into owned arrays,
+with ordinary bounded reads as a fallback. No mapping is retained in the model or used as a weight
+cache. Page-fault time is included in array materialization, so compare total block preparation
+rather than the read/decode sub-counters alone. The video VAE loads only its decoder, retains the
+original F16 weight values, and finishes each block before building the next. FP32 activations and
+decoder arithmetic remain unchanged; temporary weight promotions no longer accumulate across
+the stack. This is automatic for existing DT-weight recipes and does not convert or copy weights
+to disk. Video encoding remains outside this T2V-only route.
+
+The matched 512×512/124-frame/19-evaluation M3 Ultra (256 GiB) run with Automatic projections
+then used **9.48 GiB peak process footprint, down from 16.35 GiB (42.0% lower)**. Peak MLX
+allocation fell from **12.53 to 6.58 GiB**. The complete video/audio MP4 remained byte-identical.
+Total time was essentially unchanged: **649.7 versus 651.4 seconds**. Block preparation fell
+from 131.9 to 109.4 seconds, but compute time increased in this single desktop run; this is a
+qualified memory improvement, not evidence of an overall speed improvement. Both runs started
+fresh renderer processes with fresh prompt caches; OS file caches were not purged. Physical
+36 GB hardware and a saved ComfyUI DT-file graph remain unqualified.
+
 The matched DT-weight render at 512×512, 124 frames, 24 fps, stereo 32 kHz audio and 19 Euler
 evaluations fell from **924.5 to 724.5 seconds (21.6% less time)** on an M3 Ultra with 256 GiB RAM.
 The entire MP4 was byte-identical. Process-footprint peak fell from **18.07 to 16.35 GiB**; overall

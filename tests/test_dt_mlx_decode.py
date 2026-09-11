@@ -13,6 +13,86 @@ from minimax_h3_mlx.dt_mlx_decode import DTMLXTensorStore  # noqa: E402
 from minimax_h3_mlx.dt_tensor_store import DTTensorStore  # noqa: E402
 
 
+def test_mapped_payload_is_released_before_returning_owned_gpu_output(tmp_path, monkeypatch):
+    import mmap
+    import weakref
+
+    opened = []
+    real_map = mmap.mmap
+
+    def track(*args, **kwargs):
+        region = real_map(*args, **kwargs)
+        opened.append(weakref.ref(region))
+        return region
+
+    monkeypatch.setattr(mmap, "mmap", track)
+    values = np.arange(8, dtype=np.int8)
+    payload = values.tobytes() + bytes(120) + np.array([0.25], np.float16).tobytes()
+    path = checkpoint(tmp_path, 0x8A1E9B, (1, 8), payload, trailer=True)
+    with DTMLXTensorStore(path) as store:
+        out = store.read("w")
+        assert store.report()["mapped_payload_reads"] == 1
+        assert store.report()["mapped_payload_bytes"] == len(payload)
+        assert opened and all(ref() is None for ref in opened)
+    np.testing.assert_array_equal(np.asarray(out), (values * 0.25).reshape(1, 8))
+
+
+def test_mapping_failure_falls_back_to_bounded_reads(tmp_path, monkeypatch):
+    import mmap
+
+    def unavailable(*args, **kwargs):
+        raise OSError("Mapping unavailable")
+
+    monkeypatch.setattr(mmap, "mmap", unavailable)
+    values = np.arange(8, dtype=np.int8)
+    payload = values.tobytes() + bytes(120) + np.array([0.25], np.float16).tobytes()
+    path = checkpoint(tmp_path, 0x8A1E9B, (1, 8), payload, trailer=True)
+    with DTMLXTensorStore(path) as store:
+        out = store.read("w")
+        assert store.report()["mapped_payload_fallbacks"] == 1
+        assert store.report()["mapped_payload_reads"] == 0
+        np.testing.assert_array_equal(np.asarray(out), (values * 0.25).reshape(1, 8))
+
+
+@pytest.mark.parametrize("cpu_failure", [False, True])
+def test_retained_read_failure_does_not_retain_open_mapping(tmp_path, monkeypatch, cpu_failure):
+    import mmap
+    import weakref
+
+    from minimax_h3_mlx import dt_mlx_decode
+
+    opened = []
+    real_map = mmap.mmap
+
+    def track(*args, **kwargs):
+        region = real_map(*args, **kwargs)
+        opened.append(weakref.ref(region))
+        return region
+
+    def fail_kernel(**kwargs):
+        raise RuntimeError("injected kernel failure")
+
+    monkeypatch.setattr(mmap, "mmap", track)
+    monkeypatch.setattr(dt_mlx_decode, "_int8_kernel", lambda: fail_kernel)
+    if cpu_failure:
+        payload = struct.pack("<I", 0) + bytes(8)
+        codec = 0x511
+    else:
+        payload = bytes(128) + np.array([0.25], np.float16).tobytes()
+        codec = 0x8A1E9B
+    path = checkpoint(tmp_path, codec, (1, 8), payload, trailer=True)
+    errors = []
+    with DTMLXTensorStore(path) as store:
+        try:
+            store.read("w")
+        except (ValueError, RuntimeError) as exc:
+            errors.append(exc)
+    assert errors  # Keep traceback frames alive while checking mapping cleanup.
+    assert all(ref() is None or ref().closed for ref in opened)
+    if cpu_failure:
+        assert not opened
+
+
 @pytest.mark.parametrize("trailer", [False, True])
 @pytest.mark.parametrize("columns", [3, 256])
 def test_int8_gpu_decode_matches_cpu_half_rounding(tmp_path, trailer, columns):
