@@ -1,5 +1,39 @@
 import Foundation
 
+extension Clip {
+  public func drawThingsConditioningIssues(assets: [MediaAsset],
+    fileExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }) -> [String] {
+    let isH3 = drawThings?.modelFamily.lowercased() == "minimaxh3"
+    let first = attachments.filter { $0.role == .first }
+    let last = attachments.filter { $0.role == .last }
+    var issues: [String] = []
+    if first.count > 1 { issues.append("Use only one Draw Things first-frame image") }
+    if last.count > 1 { issues.append("Use only one Draw Things last-frame image") }
+    if !last.isEmpty && (!isH3 || first.count != 1) {
+      issues.append("Draw Things last frame requires H3 and one first-frame image")
+    }
+    if attachments.contains(where: { $0.role != .first && !(isH3 && $0.role == .last) }) {
+      issues.append("Remove unsupported Draw Things attachment roles")
+    }
+    for attachment in first + last {
+      let role = attachment.role == .first ? "first" : "last"
+      guard let asset = assets.first(where: { $0.id == attachment.assetID }) else {
+        issues.append("Relink the Draw Things \(role)-frame image"); continue
+      }
+      if asset.kind != .image { issues.append("Use an image for the Draw Things \(role) frame") }
+      if !fileExists(asset.path) { issues.append("Relink the Draw Things \(role)-frame image") }
+      if attachment.strength != 1 { issues.append("Set Draw Things \(role)-frame strength to 1") }
+    }
+    return issues
+  }
+
+  public mutating func applyDrawThingsEndpointDuration(_ value: Double?) {
+    guard engine == .drawThings, attachments.contains(where: { $0.role == .last }),
+      let value, value.isFinite, value > 0 else { return }
+    duration = value
+  }
+}
+
 public enum JSONValue: Codable, Equatable {
   case string(String)
   case integer(Int)
@@ -100,8 +134,9 @@ public struct DrawThingsSelection: Codable, Equatable {
     loras = try c.decodeIfPresent([DrawThingsLoRA].self, forKey: .loras) ?? []
   }
   public mutating func apply(_ group: DrawThingsLoRAGroup) { loras = group.members }
-  public func unavailableLoRAs(availableIDs: Set<String>) -> [DrawThingsLoRA] {
-    loras.filter { !availableIDs.contains($0.modelID) }
+  public func unavailableLoRAs(availableIDs: Set<String>?) -> [DrawThingsLoRA] {
+    guard let availableIDs else { return [] }
+    return loras.filter { !availableIDs.contains($0.modelID) }
   }
 }
 

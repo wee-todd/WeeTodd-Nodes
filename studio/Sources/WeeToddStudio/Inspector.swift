@@ -130,7 +130,7 @@ struct ClipInspector: View {
       if clip.attachments.isEmpty {
         Text(
           clip.engine == .drawThings
-            ? "Use one image asset as the First Frame. It is center-cropped to the clip dimensions. Other media roles are not yet supported by this connection."
+            ? "Select an image in Media & Assets, then Use in clip → First frame. H3 FL2VA also supports Last frame: it is sent as Draw Things’ first enabled mood-board image. Both images are center-cropped to the clip dimensions. LTX currently supports First frame only."
             : clip.engine == .ltx25
               ? "For image to video: import an image in Media & Assets, select it, then choose Use in clip → First frame. Use the LTX 2.5 Image to video recipe. MSR references and Ingredients sheets have separate setup recipes and require their dedicated adapters."
               : "Use an asset as a first frame, reference, audio driver or control. Compatible task adapters come from the selected recipe."

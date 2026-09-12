@@ -230,6 +230,42 @@ def clip_job(tmp_path):
     return job
 
 
+def test_headless_endpoint_clip_keeps_last_frame_when_finishing_and_resuming(tmp_path, monkeypatch):
+    job = clip_job(tmp_path)
+    canonical = job["remoteJobs"][0]["request"]
+    canonical["configuration"].update(numFrames=124, fps=24)
+    canonical["inputs"] = [{"role": "first"}, {"role": "last"}]
+    job["project"]["clips"][0]["duration"] = 5
+    monkeypatch.setattr(studio_job, "preflight", lambda *a, **k: None)
+    monkeypatch.setattr(studio_job, "inputs_fingerprint", lambda *a: "fixture")
+    monkeypatch.setattr(studio_job, "validate_remote_jobs", lambda jobs, project: jobs)
+    monkeypatch.setattr(studio_job, "bind_remote_inputs", lambda remote, results: remote["request"])
+    monkeypatch.setattr(importlib.import_module("studio_drawthings"), "adapter_for",
+                        lambda request: FakeAdapter([]))
+    renders = []
+
+    def render(request, adapter, folder, *args):
+        renders.append(request)
+        video = folder / "clip.mp4"
+        video.write_bytes(b"validated remote fixture")
+        return {"video": str(video)}
+
+    def export(request, output, **kwargs):
+        assert request["project"]["clips"][0]["duration"] == pytest.approx(124 / 24)
+        output.write_bytes(b"finished fixture")
+        return {"video": str(output)}
+
+    monkeypatch.setattr(importlib.import_module("wee_todd_remote.studio"),
+                        "render_drawthings_clip", render)
+    monkeypatch.setattr(studio_job.bridge, "export_movie", export)
+    output = tmp_path / "output"
+    studio_job.execute(job, output, resume=False)
+    studio_job.execute(job, output, resume=True)
+    assert len(renders) == 1
+    resolved = json.loads((output / "job-state.json").read_text())["resolvedProject"]
+    assert resolved["clips"][0]["duration"] == pytest.approx(124 / 24)
+
+
 @pytest.mark.parametrize("action", ["export", "preflight", "execute"])
 @pytest.mark.parametrize("malformation", [
     "missing_target", "duplicate_project_id", "wrong_engine", "duplicate_target",

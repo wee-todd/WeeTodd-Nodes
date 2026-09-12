@@ -62,8 +62,11 @@ struct ImageGenerationEditor: View {
           Divider()
           if let estimate = store.imageEstimate {
             Text("Estimated CU: \(number(estimate["estimateCU"]))")
-            Text(estimate["limitMode"] as? String == "notApplicable" ? "Self-hosted · no cloud CU limit" : "Current per-job limit: \(number(estimate["limitCU"]))")
+            Text(estimate["limitMode"] as? String == "notApplicable" ? "Self-hosted · no cloud CU limit" :
+              estimate["limitEnforcement"] as? String == "server" ? "CU limit checked by Draw Things on submission" :
+              "Current per-job limit: \(number(estimate["limitCU"]))")
               .font(.caption).foregroundStyle(.secondary)
+            if let message = estimate["accountMessage"] as? String { Text(message).font(.caption) }
             ForEach(Array((estimate["issues"] as? [[String: Any]] ?? []).enumerated()), id: \.offset) { _, issue in
               Text(issue["message"] as? String ?? "Connection needs attention").font(.caption).foregroundStyle(.secondary)
             }

@@ -56,8 +56,10 @@ print(package / ".build/release/WeeToddDrawThings")
 '''
     instructions = """Draw Things helper corresponding source
 
-This separately linked helper uses MediaGenerationKit under LGPL-3.0 and its
-dependencies under their accompanying licenses. Every dependency's source and
+This separately linked helper uses draw-things-community's _MediaGenerationKit
+under GPL-3.0 and dependencies under their accompanying licenses. The newer H3
+revision is not covered by the older public wrapper's LGPL distribution grant.
+Every dependency's source and
 license files are included under dependencies/. WeeTodd helper source is under
 helper/ and the accompanying Apache-2.0 license. No model weights are included.
 
@@ -72,7 +74,12 @@ Transport helper > Import. This supports replacement without modifying Studio.
 Alternatively replace Contents/MacOS/WeeToddDrawThings in a writable app copy
 and ad-hoc sign the copy with codesign --force --deep --sign - 'WeeTodd Studio.app'.
 The application does not prohibit modification or reverse engineering of this
-helper for debugging changes to LGPL-covered libraries.
+helper for debugging changes to covered libraries.
+
+This package supports local builds and corresponding-source inspection. Before
+publishing a Studio bundle containing this helper, resolve the GPL distribution
+requirements or obtain an applicable upstream alternative license. Do not label
+the combined helper binary Apache-2.0 or LGPL-3.0.
 """
     with tarfile.open(archive, "w:gz") as tar:
         tar.add(package, arcname="helper", filter=source_filter)
@@ -82,7 +89,8 @@ helper for debugging changes to LGPL-covered libraries.
                     arcname="dependencies/" + pin["identity"], filter=source_filter)
         for name, value in (("rebuild.py", rebuild), ("README.txt", instructions)):
             data = value.encode()
-            info = tarfile.TarInfo(name); info.size = len(data)
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
             tar.addfile(info, io.BytesIO(data))
     shutil.copy2(binary, destination / binary.name)
     (destination / "DrawThings-Notices.txt").write_text(instructions)
@@ -99,9 +107,11 @@ def main():
     parser.add_argument("--output", type=Path, default=root / "studio/.build/drawthings")
     args = parser.parse_args()
     scratch = (args.scratch_path or root / "integrations/drawthings-client/.build").resolve()
-    subprocess.run(["swift", "build", "--package-path", str(root / "integrations/drawthings-client"),
-                    "--scratch-path", str(scratch), "-c", "release", "--product", "WeeToddDrawThings"],
-                   check=True)
+    subprocess.run(
+        ["swift", "build", "--package-path", str(root / "integrations/drawthings-client"),
+         "--scratch-path", str(scratch), "-c", "release", "--product", "WeeToddDrawThings"],
+        check=True,
+    )
     print(package_helper(root, scratch, args.output.resolve()))
 
 

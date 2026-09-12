@@ -567,6 +567,10 @@ def _execute_locked(job, output, resume):
                     )
                 clip["sourcePath"] = result["path"]
                 clip["sourceIn"] = 0
+                from wee_todd_remote.studio import endpoint_duration
+                duration = endpoint_duration(remote["request"])
+                if duration is not None:
+                    clip["duration"] = duration
         for i, clip in enumerate(project["clips"]):
             record = job["recipes"].get(clip["id"])
             if not record:

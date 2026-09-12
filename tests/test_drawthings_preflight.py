@@ -336,3 +336,23 @@ def test_prepare_handles_unhashable_account_enums_as_unknown(
     result = prepare(remote_request, capabilities, account, now=100)
     assert result["eligibility"] == "unknown"
     assert code in {issue["code"] for issue in result["issues"]}
+
+
+def test_cloud_server_enforces_unpublished_limit_after_verified_free_quota(
+    remote_request, capabilities, account
+):
+    account.pop('limitCU')
+    account.update(limitEnforcement='server', paygEnabled=False,
+                   monthlyQuota={'remainingRequests': 19})
+    result = prepare(remote_request, capabilities, account, now=100)
+    assert result['eligibility'] == 'allowed'
+    assert result['limitCU'] is None
+    assert result['limitEnforcement'] == 'server'
+    for change in ({'paygEnabled': True}, {'monthlyQuota': {'remainingRequests': 0}},
+                   {'monthlyQuota': {}}, {'routeVerified': False}, {'policyExpiresAt': 99}):
+        result = prepare(remote_request, capabilities, account | change, now=100)
+        assert result['eligibility'] != 'allowed'
+    assert prepare(remote_request, capabilities | {'executionMode': 'bridge', 'route': 'dtBridge'},
+                   account, now=100)['eligibility'] != 'allowed'
+    account['limitCU'] = 100
+    assert prepare(remote_request, capabilities, account, now=100)['eligibility'] == 'blocked'

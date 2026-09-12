@@ -4,6 +4,44 @@ import XCTest
 @testable import StudioCore
 
 final class DrawThingsTests: XCTestCase {
+  func testDrawThingsStatusAcceptsH3EndpointsButChecksBothAssets() {
+    var clip = Clip(engine: .drawThings)
+    clip.drawThings = DrawThingsSelection(profileID: "local", modelID: "h3", modelFamily: "minimaxH3")
+    let first = MediaAsset(name: "First", kind: .image, path: "/first.png")
+    let last = MediaAsset(name: "Last", kind: .image, path: "/last.png")
+    clip.attachments = [Attachment(assetID: first.id, role: .first),
+                        Attachment(assetID: last.id, role: .last)]
+    XCTAssertTrue(clip.drawThingsConditioningIssues(assets: [first, last], fileExists: { _ in true }).isEmpty)
+    XCTAssertFalse(clip.drawThingsConditioningIssues(assets: [first], fileExists: { _ in true }).isEmpty)
+    XCTAssertFalse(clip.drawThingsConditioningIssues(assets: [first, last], fileExists: { $0 != last.path }).isEmpty)
+    clip.drawThings?.modelFamily = "ltx2_3"
+    XCTAssertFalse(clip.drawThingsConditioningIssues(assets: [first, last], fileExists: { _ in true }).isEmpty)
+    clip.drawThings?.modelFamily = "minimaxH3"
+    clip.attachments.removeFirst()
+    XCTAssertFalse(clip.drawThingsConditioningIssues(assets: [last], fileExists: { _ in true }).isEmpty)
+  }
+  func testCompletedEndpointClipKeepsFinalFrameOnTimeline() {
+    var clip = Clip(engine: .drawThings)
+    clip.duration = 5
+    clip.attachments = [Attachment(assetID: UUID(), role: .first),
+                        Attachment(assetID: UUID(), role: .last)]
+    clip.applyDrawThingsEndpointDuration(124.0 / 24)
+    XCTAssertEqual(clip.duration, 124.0 / 24)
+    clip.applyDrawThingsEndpointDuration(.nan)
+    XCTAssertEqual(clip.duration, 124.0 / 24)
+    clip.attachments.removeLast()
+    clip.applyDrawThingsEndpointDuration(9)
+    XCTAssertEqual(clip.duration, 124.0 / 24, "First-only clips retain their chosen trim")
+  }
+  func testDrawThingsInfersImageAndEndpointTasksFromAttachments() {
+    var clip = Clip(engine: .drawThings)
+    clip.attachments = [Attachment(assetID: UUID(), role: .first)]
+    XCTAssertEqual(clip.inferredTask, "i2v")
+    clip.attachments.append(Attachment(assetID: UUID(), role: .last))
+    XCTAssertEqual(clip.inferredTask, "fflf")
+    clip.generationSelection = GenerationSelection(task: "t2v", preset: .custom)
+    XCTAssertEqual(clip.inferredTask, "t2v", "Explicit conflicting choices remain visible to validation")
+  }
   func testLegacyProjectDecodesAndKeepsNativeFingerprint() throws {
     let data = Data(Self.legacyProject.utf8)
     let project = try JSONDecoder().decode(StudioProject.self, from: data)
@@ -62,6 +100,7 @@ final class DrawThingsTests: XCTestCase {
       selection.unavailableLoRAs(availableIDs: Set(["still-compatible"])),
       [DrawThingsLoRA(modelID: "old-server-style", weight: 1.25)])
     XCTAssertEqual(selection.unavailableLoRAs(availableIDs: []), selection.loras)
+    XCTAssertEqual(selection.unavailableLoRAs(availableIDs: nil), [])
   }
 
   func testDrawThingsLoRAGroupValidatesIdentityAndCopiesValues() throws {

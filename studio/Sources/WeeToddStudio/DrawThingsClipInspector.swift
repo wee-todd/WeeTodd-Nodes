@@ -4,6 +4,8 @@ import SwiftUI
 struct DrawThingsClipInspector: View {
   @EnvironmentObject var store: StudioStore
   var clip: Clip
+  var isH3: Bool { clip.drawThings?.modelFamily.lowercased() == "minimaxh3" }
+  var hasCatalog: Bool { store.drawThingsCatalogs[clip.drawThings?.profileID ?? ""] != nil }
   @State private var groupName = ""
   func selection<T>(_ key: WritableKeyPath<DrawThingsSelection, T>, fallback: T) -> Binding<T> {
     Binding(get: { store.selectedClip?.drawThings?[keyPath: key] ?? fallback }, set: { value in
@@ -41,10 +43,13 @@ struct DrawThingsClipInspector: View {
     VStack(alignment: .leading, spacing: 10) {
       SmallLabel(text: "Draw Things")
       Picker("Task", selection: Binding(get: {
-        clip.generationSelection?.task ?? (clip.attachments.contains { $0.role == .first } ? "i2v" : "t2v")
+        clip.inferredTask
       }, set: { task in store.editClip { $0.generationSelection = GenerationSelection(task: task, preset: .custom) } })) {
         Text("Text to video").tag("t2v")
         Text("Image to video").tag("i2v")
+        if isH3 || clip.inferredTask == "fflf" {
+          Text(isH3 ? "First and last frames" : "First and last frames · H3 only").tag("fflf")
+        }
       }
       Text("Custom server settings · connection capability is validated before generation.")
         .font(.caption2).foregroundStyle(.secondary)
@@ -65,7 +70,7 @@ struct DrawThingsClipInspector: View {
         Text("Choose a video model").tag("")
         if let savedModelID = clip.drawThings?.modelID, !savedModelID.isEmpty,
           !models.contains(where: { $0.id == savedModelID }) {
-          Text("\(savedModelID) (unavailable · refresh to verify)").tag(savedModelID)
+          Text("\(savedModelID) (\(hasCatalog ? "unavailable for this connection" : "saved · connect to verify"))").tag(savedModelID)
         }
         ForEach(models, id: \.id) {
           Text($0.name).tag($0.id)
@@ -73,27 +78,39 @@ struct DrawThingsClipInspector: View {
       }
       HStack {
         Text("Steps")
-        TextField("Steps", value: number("steps", fallback: 8), format: .number.grouping(.never))
+        TextField("Steps", value: number("steps", fallback: isH3 ? 50 : 8), format: .number.grouping(.never))
       }
       HStack {
         Text("CFG")
         TextField("CFG", value: decimal("guidanceScale", fallback: 1), format: .number)
       }
       Toggle("Override Shift", isOn: Binding(get: { clip.drawThings?.configuration["shift"] != nil },
-        set: { enabled in store.editClip { $0.drawThings?.configuration["shift"] = enabled ? .number(1) : nil } }))
+        set: { enabled in store.editClip { $0.drawThings?.configuration["shift"] = enabled ? .number(isH3 ? 12 : 1) : nil } }))
       if clip.drawThings?.configuration["shift"] != nil {
         HStack {
           Text("Shift")
-          TextField("Shift", value: decimal("shift", fallback: 1), format: .number)
+          TextField("Shift", value: decimal("shift", fallback: isH3 ? 12 : 1), format: .number)
         }
+      }
+      if isH3 {
+        HStack {
+          Text("Audio Shift")
+          TextField("Audio Shift", value: decimal("audioShift", fallback: 3), format: .number)
+        }
+        Text("H3 defaults: DDIM Trailing, Shift 12, Audio Shift 3. Generation uses 24 FPS.")
+          .font(.caption2).foregroundStyle(.secondary)
       }
       HStack {
         Text("Generation FPS")
-        TextField("Generation FPS", value: number("fps", fallback: Int(clip.settings(in: store.project).fps)),
+        TextField("Generation FPS", value: number("fps", fallback: isH3 ? 24 : Int(clip.settings(in: store.project).fps)),
                   format: .number.grouping(.never))
       }
       Text("Frame count rounds up to the model’s valid duration. Movie finishing applies the project frame rate.")
         .font(.caption2).foregroundStyle(.secondary)
+      if isH3 && clip.attachments.contains(where: { $0.role == .last }) {
+        Text("After generation, the clip adopts the rounded duration to preserve its last frame.")
+          .font(.caption2).foregroundStyle(.secondary)
+      }
       Divider()
       Text("Server LoRAs").font(.caption.bold())
       let available = store.drawThingsLoRAs(
@@ -119,35 +136,45 @@ struct DrawThingsClipInspector: View {
         }
       }
       let unavailable = clip.drawThings?.unavailableLoRAs(
-        availableIDs: Set(available.map(\.id))) ?? []
-      if !unavailable.isEmpty {
+        availableIDs: hasCatalog ? Set(available.map(\.id)) : nil) ?? []
+      let saved = hasCatalog ? unavailable : clip.drawThings?.loras ?? []
+      if !saved.isEmpty {
         VStack(alignment: .leading, spacing: 6) {
-          Text("Unavailable for this connection or model").font(.caption.bold())
-            .foregroundStyle(.orange)
-          ForEach(unavailable) { lora in
+          Text(hasCatalog ? "Unavailable for this connection or model" : "Saved LoRAs · connection not verified")
+            .font(.caption.bold()).foregroundStyle(hasCatalog ? .orange : .secondary)
+          ForEach(saved) { lora in
             HStack {
               VStack(alignment: .leading, spacing: 2) {
                 Text(lora.modelID).lineLimit(1)
-                Text("Saved strength \(lora.weight.formatted())")
-                  .font(.caption2).foregroundStyle(.secondary)
               }
               Spacer()
+              TextField("Strength", value: Binding(get: {
+                store.selectedClip?.drawThings?.loras.first { $0.modelID == lora.modelID }?.weight ?? lora.weight
+              }, set: { weight in
+                store.editClip { selected in
+                  if let index = selected.drawThings?.loras.firstIndex(where: { $0.modelID == lora.modelID }) {
+                    selected.drawThings?.loras[index].weight = weight
+                  }
+                }
+              }), format: .number).frame(width: 58)
               Button("Remove") { removeLoRA(lora.modelID) }
             }
           }
-          Button("Remove all unavailable") {
+          if hasCatalog { Button("Remove all unavailable") {
             let ids = Set(unavailable.map(\.modelID))
             store.editClip { $0.drawThings?.loras.removeAll { ids.contains($0.modelID) } }
-          }.controlSize(.small)
-        }.padding(8).background(.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+          }.controlSize(.small) }
+        }.padding(8).background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
       }
       if available.isEmpty {
-        Text("Refresh discovery to choose compatible server-resident LoRAs. Local LoRA upload is unavailable because there is no verified converter.")
+        Text(hasCatalog
+          ? "No compatible LoRAs were advertised for this model. Install them in Draw Things, enable Model Browsing for a local server, then Refresh."
+          : "Connect and Refresh to load compatible LoRAs. For a local connection, enable Draw Things’ gRPC API server and Model Browsing. Saved assignments remain editable; generation verifies compatibility.")
           .font(.caption2).foregroundStyle(.secondary)
       }
       HStack {
         TextField("Group name", text: $groupName)
-        Button("Save") { saveGroup() }.disabled(groupName.trimmingCharacters(in: .whitespaces).isEmpty || clip.drawThings?.loras.isEmpty != false)
+        Button("Save") { saveGroup() }.disabled(!hasCatalog || groupName.trimmingCharacters(in: .whitespaces).isEmpty || clip.drawThings?.loras.isEmpty != false)
       }
       Menu("Apply LoRA group") {
         ForEach(compatibleGroups) { group in Button(group.name) { apply(group) } }
@@ -202,7 +229,9 @@ struct DrawThingsCUStatus: View {
       VStack(alignment: .leading, spacing: 5) {
         Text("Estimated CU: \((estimate["estimateCU"] as? NSNumber)?.stringValue ?? "Unknown")")
         Text(estimate["limitMode"] as? String == "notApplicable" ? "Self-hosted · no cloud limit" :
+          estimate["limitEnforcement"] as? String == "server" ? "CU limit checked by Draw Things on submission" :
           "Per-job limit: \((estimate["limitCU"] as? NSNumber)?.stringValue ?? "Unknown")")
+        if let message = estimate["accountMessage"] as? String { Text(message) }
         if estimate["eligibility"] as? String == "blocked" {
           Text("Adjust size, duration, or steps, then prepare again.")
         }

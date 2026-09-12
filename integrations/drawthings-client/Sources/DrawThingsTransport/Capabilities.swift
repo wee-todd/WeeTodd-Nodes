@@ -6,6 +6,9 @@ public enum Capabilities {
     guard ModelZoo.specificationForModel(model) != nil else { return nil }
     let operation: String
     switch ModelZoo.versionForModel(model) {
+    case .minimaxH3:
+      guard ModelZoo.modifierForModel(model) == .fl2va else { return nil }
+      operation = "video"
     case .ltx2, .ltx2_3: operation = "video"
     case .flux1, .flux2, .flux2_4b, .flux2_9b, .qwenImage, .zImage: operation = "image"
     default: return nil
@@ -20,6 +23,11 @@ public enum Capabilities {
       rule["inputRoleCombinations"] = [[], ["first"]]
       rule["numFrames"] = ["min": 1, "max": 100000, "multipleOf": 8, "offset": 1]
       rule["fps"] = ["min": 1, "max": 240, "multipleOf": 1]
+      if ModelZoo.versionForModel(model) == .minimaxH3 {
+        rule["inputRoleCombinations"] = [[], ["first"], ["first", "last"]]
+        rule["numFrames"] = ["min": 5, "max": 100000, "multipleOf": 17, "offset": 5]
+        rule["fps"] = ["min": 24, "max": 24, "multipleOf": 1]
+      }
     }
     return ["operations": [operation: rule], "confidence": "verified",
             "source": "adapter-rules-intersect-endpoint-files", "revision": ComputeEstimate.revision]

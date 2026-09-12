@@ -6,12 +6,12 @@ let package = Package(
   platforms: [.macOS(.v14)],
   products: [.executable(name: "WeeToddDrawThings", targets: ["WeeToddDrawThings"])],
   dependencies: [
-    .package(url: "https://github.com/drawthingsai/media-generation-kit.git",
-             revision: "8868a9685d9c299816f43ef53efd455ffca437f0")
+    .package(url: "https://github.com/drawthingsai/draw-things-community.git",
+             revision: "08e798b5ad59c3db78b2be53f0ed60b071653302")
   ],
   targets: [
     .target(name: "DrawThingsTransport", dependencies: [
-      .product(name: "MediaGenerationKit", package: "media-generation-kit")
+      .product(name: "_MediaGenerationKit", package: "draw-things-community")
     ]),
     .executableTarget(name: "WeeToddDrawThings", dependencies: ["DrawThingsTransport"]),
     .executableTarget(name: "WeeToddDrawThingsFixtureServer", dependencies: ["DrawThingsTransport"],

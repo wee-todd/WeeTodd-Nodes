@@ -109,11 +109,12 @@ extension StudioStore {
         if stillCurrent {
           p.clips[i].sourcePath = video
           p.clips[i].sourceIn = 0
-          p.clips[i].renderedSignature = prepared.signature
+          p.clips[i].applyDrawThingsEndpointDuration(result["endpointDuration"] as? Double)
+          p.clips[i].renderedSignature = signature(for: p.clips[i])
         }
         var asset = MediaAsset(name: clip.name + " render", kind: .video, path: video,
           scope: .clip, owner: clip.id)
-        asset.duration = clip.duration
+        asset.duration = result["endpointDuration"] as? Double ?? clip.duration
         asset.width = clip.generationWidth; asset.height = clip.generationHeight
         p.assets.append(asset)
       }
@@ -142,7 +143,10 @@ extension StudioStore {
         payload: ["connection": try connection.object()])
       drawThingsCatalogs[connection.id] = result
       notice = "Connected to \(connection.name)."
-    } catch { self.error = error.localizedDescription }
+    } catch {
+      drawThingsCatalogs.removeValue(forKey: connection.id)
+      self.error = error.localizedDescription
+    }
   }
   func drawThingsModels(_ profileID: String, operation: String) -> [(id: String, name: String)] {
     guard let catalog = drawThingsCatalogs[profileID], let rules = catalog["capabilities"] as? [String: Any] else { return [] }

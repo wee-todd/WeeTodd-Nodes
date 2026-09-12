@@ -19,7 +19,7 @@ public enum TransportError: String, Error {
 public enum Configuration {
   static let allowed: Set<String> = [
     "width", "height", "steps", "seed", "guidanceScale", "strength", "numFrames", "fps",
-    "shift", "sampler"
+    "shift", "audioShift", "sampler"
   ]
 
   static func number(_ value: Any?, min: Double, max: Double, integer: Bool = false) throws -> Double {
@@ -40,13 +40,20 @@ public enum Configuration {
       Set(values.keys).isSubset(of: allowed) else { throw TransportError.invalidRequest }
     let version = ModelZoo.versionForModel(model)
     switch version {
+    case .minimaxH3:
+      guard operation == "video", ModelZoo.modifierForModel(model) == .fl2va else {
+        throw TransportError.unsupportedOperation
+      }
     case .ltx2, .ltx2_3:
       guard operation == "video" else { throw TransportError.unsupportedOperation }
     case .flux1, .flux2, .flux2_4b, .flux2_9b, .qwenImage, .zImage:
       guard operation == "image" else { throw TransportError.unsupportedOperation }
     default: throw TransportError.unsupportedModel
     }
-    _ = try Conditioning.inputs(request)
+    let inputs = try Conditioning.inputs(request)
+    guard inputs.count < 2 || version == .minimaxH3 else {
+      throw TransportError.unsupportedConditioning
+    }
     let loras = try Conditioning.loras(request)
     let width = try number(values["width"], min: 64, max: 4096, integer: true)
     let height = try number(values["height"], min: 64, max: 4096, integer: true)
@@ -60,6 +67,12 @@ public enum Configuration {
     config.steps = UInt32(steps)
     config.seed = Int64(seed)
     config.loras = loras.map { JSLoRA(lora: $0) }
+    if version == .minimaxH3 {
+      config.sampler = SamplerType.dDIMTrailing.rawValue
+      config.guidanceScale = 1
+      config.shift = 12
+      config.shiftForAudio = 3
+    }
     if let value = values["guidanceScale"] {
       config.guidanceScale = Float(try number(value, min: 0, max: 100))
     }
@@ -69,6 +82,10 @@ public enum Configuration {
     if let value = values["shift"] {
       config.shift = Float(try number(value, min: 0, max: 100))
     }
+    if let value = values["audioShift"] {
+      guard version == .minimaxH3 else { throw TransportError.invalidRequest }
+      config.shiftForAudio = Float(try number(value, min: 0.1, max: 100))
+    }
     if let value = values["sampler"] {
       let raw = Int8(try number(value, min: 0, max: 127, integer: true))
       guard SamplerType(rawValue: raw) != nil else { throw TransportError.invalidRequest }
@@ -77,7 +94,13 @@ public enum Configuration {
     if operation == "video" {
       config.numFrames = UInt32(try number(values["numFrames"], min: 1, max: 100000, integer: true))
       config.fps = UInt32(try number(values["fps"], min: 1, max: 240, integer: true))
-      guard (config.numFrames - 1) % 8 == 0 else { throw TransportError.invalidRequest }
+      if version == .minimaxH3 {
+        guard config.fps == 24, config.numFrames >= 5, (config.numFrames - 5) % 17 == 0 else {
+          throw TransportError.invalidRequest
+        }
+      } else {
+        guard (config.numFrames - 1) % 8 == 0 else { throw TransportError.invalidRequest }
+      }
     } else if values["numFrames"] != nil || values["fps"] != nil {
       throw TransportError.invalidRequest
     }
@@ -86,18 +109,23 @@ public enum Configuration {
   static func requiresAudio(_ config: GenerationConfiguration) -> Bool {
     guard let model = config.model else { return false }
     switch ModelZoo.versionForModel(model) {
-    case .ltx2, .ltx2_3: return true
+    case .ltx2, .ltx2_3, .minimaxH3: return true
     default: return false
     }
   }
 }
 
 public enum ComputeEstimate {
-  public static let revision = "d473a2f148b3e7dc9b90d0b7cfccc5cda999eb66"
+  public static let revision = "08e798b5ad59c3db78b2be53f0ed60b071653302"
 
   public static func evaluate(_ request: [String: Any]) throws -> [String: Any] {
+    if let model = request["modelID"] as? String,
+      ModelZoo.specificationForModel(model) == nil, request["profile"] != nil {
+      _ = try Discovery.fetch(request, inspectAccount: false)
+    }
     let config = try Configuration.resolve(request)
-    guard let cu = ComputeUnits.from(config, hasImage: !(try Conditioning.inputs(request)).isEmpty, shuffleCount: 0) else {
+    let inputs = try Conditioning.inputs(request)
+    guard let cu = ComputeUnits.from(config, hasImage: !inputs.isEmpty, shuffleCount: max(0, inputs.count - 1)) else {
       throw TransportError.unsupportedModel
     }
     let encoded = try JSONEncoder().encode(JSGenerationConfiguration(configuration: config))
@@ -106,7 +134,10 @@ public enum ComputeEstimate {
     }
     var supported = Configuration.allowed
     if request["operation"] as? String == "image" { supported.subtract(["numFrames", "fps"]) }
-    let normalized = full.filter { supported.contains($0.key) }
+    var normalized = full.filter { supported.contains($0.key) }
+    if ModelZoo.versionForModel(config.model ?? "") == .minimaxH3 {
+      normalized["audioShift"] = full["shiftForAudio"]
+    }
     return ["cu": cu, "estimatorRevision": revision, "configuration": normalized]
   }
 }

@@ -23,11 +23,20 @@ qualification remains open. See [progress and paging controls](studio/README.md#
 
 An optional [Draw Things integration](studio/README.md#draw-things--experimental) adds remote image
 assets and audiovisual clips to Studio, portable headless jobs, and ComfyUI through a shared gRPC
-adapter. It displays estimated CU and verifies free-only eligibility before submission. Self-hosted
-transport is fixture-tested. One real LTX 2.3 cloud response was recovered and verified locally;
-full live account and generation qualification is still pending.
-The pinned remote SDK supports selected image models and LTX 2/2.3 video; native H3/LTX 2.5 support
-remains separate. DT+ App Bridge generation is unavailable until its billing route can be verified.
+adapter. It displays estimated CU and verifies free-only eligibility before submission. If cloud CU
+limits are not published, it shows that Draw Things checks the limit on submission; the saved key,
+remaining free requests, and PAYG-disabled status are still verified first. Self-hosted
+transport has also completed a local H3 first/last-frame render. Live Studio Cloud API testing
+verified a saved API key and free allowance, then generated an LTX 2.3 clip with video and stereo
+audio; broader model qualification remains open.
+The pinned remote SDK supports selected image models, LTX 2/2.3 first-frame video, and discovered
+H3 FL2VA models with first/last-frame inputs. Assign images using **Use in clip → First frame / Last
+frame**; Studio sends H3's canvas and mood-board inputs directly. H3 uses 24 FPS with editable steps,
+Shift, and Audio Shift. Availability depends on the endpoint's model inventory. Native MLX H3/LTX
+engines remain separate. DT+ App Bridge generation is unavailable until its billing route can be verified.
+Imported compatible H3 Turbo LoRAs appear after **Refresh**, with editable strength and steps.
+The local four-step FL2VA test at 60% strength returned 124 frames and stereo audio; see the
+[Draw Things setup and test notes](studio/README.md#draw-things--experimental).
 
 [WeeTodd Studio](studio/README.md) is the native Swift editor in this repository. It combines generated
 and imported clips, titles, transitions and multiple audio tracks, and exports resumable movie/clip
@@ -116,8 +125,9 @@ portable starting graphs; they do not establish a working endpoint or free-tier 
 | [Video + audio](workflows/balance/t2v/drawthings_video.json) | [API](examples/drawthings_video_api.json) | Prepare and generate an audiovisual clip, then finish it with FFmpeg. |
 
 Credentials are supplied through runtime environment references. Generated files use ComfyUI's
-configured output directory. Direct Cloud remains subject to strict free-only checks and pending
-live qualification; DT+ App Bridge generation is blocked. See [connection policies and limits](studio/README.md#connections-allowance-and-cu).
+configured output directory. Direct Cloud remains subject to strict free-only checks. Live cloud
+generation is verified in Studio; live-cloud ComfyUI graph qualification remains open. DT+ App
+Bridge generation is blocked. See [connection policies and limits](studio/README.md#connections-allowance-and-cu).
 
 ### LTX workflows
 
@@ -1817,5 +1827,7 @@ Full checkpoint parity and real generation tests are optional and expensive.
 ## License and status
 
 WeeTodd source code is Apache-2.0. Model checkpoints and adapters keep their original licenses and
-terms. The project is experimental and pre-release. Do not commit checkpoints, generated media,
+terms. The optional H3-capable Draw Things helper uses a GPLv3 community dependency; bundled app
+distribution remains pending [licensing qualification](studio/README.md#build-the-optional-connection-runtime).
+The project is experimental and pre-release. Do not commit checkpoints, generated media,
 caches, credentials, tokens, machine-specific paths, or private information.

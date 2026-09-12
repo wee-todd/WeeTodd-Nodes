@@ -7,7 +7,7 @@ import re
 import sys
 from pathlib import Path
 
-EXCLUDED_PARTS = {".git", ".venv", ".pytest_cache", ".ruff_cache"}
+EXCLUDED_PARTS = {".git", ".venv", ".build", ".swiftpm", ".pytest_cache", ".ruff_cache"}
 HEADING = re.compile(r"^(#{1,6}) (.+)$")
 
 

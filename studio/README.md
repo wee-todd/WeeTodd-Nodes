@@ -696,11 +696,21 @@ python3 scripts/build_studio_app.py --configuration release \
 open "studio/.build/WeeTodd Studio.app"
 ```
 
-The helper uses a pinned official MediaGenerationKit release and requires Swift 6 on Apple Silicon.
+The helper uses Draw Things' official `_MediaGenerationKit` product, pinned to community revision
+`08e798b5ad59c3db78b2be53f0ed60b071653302`, and requires Swift 6 on Apple Silicon.
+This revision adds H3 transport/configuration support beyond the older public wrapper release.
 Building it downloads software dependencies, not model weights. The distribution includes the helper,
 its hash manifest, licenses within a complete dependency-source archive, and instructions for
 rebuilding with modified libraries. Studio lets users import a replacement executable. The synthetic
 fixture server is a development test target and is never bundled with Studio.
+
+The current community revision is GPLv3. The older public `media-generation-kit` wrapper's
+[LGPL grant](https://github.com/drawthingsai/media-generation-kit#license) applies to that package's
+distribution; it does not establish a grant for this newer direct dependency. The build commands
+above are for local development. Publishing a bundled Studio/helper app remains pending resolution
+of the GPL distribution requirements or an applicable upstream alternative license. The helper's
+notices include this distinction and its corresponding source; WeeTodd's own source remains
+Apache-2.0.
 
 When upgrading an existing installation, Studio automatically uses its bundled helper if the saved
 helper setting is missing or empty. An explicitly imported helper path stays selected, and existing
@@ -720,22 +730,29 @@ Open **Movie → Draw Things Connections** and save a connection:
 - **Draw Things Cloud API:** create an API key in the Draw Things dashboard and enter it in Studio.
   The helper uses fixed official HTTPS/gRPC endpoints with TLS verification. It first obtains an
   authentication session and reads billing/free-request status; it does not change billing settings.
-  Preparation requires explicit PAYG-disabled status, remaining free requests, a fresh monthly
-  record, and a current per-job CU limit. Missing fields remain unknown and block generation.
+  Preparation requires explicit PAYG-disabled status, remaining free requests, and a fresh monthly
+  record. The saved API key is checked even when discovery omits CU thresholds. Missing or invalid
+  billing/quota fields block generation.
 - **DT+ App Bridge:** discovery can be configured, but free-only generation is unavailable. The
   current bridge protocol does not expose a verifiable account/allowance/no-paid-fallback policy.
   Draw Things being open or subscribed to Plus is not sufficient evidence.
 
 **CU measures the estimated work of one generation.** It is separate from the remaining monthly
 request count and is not a currency balance. Studio shows the estimate for the resolved settings.
-Cloud preflight currently uses the lower advertised CU threshold until generation authorization
-confirms account class. A request equal to or above that limit is refused. Reduce dimensions,
-duration, or steps and prepare again. Limits and allowance are rechecked at generation time.
+When the service advertises CU thresholds, cloud preflight uses the lower threshold until generation
+authorization confirms account class. A request equal to or above that limit is refused. If neither
+Echo nor Hours publishes thresholds, Studio shows **CU limit checked by Draw Things on submission**;
+it does not invent a numerical limit. A verified remaining free allowance with PAYG disabled permits
+requesting server authorization when Generate is pressed. A fresh free-only authorization is still
+required before the generation RPC; paid, Boost, unknown, and expired grants are rejected. Reduce
+dimensions, duration, or steps if the server refuses the job. Allowance is rechecked at generation time.
 
 This release supports `freeOnly`; it neither selects PAYG/Boost nor silently falls back to them.
 Generation authorization is performed only after local files, model availability, connection, and
 output creation pass. An interrupted authorization/submission may already have consumed a request;
-there is no automatic retry. Real API-key allowance responses still require live qualification.
+there is no automatic retry. A live Studio LTX 2.3 Cloud API run verified the saved key and free
+allowance, completed generation, and saved 81 frames at 768×448/25 FPS with 48 kHz stereo audio.
+This validates that route for the tested request, not every cloud model or account configuration.
 
 Credentials stay in Keychain, or in an explicitly selected runtime environment variable for CLI and
 ComfyUI use. They are never embedded in project requests or job JSON. An exported credential reference
@@ -757,6 +774,33 @@ Dimensions use a 64-pixel grid. Generation FPS must be an integer; LTX frame cou
 Generation adds an audiovisual movie to version history and Clip Assets. A changed clip is not
 marked current by an older render finishing later.
 
+**H3 first and last frames:** choose a discovered **MiniMax H3 FL2VA** model, import two images in
+Media & Assets, and use **Use in clip → First frame** and **Use in clip → Last frame**. Choose
+**First and last frames** in the task selector if an explicit earlier task is still selected.
+Studio sends the first image as Draw Things' canvas input and the last image as its first enabled
+mood-board (`shuffle`) hint. Both images are center-cropped to the generation dimensions and hashed
+before submission. The last endpoint follows the resolved frame count when duration changes.
+There is no need to arrange the canvas or mood board in the Draw Things app.
+After generation, endpoint clips adopt the resolved duration (124 / 24 = 5.167 seconds for a
+five-second H3 request) so the timeline and headless movie finishing preserve the final frame.
+
+H3 uses 24 FPS and `17n+5` frames (five seconds rounds up to 124 frames). Its defaults are 50 steps,
+DDIM Trailing, CFG 1, Shift 12, and Audio Shift 3; steps and both shifts remain editable. H3 video
+and 32 kHz stereo audio stay together. Only models actually advertised by the selected endpoint are
+offered; a model installed in the local app is not necessarily available through the cloud API.
+LTX still supports first-frame input only through this adapter. Last-only, arbitrary middle
+keyframes, and H3 reference-model conditioning are not enabled. A conflicting attachment/task is
+reported before generation rather than discarded. Headless exports use the same image contracts.
+
+**H3 Turbo:** import a compatible Turbo LoRA into Draw Things, then click **Refresh** in Studio.
+Enable it under **Server LoRAs**, set its strength, and edit **Steps**. A local FL2VA test used
+`minimax_h3_fl2v_turbo_4step_v1.0_768p_comfyui_bf16` at **0.6 strength**, **4 steps**, DDIM Trailing,
+CFG 1, Shift 12, and Audio Shift 3. It completed at 768×448 with 124 frames and 32 kHz stereo audio
+in 226.8 seconds on an M3 Ultra. First/last images closely matched the supplied endpoints with
+reconstruction differences. This is one local test, not a quality or speed guarantee for other
+LoRAs, hardware, resolutions, or prompts. Studio references the server's installed LoRA and does
+not copy its weights.
+
 Start remote LTX clips at **24 or 25 FPS**. The pinned Draw Things decoder produces audio on a
 fixed causal clock, independently of playback FPS. Its complete audio can end slightly before the
 last picture: a 121-frame clip contains 4.81 seconds of audio, versus 5.042 seconds of video at
@@ -772,16 +816,21 @@ locally without another cloud generation. A missing completion manifest is not p
 remote request failed or that another submission would be free.
 
 The pinned helper recognizes selected FLUX, Qwen Image, and Z-Image model families for images, and
-LTX 2/2.3 for video. Only exact endpoint IDs advertised by both the helper and server appear. This
-is not a claim of remote H3 or LTX 2.5 support; those remain available through the native engines.
+LTX 2/2.3 and H3 FL2VA for video. Only exact endpoint IDs advertised by both the helper and server
+appear. Remote LTX 2.5 remains unsupported; use its native engine.
 
 One **First Frame** image is supported for LTX video. Its full file hash participates in preparation
 and request identity, and the helper rechecks it before submission. Orientation is respected and the
-image is center-cropped to generation dimensions. Last/keyframes, generic references, audio drivers,
-control hints, and native clip extensions are rejected explicitly in this initial remote adapter.
+image is center-cropped to generation dimensions. H3 FL2VA also supports a First Frame / Last Frame
+pair, as described above. LTX last frames, interior keyframes, generic references, audio drivers,
+control hints, and native clip extensions are rejected explicitly in this remote adapter.
 
 Server LoRAs are filtered by exact remote model compatibility. Strength ranges from 0 to 2. Named
 remote groups copy their members/strengths to a clip and remain separate from the native LoRA library.
+Before discovery, or after a failed refresh, saved models and LoRAs are marked unverified rather than
+unavailable. Saved LoRA strengths remain editable. For local servers, enable the gRPC API and Model
+Browsing in Draw Things, then Refresh in Studio. Only a successful catalog can mark an assignment
+unavailable for that connection/model; generation always revalidates it.
 Only ordinary LoRAs with matching SDK model family are advertised; specialized modifiers, alternate
 decoders, and unverified variants are excluded. Importing local SafeTensors as a remote LoRA is not
 supported: this adapter has no verified converter/upload workflow.
@@ -802,15 +851,15 @@ Cloud API jobs do not require the Draw Things app.
 | --- | --- |
 | gRPC discovery/image transfer | Synthetic server and Studio image UI tested |
 | Video + separate audio | Synthetic gRPC, Studio clip UI, and real FFmpeg timing/publication tested |
-| First frame / LoRA contracts | Automated mapping, compatibility, hash, and failure tests |
+| First/last frame / LoRA contracts | Automated wire mapping, compatibility, hash, duration/resume, status, and failure tests; real local H3 FL2VA four-step Turbo render verified from both the shared renderer and packaged Studio |
 | CLI image-to-video and movie assembly | Synthetic server with Studio closed; real FFmpeg clip, dissolve, title, and supplementary-audio assembly tested |
 | Completed-job resume | With fixture server stopped, reused both remote artifacts and the same final movie hash |
 | ComfyUI image/video/estimate workflows | Saved, fixture-bound API graphs executed in isolated ComfyUI; repeated estimates refreshed and image output saved |
-| Packaged Studio | Bundled helper discovery, connection test, prompt CU, project reload, and light/dark appearance checked |
+| Packaged Studio | Bundled helper discovery, connection test, prompt CU, project reload, and light/dark appearance checked; H3 endpoint render marked Generated after restart and exported with all 124 frames |
 | Helper corresponding source | Distributed archive extracted and rebuilt against its supplied editable dependencies |
 | Native project/job compatibility | Focused regression tests |
-| Real Draw Things model generation | One LTX 2.3 cloud response recovered offline: 121 frames at 768×448/24 FPS plus 48 kHz stereo audio; full post-fix live acceptance remains pending |
-| Direct Cloud free-tier generation | Pending authenticated live acceptance; missing allowance fails closed |
+| Real Draw Things model generation | Local H3 FL2VA: 124 frames at 768×448/24 FPS plus 32 kHz stereo audio; LTX 2.3 Cloud: 81 frames at 768×448/25 FPS plus 48 kHz stereo audio |
+| Direct Cloud free-tier generation | Saved-key verification, free-allowance check, Prepare and Generate completed in Studio with PAYG disabled; unknown allowance still fails closed |
 | DT+ App Bridge generation | Unavailable pending verifiable billing policy |
 
 Fixture tests establish software behavior, not output quality or a promise that a particular remote

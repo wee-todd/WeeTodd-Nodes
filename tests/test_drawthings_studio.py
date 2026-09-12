@@ -38,6 +38,53 @@ def project():
     }
 
 
+def test_h3_first_last_uses_actual_rounded_endpoint_and_preserves_images(tmp_path):
+    value = project()
+    clip = value["clips"][0]
+    clip["drawThings"].update(modelID="minimax_h3_i8x.ckpt", modelFamily="minimaxH3")
+    clip["generationSelection"] = {"task": "fflf", "preset": "custom"}
+    clip["attachments"] = [{"role": role, "assetID": role} for role in ("last", "first")]
+    assets = []
+    for role in ("first", "last"):
+        image = tmp_path / f"{role}.png"
+        image.write_bytes(role.encode())
+        assets.append({"id": role, "kind": "image", "path": str(image)})
+    result = compose_drawthings_request(value, "clip-uuid", assets)
+    assert result["configuration"]["numFrames"] == 124
+    assert result["configuration"]["fps"] == 24
+    assert [(item["role"], item["frameIndex"]) for item in result["inputs"]] == [
+        ("first", 0), ("last", 123)
+    ]
+    assert result["inputs"][1]["sha256"] == hashlib.sha256(b"last").hexdigest()
+    from wee_todd_remote.conditioning import validate_canonical_inputs
+
+    validate_canonical_inputs(result)
+
+
+def test_h3_rejects_ltx_timing_and_ltx_rejects_last_frame(tmp_path):
+    value = project()
+    clip = value["clips"][0]
+    clip["drawThings"].update(modelID="minimax_h3_i8x.ckpt", modelFamily="minimaxH3")
+    for settings in ({"fps": 25}, {"fps": 24, "numFrames": 121}):
+        clip["drawThings"]["configuration"] = settings
+        with pytest.raises(ValueError, match="H3"):
+            compose_drawthings_request(value, "clip-uuid", [])
+    value = project()
+    value["clips"][0]["attachments"] = [{"role": "first"}, {"role": "last"}]
+    with pytest.raises(ValueError, match="last.*H3|H3.*last"):
+        compose_drawthings_request(value, "clip-uuid", [])
+
+
+def test_endpoint_duration_preserves_rounded_last_frame_without_changing_other_tasks():
+    from wee_todd_remote.studio import endpoint_duration
+
+    request = {"inputs": [{"role": "first"}, {"role": "last"}],
+               "configuration": {"numFrames": 124, "fps": 24}}
+    assert endpoint_duration(request) == pytest.approx(124 / 24)
+    request["inputs"] = [{"role": "first"}]
+    assert endpoint_duration(request) is None
+
+
 def test_compose_builds_video_request_with_ltx_frame_clock():
     result = compose_drawthings_request(project(), "clip-uuid", [], request_id="request-1")
     assert result["operation"] == "video"

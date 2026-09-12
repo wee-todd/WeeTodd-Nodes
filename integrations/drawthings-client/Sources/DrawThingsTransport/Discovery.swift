@@ -28,6 +28,12 @@ public enum Discovery {
         failure = success ? .authenticationRequired : .connectionFailed
         return
       }
+      // Server model definitions are process-local. Never export their account/config fields.
+      // The endpoint must list the actual file; remote API models are outside this transport.
+      for model in resources.models where resources.files.contains(model.file)
+        && model.remoteApiModelConfig == nil {
+        ModelZoo.overrideMapping[model.file] = model
+      }
       // Whitelist fields: model metadata can also include third-party API credentials.
       var value: [String: Any] = [
         "authenticated": true, "serverIdentifier": String(serverID),
@@ -58,18 +64,39 @@ public enum Discovery {
       throw TransportError.connectionFailed
     }
     lock.lock()
-    defer { lock.unlock() }
-    guard var result else { throw failure }
+    let snapshot = result
+    let discoveryFailure = failure
+    lock.unlock()
+    guard var result = snapshot else { throw discoveryFailure }
+    if route != "grpc", result["thresholds"] == nil {
+      let ready = DispatchSemaphore(value: 0)
+      let limitsLock = NSLock()
+      var limits: ImageGenerationClientWrapper.LabHours?
+      client.hours { value in
+        limitsLock.lock(); limits = value; limitsLock.unlock(); ready.signal()
+      }
+      if ready.wait(timeout: .now() + 10) == .success {
+        limitsLock.lock(); let value = limits; limitsLock.unlock()
+        if let value {
+          result["thresholds"] = ["community": value.community, "plus": value.plus,
+            "expiresAt": value.expireAt.timeIntervalSince1970]
+        }
+      }
+    }
     if route == "dtCloud" && inspectAccount {
-      if let key = credentials?["apiKey"], let thresholds = result["thresholds"] as? [String: Any] {
+      if let key = credentials?["apiKey"] {
         do {
-          result["account"] = try CloudSession(apiKey: key).inspect(thresholds: thresholds,
+          result["account"] = try CloudSession(apiKey: key).inspect(thresholds: result["thresholds"] as? [String: Any] ?? [:],
             now: Date().timeIntervalSince1970)
         } catch {
           result["account"] = ["limitMode": "cloud",
             "routeVerified": false, "billingRoute": "unknown",
             "reason": "Free allowance could not be verified. Check the API key, available free requests, and PAYG setting in the Draw Things dashboard."]
         }
+      } else {
+        result["account"] = ["limitMode": "cloud", "authenticated": false,
+          "routeVerified": false, "billingRoute": "unknown",
+          "reason": "No saved API key was available to this connection. Save its API key in Draw Things Connections."]
       }
     }
     return result

@@ -23,6 +23,9 @@ fingerprinting and submission.
 ``billingRoute`` (free/paid/boost/unknown), and ``routeVerified``. CU is an
 estimate for this request; ``limitCU`` is the verified per-job boundary. No
 monthly quota, balance, entitlement, or production default limit is inferred.
+For direct cloud only, a verified ``limitEnforcement: server`` account can omit
+the numerical CU limit when PAYG is explicitly disabled and a positive monthly
+free allowance is present. Generation still requires fresh provider authorization.
 """
 
 from __future__ import annotations
@@ -364,8 +367,22 @@ def prepare(
             _issue("policyExpired", "account.policyExpiresAt", "account policy has expired")
         )
     limit = account.get("limitCU")
+    if isinstance(account.get("reason"), str):
+        result["accountMessage"] = account["reason"]
+    quota = account.get("monthlyQuota")
+    remaining = quota.get("remainingRequests") if isinstance(quota, dict) else None
+    server_limit = (
+        limit is None
+        and capabilities.get("route") == "dtCloud"
+        and capabilities.get("executionMode") == "cloud"
+        and account.get("limitEnforcement") == "server"
+        and account.get("paygEnabled") is False
+        and _number(remaining) and remaining > 0 and remaining == int(remaining)
+    )
     if _nonnegative_number(limit):
         result["limitCU"] = limit
+    elif server_limit:
+        result["limitEnforcement"] = "server"
     else:
         result["issues"].append(
             _issue(
@@ -404,7 +421,10 @@ def prepare(
         result["estimateSource"] = estimate["estimatorRevision"]
     if result["eligibility"] == "blocked":
         return result
-    if not result["issues"] and result["estimateCU"] is not None and result["limitCU"] is not None:
+    if not result["issues"] and result["estimateCU"] is not None and server_limit:
+        result["eligibility"] = "allowed"
+    elif (not result["issues"] and result["estimateCU"] is not None
+          and result["limitCU"] is not None):
         result["eligibility"] = "allowed" if result["estimateCU"] < result["limitCU"] else "blocked"
         if result["eligibility"] == "blocked":
             result["issues"].append(

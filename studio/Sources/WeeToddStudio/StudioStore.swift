@@ -358,7 +358,7 @@ extension Encodable {
     if engine != .movie && engine != .drawThings { c.generationSelection = GenerationSelection() }
     if engine == .drawThings {
       c.drawThings = DrawThingsSelection(profileID: drawThingsConnections.first?.id ?? "",
-        modelID: "", modelFamily: "", configuration: ["steps": .integer(8)])
+        modelID: "", modelFamily: "")
     }
     change { $0.clips.append(c) }
     select(c.id)

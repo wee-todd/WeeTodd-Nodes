@@ -2,20 +2,28 @@ import CoreGraphics
 import CryptoKit
 import DataModels
 import Foundation
+import GRPCImageServiceModels
 import ImageIO
 import NNC
 
 enum Conditioning {
   static func inputs(_ request: [String: Any]) throws -> [[String: Any]] {
     guard let inputs = request["inputs"] as? [[String: Any]] ?? (request["inputs"] == nil ? [] : nil),
-      inputs.count <= 1 else { throw TransportError.unsupportedConditioning }
+      inputs.count <= 2 else { throw TransportError.unsupportedConditioning }
+    let roles = inputs.compactMap { $0["role"] as? String }
+    guard inputs.isEmpty || roles == ["first"] || roles == ["first", "last"] else {
+      throw TransportError.unsupportedConditioning
+    }
     for input in inputs {
+      let isLast = input["role"] as? String == "last"
+      let index = isLast ? try Configuration.number(
+        (request["configuration"] as? [String: Any])?["numFrames"], min: 2, max: 100000, integer: true) - 1 : 0
       guard request["operation"] as? String == "video",
         Set(input.keys) == ["role", "path", "sha256", "frameIndex", "strength"],
-        input["role"] as? String == "first", let path = input["path"] as? String, path.hasPrefix("/"),
+        let path = input["path"] as? String, path.hasPrefix("/"),
         let digest = input["sha256"] as? String, digest.count == 64,
         digest.allSatisfy({ "0123456789abcdef".contains($0) }),
-        try Configuration.number(input["frameIndex"], min: 0, max: 0, integer: true) == 0,
+        try Configuration.number(input["frameIndex"], min: index, max: index, integer: true) == index,
         try Configuration.number(input["strength"], min: 1, max: 1) == 1 else {
         throw TransportError.unsupportedConditioning
       }
@@ -49,6 +57,25 @@ enum Conditioning {
 
   static func image(_ request: [String: Any], width: Int, height: Int) throws -> Data? {
     guard let input = try inputs(request).first else { return nil }
+    return try encodeImage(input, width: width, height: height)
+  }
+
+  static func apply(_ request: [String: Any], to payload: inout ImageGenerationRequest,
+                    width: Int, height: Int) throws {
+    let values = try inputs(request)
+    if let first = values.first {
+      payload.image = try encodeImage(first, width: width, height: height)
+    }
+    if values.count == 2 {
+      let data = try encodeImage(values[1], width: width, height: height)
+      payload.hints = [HintProto.with {
+        $0.hintType = "shuffle"
+        $0.tensors = [TensorAndWeight.with { $0.tensor = data; $0.weight = 1 }]
+      }]
+    }
+  }
+
+  private static func encodeImage(_ input: [String: Any], width: Int, height: Int) throws -> Data {
     let url = URL(fileURLWithPath: input["path"] as! String)
     let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
     guard let size = attributes[.size] as? NSNumber, size.intValue > 0, size.intValue <= 64 * 1024 * 1024 else {

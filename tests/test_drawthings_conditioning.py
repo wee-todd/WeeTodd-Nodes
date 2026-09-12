@@ -3,7 +3,11 @@ import math
 
 import pytest
 
-from wee_todd_remote.conditioning import canonical_inputs, canonical_loras
+from wee_todd_remote.conditioning import (
+    canonical_inputs,
+    canonical_loras,
+    validate_canonical_inputs,
+)
 
 
 def test_first_frame_resolves_absolute_image_and_hashes_exact_bytes(tmp_path):
@@ -32,6 +36,26 @@ def test_first_frame_hash_changes_when_file_contents_change(tmp_path):
     before = canonical_inputs(attachments, assets)
     image.write_bytes(b"after")
     assert canonical_inputs(attachments, assets)[0]["sha256"] != before[0]["sha256"]
+
+
+def test_h3_endpoint_files_are_both_checked_before_submission(tmp_path):
+    images = [tmp_path / "first.png", tmp_path / "last.png"]
+    for image in images:
+        image.write_bytes(image.name.encode())
+    inputs = canonical_inputs(
+        [{"role": role, "assetID": role} for role in ("first", "last")],
+        [{"id": role, "kind": "image", "path": str(image)}
+         for role, image in zip(("first", "last"), images, strict=True)],
+        model_family="minimaxH3", num_frames=124,
+    )
+    request = {"operation": "video",
+               "configuration": {"numFrames": 124}, "inputs": inputs}
+    validate_canonical_inputs(request)
+    with pytest.raises(ValueError, match="final frame"):
+        validate_canonical_inputs({**request, "configuration": {"numFrames": 141}})
+    images[1].write_bytes(b"changed after prepare")
+    with pytest.raises(ValueError, match="hash"):
+        validate_canonical_inputs(request)
 
 
 @pytest.mark.parametrize(

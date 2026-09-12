@@ -150,12 +150,15 @@ struct AssetBrowser: View {
     if asset.kind == .image {
       Button("First frame · Image to video") { store.useAsset(asset, role: .first) }
       Button("Last frame") { store.useAsset(asset, role: .last) }
+        .disabled(store.selectedClip?.engine == .drawThings
+                  && store.selectedClip?.drawThings?.modelFamily.lowercased() != "minimaxh3")
+        .help("Draw Things last-frame conditioning requires an H3 FL2VA model.")
       Button("Keyframe at playhead") {
         store.useAsset(asset, role: .keyframe, time: store.playhead)
-      }
+      }.disabled(store.selectedClip?.engine == .drawThings)
       Button(store.selectedClip?.engine == .ltx25 ? "MSR reference · dedicated adapter" : "Reference") {
         store.useAsset(asset, role: .reference)
-      }
+      }.disabled(store.selectedClip?.engine == .drawThings)
       if store.selectedClip?.engine == .ltx25 {
         Button("Ingredients reference sheet · IC-LoRA") {
           store.useAsset(asset, role: .control)

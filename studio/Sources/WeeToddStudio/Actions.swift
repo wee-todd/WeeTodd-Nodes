@@ -98,18 +98,7 @@ enum ClipState: String {
       if !FileManager.default.isExecutableFile(atPath: runtime.drawThingsHelperPath ?? "") {
         result.append("Connect the Draw Things transport helper")
       }
-      let first = clip.attachments.filter { $0.role == .first }
-      let unsupported = clip.attachments.filter { $0.role != .first }
-      if first.count > 1 { result.append("Use only one Draw Things first-frame image") }
-      if !unsupported.isEmpty { result.append("Remove unsupported Draw Things attachment roles") }
-      if let attachment = first.first {
-        guard let asset = allAssets.first(where: { $0.id == attachment.assetID }) else {
-          result.append("Relink the Draw Things first-frame image"); return Array(Set(result)).sorted()
-        }
-        if asset.kind != .image { result.append("Use an image for the Draw Things first frame") }
-        if !FileManager.default.fileExists(atPath: asset.path) { result.append("Relink the Draw Things first-frame image") }
-        if attachment.strength != 1 { result.append("Set Draw Things first-frame strength to 1") }
-      }
+      result.append(contentsOf: clip.drawThingsConditioningIssues(assets: allAssets))
       if !(clip.extensionDirection).isEmpty { result.append("Remove native clip extension settings") }
       if clip.motionFidelity?.enabled == true { result.append("Disable native Motion Fidelity for this Draw Things clip") }
       if let estimate = drawThingsClipEstimates[clip.id],

@@ -190,6 +190,9 @@ public struct Clip: Codable, Identifiable, Equatable {
     if attachments.contains(where: { $0.role == .control }) { return "control" }
     if attachments.contains(where: { $0.role == .audioDriver }) { return "a2v" }
     if attachments.contains(where: { $0.role == .reference }) { return "ref2va" }
+    if engine == .drawThings, attachments.count == 1, attachments.first?.role == .first {
+      return "i2v"
+    }
     if attachments.contains(where: { [.first, .last, .keyframe].contains($0.role) }) {
       return "fflf"
     }

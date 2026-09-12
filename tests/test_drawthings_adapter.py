@@ -420,3 +420,15 @@ def test_self_hosted_keeps_estimate_visible_without_a_cloud_limit():
     assert result["limitCU"] is None
     assert result["estimateCU"] == 2
     assert result["estimateSource"] == "estimate-r1"
+def test_h3_audio_shift_survives_estimate_configuration_adoption():
+    from wee_todd_remote.adapter import DrawThingsAdapter
+
+    request = {"schema": "weetodd-drawthings-request-v1", "requestID": "h3-clock",
+               "operation": "video", "profileID": "local", "modelID": "h3",
+               "prompt": "A warrior moves",
+               "negativePrompt": "", "configuration": {"width": 512, "height": 512,
+               "steps": 19, "seed": 42, "numFrames": 124, "fps": 24, "audioShift": 3},
+               "inputs": [], "loras": [], "billingPolicy": "freeOnly"}
+    result = DrawThingsAdapter._adopt_estimate_configuration(request, request["configuration"])
+    assert result is not None
+    assert result["configuration"]["audioShift"] == 3

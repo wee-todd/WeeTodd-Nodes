@@ -10,7 +10,6 @@ public enum Generation {
   // Authorization is resolved before submission; a failed call is never automatically retried.
   public static func run(_ request: [String: Any], authorize: (Data) throws -> String?,
                          progress: @escaping ([String: Any]) -> Void) throws -> [String: Any] {
-    let configuration = try Configuration.resolve(request)
     guard let id = request["requestID"] as? String, !id.isEmpty,
       let prompt = request["prompt"] as? String,
       let outputPath = request["outputDirectory"] as? String, outputPath.hasPrefix("/"),
@@ -20,6 +19,8 @@ public enum Generation {
       let useTLS = profile["useTLS"] as? Bool else { throw TransportError.invalidRequest }
     let port = Int(try Configuration.number(profile["port"], min: 1, max: 65535, integer: true))
     let secret = (request["credentials"] as? [String: String])?["sharedSecret"]
+    let catalog = try Discovery.fetch(request, inspectAccount: false)
+    let configuration = try Configuration.resolve(request)
     var payload = ImageGenerationRequest()
     payload.prompt = prompt
     payload.negativePrompt = request["negativePrompt"] as? String ?? ""
@@ -27,14 +28,11 @@ public enum Generation {
     payload.scaleFactor = 1; payload.chunked = true; payload.device = .laptop
     payload.user = "WeeTodd Studio"
     if let secret { payload.sharedSecret = secret }
-    let catalog = try Discovery.fetch(request, inspectAccount: false)
     guard let files = catalog["files"] as? [String],
       files.contains(configuration.model ?? "") else { throw TransportError.unsupportedModel }
     try Conditioning.validateAvailability(request, catalog: catalog)
-    if let image = try Conditioning.image(request, width: Int(configuration.startWidth) * 64,
-      height: Int(configuration.startHeight) * 64) {
-      payload.image = image
-    }
+    try Conditioning.apply(request, to: &payload, width: Int(configuration.startWidth) * 64,
+                           height: Int(configuration.startHeight) * 64)
     let client = ImageGenerationClientWrapper(deviceName: "WeeTodd Studio")
     try client.connect(host: host, port: port, TLS: useTLS, hostnameVerification: useTLS,
                        sharedSecret: secret)
@@ -46,7 +44,8 @@ public enum Generation {
       expectedFrames: operation == "video" ? Int(configuration.numFrames) : 1,
       fps: operation == "video" ? Int(configuration.fpsId) : 1,
       sampleRate: requiresAudio ? ModelZoo.audioSampleRateForModel(configuration.model ?? "") : 0,
-      requiresAudio: requiresAudio, ltxAudio: requiresAudio)
+      requiresAudio: requiresAudio,
+      ltxAudio: [.ltx2, .ltx2_3].contains(ModelZoo.versionForModel(configuration.model ?? "")))
     let stream = TensorStream(writer: writer)
     // All local, inventory and connection checks precede any quota reservation.
     // From this marker onward cancellation may leave a reserved/submitted request.

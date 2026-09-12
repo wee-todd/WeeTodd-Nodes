@@ -213,7 +213,7 @@ class DrawThingsAdapter:
             "sampler",
         }
         if canonical["operation"] == "video":
-            allowed.update({"numFrames", "fps"})
+            allowed.update({"numFrames", "fps", "audioShift"})
         if any(not isinstance(key, str) or key not in allowed for key in configuration):
             return None
         explicit = canonical["configuration"]

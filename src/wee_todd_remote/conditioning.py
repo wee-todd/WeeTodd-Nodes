@@ -16,13 +16,30 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def canonical_inputs(attachments: Any, assets: Any) -> list[dict[str, Any]]:
+def canonical_inputs(
+    attachments: Any, assets: Any, *, model_family: str = "", num_frames: int | None = None
+) -> list[dict[str, Any]]:
     if not isinstance(attachments, list):
         raise ValueError("Draw Things attachments must be an array")
     if not isinstance(assets, list):
         raise ValueError("Draw Things assets must be an array")
     if not attachments:
         return []
+    if any(isinstance(item, dict) and item.get("role") == "last" for item in attachments):
+        if model_family.lower() != "minimaxh3":
+            raise ValueError("Draw Things last-frame attachments require an H3 FL2VA model")
+        roles = [item.get("role") if isinstance(item, dict) else None for item in attachments]
+        if sorted(str(role) for role in roles) != ["first", "last"]:
+            raise ValueError("Draw Things requires exactly one first and one last attachment")
+        if isinstance(num_frames, bool) or not isinstance(num_frames, int) or num_frames < 2:
+            raise ValueError("Draw Things last-frame input requires a resolved video frame count")
+        result = []
+        for role in ("first", "last"):
+            attachment = next(item for item in attachments if item["role"] == role)
+            item = canonical_inputs([{**attachment, "role": "first"}], assets)[0]
+            item.update(role=role, frameIndex=0 if role == "first" else num_frames - 1)
+            result.append(item)
+        return result
     unsupported = [
         item.get("role")
         for item in attachments
@@ -100,9 +117,26 @@ def canonical_loras(loras: Any) -> list[dict[str, Any]]:
 
 def validate_canonical_inputs(request: dict[str, Any]) -> None:
     inputs = request.get("inputs", [])
-    if not isinstance(inputs, list) or len(inputs) > 1:
-        raise ValueError("Draw Things supports at most one first-frame input")
+    if not isinstance(inputs, list) or len(inputs) > 2:
+        raise ValueError("Draw Things supports one first-frame input and an optional H3 last frame")
     if not inputs:
+        return
+    if len(inputs) == 2:
+        frames = request.get("configuration", {}).get("numFrames")
+        if (
+            isinstance(frames, bool) or not isinstance(frames, int) or frames < 2
+            or not all(isinstance(item, dict) for item in inputs)
+            or [item.get("role") for item in inputs] != ["first", "last"]
+            or isinstance(inputs[1].get("frameIndex"), bool)
+            or inputs[1].get("frameIndex") != frames - 1
+        ):
+            raise ValueError(
+                "Draw Things first/last inputs require the resolved final frame"
+            )
+        for index, item in enumerate(inputs):
+            validate_canonical_inputs({**request, "inputs": [
+                item if index == 0 else {**item, "role": "first", "frameIndex": 0}
+            ]})
         return
     if request.get("operation") != "video":
         raise ValueError("Draw Things first-frame input is supported only for video")

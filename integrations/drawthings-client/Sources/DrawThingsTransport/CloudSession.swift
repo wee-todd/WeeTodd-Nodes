@@ -58,6 +58,13 @@ final class CloudSession {
   // Read-only inspection never reserves a generation and never changes billing settings.
   func inspect(thresholds: [String: Any], now: Double) throws -> [String: Any] {
     guard now.isFinite else { throw TransportError.invalidRequest }
+    if thresholds.isEmpty {
+      let quota = try freeQuota(token: login(), now: now)
+      return ["authenticated": true, "routeVerified": true, "billingRoute": "free",
+        "limitMode": "cloud", "limitEnforcement": "server", "policyExpiresAt": now + 30,
+        "monthlyQuota": quota, "paygEnabled": false,
+        "reason": "API key and free allowance verified. Draw Things does not publish a CU limit; it authorizes this request when you generate."]
+    }
     let expires = try Configuration.number(thresholds["expiresAt"], min: now, max: Double.greatestFiniteMagnitude)
     let community = try Configuration.number(thresholds["community"], min: 0, max: Double.greatestFiniteMagnitude)
     let plus = try Configuration.number(thresholds["plus"], min: 0, max: Double.greatestFiniteMagnitude)
@@ -72,10 +79,14 @@ final class CloudSession {
   func authorize(blob: Data, estimatedCU: Double, thresholds: [String: Any], now: Double) throws -> Authorization {
     guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
       now.isFinite, estimatedCU.isFinite, estimatedCU >= 0 else { throw TransportError.invalidRequest }
-    let expires = try Configuration.number(thresholds["expiresAt"], min: 0, max: Double.greatestFiniteMagnitude)
-    let community = try Configuration.number(thresholds["community"], min: 0, max: Double.greatestFiniteMagnitude)
-    let plus = try Configuration.number(thresholds["plus"], min: 0, max: Double.greatestFiniteMagnitude)
-    guard expires > now, estimatedCU < min(community, plus) else { throw TransportError.billingUnverified }
+    var published: (expires: Double, community: Double, plus: Double)?
+    if !thresholds.isEmpty {
+      let expires = try Configuration.number(thresholds["expiresAt"], min: 0, max: Double.greatestFiniteMagnitude)
+      let community = try Configuration.number(thresholds["community"], min: 0, max: Double.greatestFiniteMagnitude)
+      let plus = try Configuration.number(thresholds["plus"], min: 0, max: Double.greatestFiniteMagnitude)
+      guard expires > now, estimatedCU < min(community, plus) else { throw TransportError.billingUnverified }
+      published = (expires, community, plus)
+    }
     let shortToken = try login()
     _ = try freeQuota(token: shortToken, now: now)
     // Authorize only when Generate was explicitly requested. /authenticate may reserve a request.
@@ -99,12 +110,19 @@ final class CloudSession {
     if let amount = claims["amount"], !(amount is NSNull) {
       guard try Configuration.number(amount, min: 0, max: 0) == 0 else { throw TransportError.billingUnverified }
     }
-    let limit = userClass == "plus" ? plus : community
-    guard estimatedCU < limit else { throw TransportError.billingUnverified }
-    return Authorization(token: token, account: [
+    var account: [String: Any] = [
       "authenticated": true, "routeVerified": true, "billingRoute": "free",
-      "limitMode": "cloud", "limitCU": limit, "policyExpiresAt": min(expires, expiry)
-    ])
+      "limitMode": "cloud", "policyExpiresAt": expiry
+    ]
+    if let published {
+      let limit = userClass == "plus" ? published.plus : published.community
+      guard estimatedCU < limit else { throw TransportError.billingUnverified }
+      account["limitCU"] = limit
+      account["policyExpiresAt"] = min(published.expires, expiry)
+    } else {
+      account["limitEnforcement"] = "server"
+    }
+    return Authorization(token: token, account: account)
   }
 
   private static func claims(_ token: String) throws -> [String: Any] {

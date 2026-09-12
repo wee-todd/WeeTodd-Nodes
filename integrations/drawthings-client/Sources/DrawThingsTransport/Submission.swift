@@ -13,11 +13,11 @@ public enum Submission {
     case "dtCloud":
       let catalog = try Discovery.fetch(request, inspectAccount: false)
       let estimate = try ComputeEstimate.evaluate(request)
-      guard let thresholds = catalog["thresholds"] as? [String: Any],
-        let cu = estimate["cu"] as? NSNumber,
+      guard let cu = estimate["cu"] as? NSNumber,
         let apiKey = (request["credentials"] as? [String: String])?["apiKey"] else {
         throw TransportError.authenticationRequired
       }
+      let thresholds = catalog["thresholds"] as? [String: Any] ?? [:]
       let session = CloudSession(apiKey: apiKey)
       return try Generation.run(request, authorize: { blob in
         let auth = try session.authorize(blob: blob, estimatedCU: cu.doubleValue,

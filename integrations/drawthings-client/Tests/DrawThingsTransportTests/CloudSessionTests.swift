@@ -5,6 +5,20 @@ import XCTest
 final class CloudSessionTests: XCTestCase {
   let free: [String: Any] = ["paygEnabled": false,
     "freeQuota": ["limitRequests": 20, "usedRequests": 1, "remainingRequests": 19, "monthKey": "1970-01"]]
+  func testMissingLimitsStillChecksSavedKeyAndFreeAllowance() throws {
+    var paths: [String] = []
+    let session = CloudSession(apiKey: "fixture-key", send: { request in
+      paths.append(request.url!.path)
+      return request.url!.path == "/sdk/token" ? ["shortTermToken": "fixture-secret"] : self.free
+    })
+    let account = try session.inspect(thresholds: [:], now: 100)
+    XCTAssertEqual(paths, ["/sdk/token", "/billing/stripe/payg"])
+    XCTAssertEqual(account["authenticated"] as? Bool, true)
+    XCTAssertEqual(account["billingRoute"] as? String, "free")
+    XCTAssertNil(account["limitCU"])
+    XCTAssertEqual(account["limitEnforcement"] as? String, "server")
+    XCTAssertNotNil(account["reason"])
+  }
   func testInspectionIsReadOnlyAndDoesNotExposeTokens() throws {
     var calls: [URLRequest] = []
     let session = CloudSession(apiKey: "fixture-key", send: { request in
@@ -85,13 +99,37 @@ final class CloudSessionTests: XCTestCase {
     }
   }
   func testMissingExpiredOrInsufficientPolicyFailsBeforeAuthenticationReservation() throws {
-    for thresholds: [String: Any] in [[:], ["community": 208, "plus": 40000, "expiresAt": 200], ["community": 208, "plus": 208, "expiresAt": 200],
+    for thresholds: [String: Any] in [["community": 208], ["community": 208, "plus": 40000, "expiresAt": 200], ["community": 208, "plus": 208, "expiresAt": 200],
       ["community": 10000, "plus": 40000, "expiresAt": 99]] {
       var calls = 0
       let session = CloudSession(apiKey: "fixture", send: { _ in calls += 1; return [:] })
       XCTAssertThrowsError(try session.authorize(blob: Data(), estimatedCU: 208,
         thresholds: thresholds, now: 100))
       XCTAssertEqual(calls, 0)
+    }
+  }
+  func testServerAuthorizationWithoutPublishedLimitsStillRequiresFreeIssuedClaims() throws {
+    for paid in [false, true] {
+      var paths: [String] = []
+      var claims: [String: Any] = ["userClass": "community", "fromBridge": true, "exp": 300]
+      if paid { claims["consumableType"] = "payg" }
+      let jwt = try token(claims)
+      let session = CloudSession(apiKey: "fixture-key", send: { request in
+        paths.append(request.url!.path)
+        if request.url!.path == "/sdk/token" { return ["shortTermToken": "fixture-session"] }
+        if request.url!.path == "/billing/stripe/payg" { return self.free }
+        let body = try JSONSerialization.jsonObject(with: request.httpBody!) as! [String: Any]
+        XCTAssertNil(body["consumableType"]); XCTAssertNil(body["amount"])
+        return ["gRPCToken": jwt]
+      })
+      if paid {
+        XCTAssertThrowsError(try session.authorize(blob: Data(), estimatedCU: 2356, thresholds: [:], now: 100))
+      } else {
+        let result = try session.authorize(blob: Data(), estimatedCU: 2356, thresholds: [:], now: 100)
+        XCTAssertEqual(result.account["limitEnforcement"] as? String, "server")
+        XCTAssertNil(result.account["limitCU"])
+      }
+      XCTAssertEqual(paths, ["/sdk/token", "/billing/stripe/payg", "/authenticate"])
     }
   }
 }
