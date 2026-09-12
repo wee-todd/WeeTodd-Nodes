@@ -16,6 +16,22 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def validate_endpoint_roles(attachments: list[Any]) -> None:
+    roles = [item.get("role") if isinstance(item, dict) else None for item in attachments]
+    conflicts = [str(role) for role in roles if role not in {"first", "last"}]
+    if conflicts:
+        raise ValueError(
+            "Draw Things First/last frames has unsupported attachment roles: "
+            + ", ".join(conflicts)
+            + ". Remove those generation attachments; their media can stay in Clip Assets."
+        )
+    if sorted(roles) != ["first", "last"]:
+        raise ValueError(
+            "Draw Things First/last frames requires exactly one first and one last image "
+            f"(found {roles.count('first')} first, {roles.count('last')} last)"
+        )
+
+
 def canonical_inputs(
     attachments: Any, assets: Any, *, model_family: str = "", num_frames: int | None = None
 ) -> list[dict[str, Any]]:
@@ -28,9 +44,7 @@ def canonical_inputs(
     if any(isinstance(item, dict) and item.get("role") == "last" for item in attachments):
         if model_family.lower() != "minimaxh3":
             raise ValueError("Draw Things last-frame attachments require an H3 FL2VA model")
-        roles = [item.get("role") if isinstance(item, dict) else None for item in attachments]
-        if sorted(str(role) for role in roles) != ["first", "last"]:
-            raise ValueError("Draw Things requires exactly one first and one last attachment")
+        validate_endpoint_roles(attachments)
         if isinstance(num_frames, bool) or not isinstance(num_frames, int) or num_frames < 2:
             raise ValueError("Draw Things last-frame input requires a resolved video frame count")
         result = []
@@ -117,6 +131,42 @@ def canonical_loras(loras: Any) -> list[dict[str, Any]]:
 
 def validate_canonical_inputs(request: dict[str, Any]) -> None:
     inputs = request.get("inputs", [])
+    if request.get("operation") == "image":
+        if not isinstance(inputs, list) or len(inputs) > 9:
+            raise ValueError("Use one canvas image and up to eight moodboard images")
+        canvas_count = 0
+        moodboard_count = 0
+        for index, item in enumerate(inputs):
+            keys = {"role", "path", "sha256", "strength", "fit"}
+            if not isinstance(item, dict) or set(item) != keys:
+                raise ValueError("Invalid Draw Things image input")
+            role = item["role"]
+            if role == "canvas":
+                canvas_count += 1
+                if index != 0 or canvas_count > 1:
+                    raise ValueError("The canvas image must be the first and only canvas input")
+            elif role == "moodboard":
+                moodboard_count += 1
+                if moodboard_count > 8:
+                    raise ValueError("Use up to eight moodboard images")
+            else:
+                raise ValueError("Image inputs must use canvas or moodboard roles")
+            weight = item["strength"]
+            if (isinstance(weight, bool) or not isinstance(weight, (int, float))
+                    or not math.isfinite(weight) or not 0 <= weight <= 1
+                    or (role == "canvas" and weight != 1)):
+                raise ValueError("Image reference strength must be finite and in [0, 1]")
+            if item["fit"] not in ("fit", "fill"):
+                raise ValueError("Image fit must be fit or fill")
+            raw_path = item["path"]
+            if not isinstance(raw_path, str) or not Path(raw_path).is_absolute():
+                raise ValueError("Image input path must be absolute")
+            path = Path(raw_path)
+            if not path.is_file() or not 0 < path.stat().st_size <= 64 * 1024 * 1024:
+                raise ValueError("Image input must exist and be at most 64 MiB")
+            if _sha256(path) != item["sha256"]:
+                raise ValueError("Image input hash does not match the exact file")
+        return
     if not isinstance(inputs, list) or len(inputs) > 2:
         raise ValueError("Draw Things supports one first-frame input and an optional H3 last frame")
     if not inputs:

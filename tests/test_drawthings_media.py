@@ -301,8 +301,9 @@ def test_finish_video_cancels_process_group_and_removes_partial(tmp_path, callba
         """import pathlib, subprocess, sys, time
 frames = pathlib.Path(next(value for value in sys.argv if '%08d.png' in value)).parent
 child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(3)'])
-(frames / 'child.pid').write_text(str(child.pid))
+(frames / 'child.pending').write_text(str(child.pid))
 pathlib.Path(sys.argv[-1]).write_bytes(b'partial')
+(frames / 'child.pending').replace(frames / 'child.pid')
 time.sleep(3)
 """,
     )

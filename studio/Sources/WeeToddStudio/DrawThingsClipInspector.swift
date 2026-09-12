@@ -11,7 +11,12 @@ struct DrawThingsClipInspector: View {
     Binding(get: { store.selectedClip?.drawThings?[keyPath: key] ?? fallback }, set: { value in
       store.editClip {
         if $0.drawThings == nil { $0.drawThings = DrawThingsSelection(profileID: "", modelID: "", modelFamily: "") }
+        let previousProfile = $0.drawThings?.profileID
         $0.drawThings?[keyPath: key] = value
+        if previousProfile != $0.drawThings?.profileID {
+          $0.drawThings?.modelID = ""
+          $0.drawThings?.modelFamily = ""
+        }
         if let selected = $0.drawThings {
           $0.drawThings?.modelFamily = store.drawThingsModelFamily(
             profileID: selected.profileID, modelID: selected.modelID)
@@ -44,37 +49,61 @@ struct DrawThingsClipInspector: View {
       SmallLabel(text: "Draw Things")
       Picker("Task", selection: Binding(get: {
         clip.inferredTask
-      }, set: { task in store.editClip { $0.generationSelection = GenerationSelection(task: task, preset: .custom) } })) {
+      }, set: { task in store.editClip {
+        $0.generationSelection = GenerationSelection(task: task, preset: .custom)
+        if let selected = $0.drawThings,
+          store.drawThingsCatalogs[selected.profileID] != nil,
+          !store.drawThingsModels(selected.profileID, operation: "video", task: task)
+            .contains(where: { $0.id == selected.modelID }) {
+          $0.drawThings?.modelID = ""
+          $0.drawThings?.modelFamily = ""
+        }
+      } })) {
         Text("Text to video").tag("t2v")
         Text("Image to video").tag("i2v")
-        if isH3 || clip.inferredTask == "fflf" {
-          Text(isH3 ? "First and last frames" : "First and last frames · H3 only").tag("fflf")
-        }
+        Text("First and last frames").tag("fflf")
       }
-      Text("Custom server settings · connection capability is validated before generation.")
+      Text(clip.drawThings?.modelID.isEmpty != false
+        ? "Choose your task and add frame images first, then select a connection and model. First and last frames requires H3 FL2VA."
+        : clip.inferredTask == "fflf" && !isH3
+          ? "Select an H3 FL2VA model for this task. Your frame images are preserved."
+          : "Custom server settings · connection capability is validated before generation.")
         .font(.caption2).foregroundStyle(.secondary)
+      let connections = store.drawThingsConnections(for: clip.inferredTask)
       Picker("Connection", selection: selection(\.profileID, fallback: "")) {
         Text("Choose a connection").tag("")
-        ForEach(store.drawThingsConnections) { Text($0.name).tag($0.id) }
+        if let saved = store.drawThingsConnections.first(where: { $0.id == clip.drawThings?.profileID }),
+          !connections.contains(where: { $0.id == saved.id }) {
+          Text("\(saved.name) · no models for this task").tag(saved.id).disabled(true)
+        }
+        ForEach(connections) { connection in
+          Text(connection.name + (store.drawThingsCatalogs[connection.id] == nil ? " · refresh to verify" : ""))
+            .tag(connection.id)
+        }
       }
       HStack {
         Button("Connections…") { store.showDrawThings = true }
+        Button("Import Config…") { store.configImportClipID = clip.id; store.showDrawThingsConfigImport = true }
         Button("Refresh") {
           if let connection = store.drawThingsConnections.first(where: { $0.id == clip.drawThings?.profileID }) {
             Task { await store.testDrawThings(connection) }
           }
         }.disabled(store.bridge.busy)
       }.font(.caption)
-      let models = store.drawThingsModels(clip.drawThings?.profileID ?? "", operation: "video")
+      let models = store.drawThingsModels(clip.drawThings?.profileID ?? "", operation: "video", task: clip.inferredTask)
       Picker("Model", selection: selection(\.modelID, fallback: "")) {
         Text("Choose a video model").tag("")
         if let savedModelID = clip.drawThings?.modelID, !savedModelID.isEmpty,
           !models.contains(where: { $0.id == savedModelID }) {
-          Text("\(savedModelID) (\(hasCatalog ? "unavailable for this connection" : "saved · connect to verify"))").tag(savedModelID)
+          Text("\(savedModelID) (\(hasCatalog ? "unavailable for this task/connection" : "saved · connect to verify"))").tag(savedModelID).disabled(true)
         }
         ForEach(models, id: \.id) {
           Text($0.name).tag($0.id)
         }
+      }
+      if hasCatalog && models.isEmpty {
+        Text("This connection advertises no models for the selected task. Choose another connection or Refresh after installing a compatible model.")
+          .font(.caption2).foregroundStyle(.orange)
       }
       HStack {
         Text("Steps")

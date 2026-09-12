@@ -30,13 +30,21 @@ transport has also completed a local H3 first/last-frame render. Live Studio Clo
 verified a saved API key and free allowance, then generated an LTX 2.3 clip with video and stereo
 audio; broader model qualification remains open.
 The pinned remote SDK supports selected image models, LTX 2/2.3 first-frame video, and discovered
-H3 FL2VA models with first/last-frame inputs. Assign images using **Use in clip → First frame / Last
-frame**; Studio sends H3's canvas and mood-board inputs directly. H3 uses 24 FPS with editable steps,
+H3 FL2VA models with first/last-frame inputs. Drop images onto the timeline's **First Frame / Last
+Frame** slots, or use **Use in clip**; Studio sends H3's canvas and mood-board inputs directly.
+Choose **Engine → Task → Connection → Model → LoRAs / Groups**, with supported tasks available
+before model selection. H3 uses 24 FPS with editable steps,
 Shift, and Audio Shift. Availability depends on the endpoint's model inventory. Native MLX H3/LTX
 engines remain separate. DT+ App Bridge generation is unavailable until its billing route can be verified.
 Imported compatible H3 Turbo LoRAs appear after **Refresh**, with editable strength and steps.
 The local four-step FL2VA test at 60% strength returned 124 frames and stereo audio; see the
 [Draw Things setup and test notes](studio/README.md#draw-things--experimental).
+
+Studio's image workspace keeps one canvas and separate mood-board thumbnails, with editable
+strengths, sampling settings and compatible LoRAs/groups. Drafts recover across restarts without
+copying linked media. **Import Config…** previews exported or pasted Draw Things JSON, identifies
+unsupported settings, and links to the [official Draw Things presets](https://github.com/drawthingsai/community-models/tree/main/configs).
+See [image and config instructions](studio/README.md#images-clips-and-loras) for tested models and limits.
 
 [WeeTodd Studio](studio/README.md) is the native Swift editor in this repository. It combines generated
 and imported clips, titles, transitions and multiple audio tracks, and exports resumable movie/clip

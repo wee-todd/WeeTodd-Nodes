@@ -30,6 +30,36 @@ def connection():
             "host": "", "port": 443, "tls": True, "credentialRef": "env:DT_TOKEN"}
 
 
+def test_image_workspace_export_preserves_ordered_linked_inputs(tmp_path):
+    import hashlib
+
+    canonical = remote_request()
+    canonical["configuration"].update(strength=0.65, sampler=18, guidanceScale=1)
+    canonical["loras"] = [{"modelID": "style", "weight": 0.4}]
+    for index, role in enumerate(("canvas", "moodboard", "moodboard")):
+        image = tmp_path / f"input-{index}.png"
+        image.write_bytes(f"fixture {index}".encode())
+        canonical["inputs"].append({
+            "role": role, "path": str(image), "fit": "fit",
+            "sha256": hashlib.sha256(image.read_bytes()).hexdigest(),
+            "strength": 1 if index == 0 else index * 0.3,
+        })
+    exported = tmp_path / "images.weetodd-job.json"
+    studio_job.export_job({
+        "project": {"name": "Images", "clips": [], "assets": [], "audio": [],
+                    "titles": [], "settings": {}},
+        "runtime": {}, "generateIDs": [], "drawThingsImageJobs": [{
+            "id": "image", "kind": "image", "request": canonical,
+            "connection": connection(), "dependsOn": [],
+        }],
+    }, exported)
+    job = json.loads(exported.read_text())
+    assert job["format"] == "weetodd-studio-job-v3"
+    assert job["remoteJobs"][0]["request"] == canonical
+    jobs_without_manifest = {k: v for k, v in job.items() if k != "manifestSHA256"}
+    assert job["manifestSHA256"] == studio_job.digest(jobs_without_manifest)
+
+
 def image_job(tmp_path, *, source=None):
     project = {"name": "Images", "clips": [], "assets": [], "audio": [],
                "titles": [], "settings": {}}
@@ -63,6 +93,18 @@ class FakeAdapter:
         image = output_directory / "image.png"
         image.write_bytes(b"tiny fixture image")
         yield {"type": "result", "value": {"media": {"imagePaths": [str(image)]}}}
+
+
+def test_preflight_counts_remote_image_generations(tmp_path, monkeypatch):
+    import studio_drawthings
+
+    calls = []
+    monkeypatch.setattr(studio_drawthings, "adapter_for", lambda _: FakeAdapter(calls))
+    report = studio_job.preflight(image_job(tmp_path), tmp_path / "preflight")
+    assert report["clips"] == 0
+    assert report["generations"] == 1
+    assert report["remoteGenerations"] == 1
+    assert calls[0][0] == "prepare"
 
 
 def test_dependency_cycle_fails_before_generation():

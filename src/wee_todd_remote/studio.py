@@ -8,7 +8,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from .conditioning import canonical_inputs, canonical_loras
+from .conditioning import canonical_inputs, canonical_loras, validate_endpoint_roles
 from .contracts import validate_request
 from .media import finish_video
 
@@ -104,11 +104,7 @@ def _validate_generation_selection(clip: dict[str, Any]) -> None:
         if roles != ["first"]:
             raise ValueError("Draw Things Image to video requires exactly one first-frame image")
     if task == "fflf":
-        roles = [item.get("role") if isinstance(item, dict) else None for item in attachments]
-        if sorted(str(role) for role in roles) != ["first", "last"]:
-            raise ValueError(
-                "Draw Things First/last frames requires exactly one first and one last image"
-            )
+        validate_endpoint_roles(attachments)
 
 
 def compose_drawthings_request(

@@ -19,7 +19,7 @@ public struct ImageGeneration: Codable, Equatable {
   }
 }
 
-public struct ImageAssetDestination: Equatable {
+public struct ImageAssetDestination: Codable, Equatable {
   public let scope: AssetScope
   public let projectID: UUID
   public let owner: UUID?

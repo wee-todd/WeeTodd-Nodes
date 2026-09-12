@@ -38,6 +38,20 @@ def project():
     }
 
 
+@pytest.mark.parametrize("explicit_task", [True, False])
+def test_first_last_reports_extra_reference_instead_of_missing_endpoints(explicit_task):
+    value = project()
+    clip = value["clips"][0]
+    clip["drawThings"].update(modelFamily="minimaxH3")
+    if explicit_task:
+        clip["generationSelection"] = {"task": "fflf", "preset": "custom"}
+    clip["attachments"] = [
+        {"role": "first"}, {"role": "last"}, {"role": "reference"}
+    ]
+    with pytest.raises(ValueError, match="unsupported.*reference.*Clip Assets"):
+        compose_drawthings_request(value, "clip-uuid", [])
+
+
 def test_h3_first_last_uses_actual_rounded_endpoint_and_preserves_images(tmp_path):
     value = project()
     clip = value["clips"][0]

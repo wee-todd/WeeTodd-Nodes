@@ -39,6 +39,20 @@ final class ConditioningTests: XCTestCase {
     XCTAssertEqual(first[0,0,0,2], -1, accuracy: 0.02)
     XCTAssertEqual(last[0,0,0,2], 1, accuracy: 0.02)
     XCTAssertEqual(last[0,0,0,0], -1, accuracy: 0.02)
+    let canvas: [String: Any] = ["role": "canvas", "path": inputs[0]["path"]!,
+      "sha256": inputs[0]["sha256"]!, "strength": 1, "fit": "fit"]
+    let reference: [String: Any] = ["role": "moodboard", "path": inputs[1]["path"]!,
+      "sha256": inputs[1]["sha256"]!, "strength": 0.35, "fit": "fit"]
+    let imageRequest: [String: Any] = ["operation": "image", "inputs": [canvas, reference, reference]]
+    var imagePayload = ImageGenerationRequest()
+    try Conditioning.apply(imageRequest, to: &imagePayload, width: 64, height: 64)
+    XCTAssertFalse(imagePayload.image.isEmpty)
+    XCTAssertEqual(imagePayload.hints[0].tensors.count, 2)
+    XCTAssertEqual(imagePayload.hints[0].tensors[0].weight, 0.35, accuracy: 0.001)
+    var boardOnly = ImageGenerationRequest()
+    try Conditioning.apply(["operation": "image", "inputs": [reference]], to: &boardOnly, width: 64, height: 64)
+    XCTAssertTrue(boardOnly.image.isEmpty)
+    XCTAssertEqual(boardOnly.hints[0].tensors.count, 1)
     try Data("stale".utf8).write(to: URL(fileURLWithPath: inputs[1]["path"] as! String))
     XCTAssertThrowsError(try Conditioning.apply(request, to: &payload, width: 64, height: 64))
   }

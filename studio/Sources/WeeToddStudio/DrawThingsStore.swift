@@ -2,28 +2,6 @@ import AppKit
 import Foundation
 import StudioCore
 
-struct DrawThingsImageDraft: Equatable {
-  var destination: ImageAssetDestination
-  var name = "Generated image"
-  var profileID = ""
-  var modelID = ""
-  var prompt = ""
-  var negativePrompt = ""
-  var width = 512
-  var height = 512
-  var steps = 4
-  var seed = 42
-  var guidance = 1.0
-  var configuration: [String: Any] {
-    ["width": width, "height": height, "steps": steps, "seed": seed, "guidanceScale": guidance]
-  }
-  func request(id: String) -> [String: Any] {
-    ["schema": "weetodd-drawthings-request-v1", "requestID": id, "operation": "image",
-     "profileID": profileID, "modelID": modelID, "prompt": prompt, "negativePrompt": negativePrompt,
-     "configuration": configuration, "inputs": [], "loras": [], "billingPolicy": "freeOnly"]
-  }
-}
-
 struct PreparedDrawThingsClip {
   var projectID: UUID
   var clipID: UUID
@@ -57,6 +35,10 @@ extension StudioStore {
     let projectID = project.id
     let snapshot = signature(for: clip)
     do {
+      let inputIssues = clip.drawThingsConditioningIssues(assets: allAssets)
+      if !inputIssues.isEmpty {
+        throw StudioError.invalid(inputIssues.joined(separator: "\n"))
+      }
       var body = try payload()
       body["connection"] = try connection.object()
       var result = try await bridge.invoke("dt-prepare-clip", runtime: runtime, payload: body)
@@ -148,14 +130,21 @@ extension StudioStore {
       self.error = error.localizedDescription
     }
   }
-  func drawThingsModels(_ profileID: String, operation: String) -> [(id: String, name: String)] {
+  func drawThingsModels(_ profileID: String, operation: String, task: String? = nil) -> [(id: String, name: String)] {
     guard let catalog = drawThingsCatalogs[profileID], let rules = catalog["capabilities"] as? [String: Any] else { return [] }
     let names = (catalog["models"] as? [[String: Any]] ?? []).reduce(into: [String: String]()) { result, item in
       if let id = item["id"] as? String, let name = item["name"] as? String { result[id] = name }
     }
+    let taskModels = task.map { DrawThingsTaskFilter.modelIDs(in: rules, task: $0) }
     return rules.keys.filter { id in
       ((rules[id] as? [String: Any])?["operations"] as? [String: Any])?[operation] != nil
+        && (taskModels?.contains(id) ?? true)
     }.sorted().map { (id: $0, name: names[$0] ?? $0) }
+  }
+  func drawThingsConnections(for task: String) -> [DrawThingsConnection] {
+    drawThingsConnections.filter {
+      drawThingsCatalogs[$0.id] == nil || !drawThingsModels($0.id, operation: "video", task: task).isEmpty
+    }
   }
   func drawThingsLoRAs(profileID: String, modelID: String) -> [DiscoveredDrawThingsLoRA] {
     (drawThingsCatalogs[profileID]?["loras"] as? [[String: Any]] ?? []).compactMap { item in
@@ -183,6 +172,12 @@ extension StudioStore {
     guard scope != .clip || selectedClipID != nil else { return }
     let destination = ImageAssetDestination(scope: scope, projectID: project.id,
       owner: scope == .clip ? selectedClipID : nil)
+    if let session = imageWorkspaceLibrary.sessions[destination.storageKey] {
+      restoringImageWorkspace = true
+      imageDraft = session.draft; imagePreviewPath = session.previewPath; imageEstimate = nil
+      restoringImageWorkspace = false; persistImageWorkspace()
+      return
+    }
     var draft = DrawThingsImageDraft(destination: destination)
     draft.profileID = drawThingsConnections.first?.id ?? ""
     draft.modelID = drawThingsModels(draft.profileID, operation: "image").first?.id ?? ""
@@ -193,7 +188,7 @@ extension StudioStore {
       let connection = drawThingsConnections.first(where: { $0.id == draft.profileID }) else { return }
     do {
       let result = try await bridge.invoke("dt-estimate", runtime: runtime, payload: [
-        "connection": try connection.object(), "drawThingsRequest": draft.request(id: UUID().uuidString)])
+        "connection": try connection.object(), "drawThingsRequest": try draft.request(id: UUID().uuidString)])
       guard imageDraft == draft else { return }
       imageEstimate = result
     } catch { self.error = error.localizedDescription }
@@ -201,11 +196,14 @@ extension StudioStore {
   func generateImageAsset() async {
     guard let draft = imageDraft,
       let connection = drawThingsConnections.first(where: { $0.id == draft.profileID }) else { return }
+    let inputPaths = Set(([draft.canvas].compactMap { $0 }.filter { $0.enabled }
+      + draft.moodboard.filter { $0.enabled && $0.strength > 0 }).map { $0.path })
+    let inputAssetIDs = allAssets.filter { inputPaths.contains($0.path) }.map { $0.id.uuidString }
     do {
       let output = Self.supportDirectory.appendingPathComponent("Generated Images/\(UUID().uuidString)")
       try FileManager.default.createDirectory(at: output.deletingLastPathComponent(), withIntermediateDirectories: true)
       var payload: [String: Any] = ["connection": try connection.object(),
-        "drawThingsRequest": draft.request(id: UUID().uuidString), "name": draft.name,
+        "drawThingsRequest": try draft.request(id: UUID().uuidString), "name": draft.name,
         "scope": draft.destination.scope.rawValue, "project": try project.object()]
       if let owner = draft.destination.owner { payload["owner"] = owner.uuidString }
       let result = try await bridge.invoke("dt-generate-image", runtime: runtime, payload: payload, output: output)
@@ -221,7 +219,8 @@ extension StudioStore {
       provenance.configuration = try JSONDecoder().decode([String: JSONValue].self,
         from: JSONSerialization.data(withJSONObject:
           (result["normalizedRequest"] as? [String: Any])?["configuration"] ?? draft.configuration))
-      provenance.inputIDs = []; provenance.generatedAt = Date(); asset.generation = provenance
+      provenance.inputIDs = inputAssetIDs
+      provenance.generatedAt = Date(); asset.generation = provenance
       if asset.scope == .global { globalAssets.append(asset); saveGlobals() }
       else { change { $0.assets.append(asset) } }
       selectedAssetID = asset.id

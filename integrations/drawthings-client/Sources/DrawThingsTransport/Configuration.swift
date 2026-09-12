@@ -46,12 +46,16 @@ public enum Configuration {
       }
     case .ltx2, .ltx2_3:
       guard operation == "video" else { throw TransportError.unsupportedOperation }
-    case .flux1, .flux2, .flux2_4b, .flux2_9b, .qwenImage, .zImage:
+    case .flux1, .flux2, .flux2_4b, .flux2_9b, .qwenImage, .zImage, .krea2:
       guard operation == "image" else { throw TransportError.unsupportedOperation }
     default: throw TransportError.unsupportedModel
     }
     let inputs = try Conditioning.inputs(request)
-    guard inputs.count < 2 || version == .minimaxH3 else {
+    guard operation == "image" || inputs.count < 2 || version == .minimaxH3 else {
+      throw TransportError.unsupportedConditioning
+    }
+    if operation == "image", inputs.contains(where: { $0["role"] as? String == "moodboard" }),
+      ![.flux2, .flux2_4b, .flux2_9b].contains(version) {
       throw TransportError.unsupportedConditioning
     }
     let loras = try Conditioning.loras(request)
@@ -125,7 +129,10 @@ public enum ComputeEstimate {
     }
     let config = try Configuration.resolve(request)
     let inputs = try Conditioning.inputs(request)
-    guard let cu = ComputeUnits.from(config, hasImage: !inputs.isEmpty, shuffleCount: max(0, inputs.count - 1)) else {
+    let hasImage = inputs.contains { ["canvas", "first"].contains($0["role"] as? String ?? "") }
+    let shuffleCount = inputs.filter { ["moodboard", "last"].contains($0["role"] as? String ?? "")
+      && (($0["strength"] as? NSNumber)?.doubleValue ?? 0) > 0 }.count
+    guard let cu = ComputeUnits.from(config, hasImage: hasImage, shuffleCount: shuffleCount) else {
       throw TransportError.unsupportedModel
     }
     let encoded = try JSONEncoder().encode(JSGenerationConfiguration(configuration: config))

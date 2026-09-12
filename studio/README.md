@@ -405,8 +405,14 @@ A 36GB physical-device maximum is not yet established; the header-based estimate
 - H3, LTX 2.3 and LTX 2.5 generated clips, imported movies/stills, and image sequences. Sequence import
   uses the movie frame rate, natural filename order, linked original frames and a ProRes editing proxy.
 - Drop a movie asset on the timeline to create a clip and a source reference in its Clip Assets.
-  Drop images on a generated clip near its beginning/end for endpoint conditioning, or in its middle
-  for a timed keyframe. Roles can also be set explicitly. Drag clip cards to reorder them.
+  Generated clips expose **FF** (First Frame / I2V) and **LF** (Last Frame) slots at their timeline
+  endpoints when supported by the model and recipe. Drop one image from any asset store or Finder
+  onto a slot, or click an empty slot to import. Filled slots show thumbnails; another drop replaces
+  that endpoint, and the context menu removes it. Assignments are undoable, link the original into
+  Clip Assets, update the inspector/task, and invalidate prepared generation. Draw Things H3 offers
+  both slots (last requires first); Draw Things LTX currently offers first only. Movie/still clips
+  have no generation slots. Drop into a native generated clip's body for an interior keyframe.
+  Drag clip cards to reorder them.
 - Split rendered/imported clips, duplicate, edit source in/duration, and create extension clips.
   Before-extension is offered for LTX 2.3. Extension uses the referenced source movie as model context;
   trimmed timeline boundaries are not currently extracted into a new extension context automatically.
@@ -763,20 +769,81 @@ prompts and media paths as private even though credentials are excluded.
 ### Images, clips, and LoRAs
 
 Use the **+ → Generate Image…** action on Global, Project, or Clip Assets. The whole-window prompt
-editor provides model selection, dimensions, steps, advanced settings, CU preparation, preview, and
-headless image-job export. Images are added to the captured destination store without changing the
+editor provides a central canvas, a separate ordered mood board (up to eight references), left-side
+settings, CU preparation, result preview, and headless image-job export. Import files, drop image
+assets, or choose **From Assets**. Canvas images support fit/fill placement and **Generation strength**
+from 0–100%. Mood-board thumbnails have independent enable and strength controls; zero strength
+omits a reference. FLUX.2/Klein currently treats positive reference weights as enabled references,
+so intermediate weights are transmitted but are not a promise of proportionally reduced influence.
+Multiple mood-board references are initially enabled for FLUX.2/Klein; other image families retain
+canvas image-to-image support. Model choices reflect enabled input combinations. Steps, CFG, seed,
+sampler, shift, and compatible LoRAs/groups are editable. **Use result as canvas** explicitly starts
+another edit; generation never silently replaces the input. Control images and masks are not yet
+enabled. Images are added to the captured destination store without changing the
 timeline. A removed destination clip cannot silently redirect the completed image to another clip.
+
+The initial canvas-plus-two-reference route was smoke-tested locally with FLUX.2 Klein 9B KV
+at 512×512, four configured steps, and 65% generation strength. Ordered references and their
+weights also have transport and headless-export tests. This does not qualify every image model
+or DT Cloud; control adapters and model-specific reference behavior need separate validation.
+The live Studio check also covered reference reordering, strength editing, enlarged preview,
+explicit result-to-canvas reuse, and export. A 512×512, four-step Klein job with one canvas and
+two references produced byte-identical PNGs in Studio and WeeToddCLI with Studio closed.
+
+Image drafts now recover across restarts, separately for Global, Project and individual Clip
+stores. Studio saves linked paths, prompts, settings, references, LoRA strengths and the latest
+preview path in its application-support directory. It does not copy source media or save API
+keys in drafts. Missing files remain linked for replacement. Reopening a draft requires fresh
+CU/eligibility preparation; an old estimate is not treated as authorization.
+
+**Import Config…** is available in both the image workspace and Draw Things clip inspector.
+Open an exported JSON file or paste a configuration, then choose **Preview Import**. Named
+`configuration` objects and arrays of presets are supported. The adjacent **Draw Things presets**
+link opens the [official preset directory](https://github.com/drawthingsai/community-models/tree/main/configs);
+each preset's `metadata.json` can be loaded here. Review the model, LoRAs, settings and omissions
+before applying. If the preset names a model absent from the connection, explicitly choose an
+installed model in the preview—for example, the same family in another precision. Studio never
+silently substitutes model files. Prepare checks the resulting task, inputs and model together.
+
+This initial importer supports model, prompt/negative prompt, dimensions, steps, CFG, seed,
+sampler, generation strength, Shift, video FPS/frame count, Audio Shift, and whole-model LoRAs.
+It accepts the `fpsId` and `shiftForAudio` aliases. Unspecified settings remain as they were;
+an explicit empty LoRA list clears assignments. Prompt replacement is optional. Unsupported
+settings, including controls, masks, High Res Fix and specialized adapter modes, are listed
+and require explicit acknowledgment before omission. An imported preset is therefore not a
+promise of complete Draw Things configuration parity.
+
+Additional local M3 Ultra checks completed Krea 2 Turbo canvas I2I at 512×512/eight steps with
+35% and 75% generation strength, and Klein 9B KV mood-board-only generation with two references
+and two compatible LoRAs at different strengths. The Klein request completed in 11.5 seconds;
+this is a functional smoke test, not a speed or broad image-quality benchmark. Cloud image-input
+qualification remains pending; previous Cloud video validation does not establish image parity.
+Live Studio testing also verified config preview/omission acknowledgment, an explicit Q6-to-Q8
+model choice, LoRA-group saving, and quit/reopen recovery of both references, the prompt and
+sampling/LoRA settings. Preparing the recovered request displayed 327 estimated CU for the
+self-hosted route, and generation saved its result in Project Assets.
+
+If macOS requests Keychain access when refreshing or generating, resolve its permission dialog.
+Studio now performs credential reads off the UI thread and reports that wait in the status area.
+Cancelling during that wait prevents job submission after the credential request returns.
 
 Use the timeline **+ → Draw Things** to create a video clip. Refresh models, select an exact server
 model, write its prompt, and prepare it. Native MLX recipe files are not needed for this provider.
+Setup follows **Engine → Task → Connection → Model → LoRAs / Groups**. Tasks narrow verified
+connections and models using their advertised input combinations. Unverified connections remain
+available with **refresh to verify** until Studio has their catalog. Changing the task clears a
+verified incompatible model selection; changing the connection clears the model selection.
+Frame images and saved settings are retained. LoRAs and groups are filtered by the selected model.
 Dimensions use a 64-pixel grid. Generation FPS must be an integer; LTX frame counts round upward to
 `8n+1` to cover the requested duration. Movie finishing applies the project/clip output settings.
 Generation adds an audiovisual movie to version history and Clip Assets. A changed clip is not
 marked current by an older render finishing later.
 
-**H3 first and last frames:** choose a discovered **MiniMax H3 FL2VA** model, import two images in
-Media & Assets, and use **Use in clip → First frame** and **Use in clip → Last frame**. Choose
-**First and last frames** in the task selector if an explicit earlier task is still selected.
+**H3 first and last frames:** select **First and last frames** and drop images onto the timeline's
+**FF** and **LF** slots, even before selecting a connection or model. Then choose a discovered
+**MiniMax H3 FL2VA** model. You can also use **Use in clip → First frame** and **Use in clip → Last frame**
+in Media & Assets. Selecting an incompatible model preserves your images and reports the mismatch;
+Prepare Clip requires a compatible model before generation.
 Studio sends the first image as Draw Things' canvas input and the last image as its first enabled
 mood-board (`shuffle`) hint. Both images are center-cropped to the generation dimensions and hashed
 before submission. The last endpoint follows the resolved frame count when duration changes.
@@ -791,6 +858,11 @@ offered; a model installed in the local app is not necessarily available through
 LTX still supports first-frame input only through this adapter. Last-only, arbitrary middle
 keyframes, and H3 reference-model conditioning are not enabled. A conflicting attachment/task is
 reported before generation rather than discarded. Headless exports use the same image contracts.
+Clip Assets are storage; only items listed under **Conditioning** are generation inputs.
+Keep previous renders in Clip Assets without attaching them as a Reference to a Draw Things clip.
+Prepare Clip names unsupported attachments, and existing unsupported inputs show an inline warning.
+Remove the attachment with **×** to retain its media in the asset store. Draw Things input menus
+offer supported image endpoints; endpoint attachment strength is fixed at 1 (LoRA strength remains editable).
 
 **H3 Turbo:** import a compatible Turbo LoRA into Draw Things, then click **Refresh** in Studio.
 Enable it under **Server LoRAs**, set its strength, and edit **Steps**. A local FL2VA test used

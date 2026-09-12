@@ -110,7 +110,7 @@ struct StudioView: View {
           VStack(spacing: 0) {
             PreviewPane().frame(maxHeight: .infinity)
             TimelineView().frame(
-              height: min(400, CGFloat(198 + store.project.audioTracks.count * 38)))
+              height: min(424, CGFloat(222 + store.project.audioTracks.count * 38)))
             statusbar
           }.frame(minWidth: 570, maxWidth: .infinity)
           AssetBrowser().frame(minWidth: 245, idealWidth: 290, maxWidth: 370)
@@ -138,6 +138,7 @@ struct StudioView: View {
       }.padding(24).frame(width: 480)
     }
     .sheet(isPresented: $store.showDrawThings) { DrawThingsSettings().environmentObject(store) }
+    .sheet(isPresented: $store.showDrawThingsConfigImport) { DrawThingsConfigImportView().environmentObject(store) }
     .sheet(isPresented: $store.showRuntime) { RuntimeView().environmentObject(store) }
     .sheet(isPresented: $store.showLog) {
       VStack(alignment: .leading) {

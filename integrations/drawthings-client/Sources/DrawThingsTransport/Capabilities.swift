@@ -10,7 +10,7 @@ public enum Capabilities {
       guard ModelZoo.modifierForModel(model) == .fl2va else { return nil }
       operation = "video"
     case .ltx2, .ltx2_3: operation = "video"
-    case .flux1, .flux2, .flux2_4b, .flux2_9b, .qwenImage, .zImage: operation = "image"
+    case .flux1, .flux2, .flux2_4b, .flux2_9b, .qwenImage, .zImage, .krea2: operation = "image"
     default: return nil
     }
     let dimensions = ["min": 64, "max": 4096, "multipleOf": 64]
@@ -19,6 +19,17 @@ public enum Capabilities {
       "maxLoRAs": 16, "automaticSettings": [:] as [String: Any],
       "requiresAudio": operation == "video"
     ]
+    if operation == "image" {
+      var combinations: [[String]] = [[], ["canvas"]]
+      if [.flux2, .flux2_4b, .flux2_9b].contains(ModelZoo.versionForModel(model)) {
+        for count in 1...8 {
+          let references = Array(repeating: "moodboard", count: count)
+          combinations.append(references)
+          combinations.append(["canvas"] + references)
+        }
+      }
+      rule["inputRoleCombinations"] = combinations
+    }
     if operation == "video" {
       rule["inputRoleCombinations"] = [[], ["first"]]
       rule["numFrames"] = ["min": 1, "max": 100000, "multipleOf": 8, "offset": 1]

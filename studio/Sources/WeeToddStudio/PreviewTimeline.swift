@@ -184,7 +184,7 @@ struct TimelineView: View {
         HStack(spacing: 0) {
           VStack(alignment: .leading, spacing: 0) {
             Text("TIME").frame(height: 23)
-            Label("VIDEO", systemImage: "film").frame(height: 80)
+            Label("VIDEO", systemImage: "film").frame(height: 104)
             Label("TITLES", systemImage: "textformat").frame(height: 35)
             ForEach(store.project.audioTracks) { t in
               Button {
@@ -212,7 +212,7 @@ struct TimelineView: View {
                     }
                     ForEach(Array(store.project.clips.enumerated()), id: \.element.id) { i, c in
                       TimelineClip(clip: c, index: i).frame(
-                        width: max(35, c.duration * store.zoom), height: 65
+                        width: max(35, c.duration * store.zoom), height: 89
                       ).offset(x: store.project.start(of: i) * store.zoom)
                     }
                     Button {
@@ -222,7 +222,7 @@ struct TimelineView: View {
                         Theme.raised, in: RoundedRectangle(cornerRadius: 5))
                     }.buttonStyle(.borderless).offset(x: store.project.duration * store.zoom + 15)
                       .opacity(store.project.clips.isEmpty ? 0 : 1)
-                  }.frame(height: 80)
+                  }.frame(height: 104)
                   ZStack(alignment: .leading) {
                     Theme.violet.opacity(0.04)
                     ForEach(store.project.titles) { t in
@@ -267,7 +267,7 @@ struct TimelineView: View {
                 if let id = store.selectedClipID,
                   let i = store.project.clips.firstIndex(where: { $0.id == id })
                 {
-                  Rectangle().fill(Theme.mint).frame(width: 1, height: 175).overlay(alignment: .top)
+                  Rectangle().fill(Theme.mint).frame(width: 1, height: 199).overlay(alignment: .top)
                   {
                     Image(systemName: "arrowtriangle.down.fill").font(.system(size: 9))
                       .foregroundStyle(Theme.mint).offset(y: -1)
@@ -276,7 +276,7 @@ struct TimelineView: View {
                       ? store.playhead : store.project.start(of: i) + store.playhead) * store.zoom
                   ).allowsHitTesting(false)
                 }
-              }.frame(width: width, height: CGFloat(138 + store.project.audioTracks.count * 38))
+              }.frame(width: width, height: CGFloat(162 + store.project.audioTracks.count * 38))
                 .dropDestination(for: String.self) { items, _ in
                   handleDrop(items)
                   return true
@@ -287,7 +287,7 @@ struct TimelineView: View {
                 }
             }.scrollIndicators(.visible)
           }
-        }.frame(height: CGFloat(138 + store.project.audioTracks.count * 38))
+        }.frame(height: CGFloat(162 + store.project.audioTracks.count * 38))
       }
     }.background(Theme.panel).overlay(alignment: .top) {
       Rectangle().fill(Theme.line).frame(height: 1)
@@ -346,12 +346,21 @@ struct TimelineClip: View {
           Spacer(minLength: 0)
           Text("\(clip.duration,specifier:"%.1f")s").font(.system(size: 9, design: .monospaced))
         }.foregroundStyle(.secondary)
-        HStack(spacing: 3) {
-          ForEach(clip.attachments.filter { [.first, .last, .keyframe].contains($0.role) }) { a in
+        HStack(spacing: 0) {
+          let slotWidth = min(56, max(8, (geo.size.width - 18) / 2))
+          if store.supportsEndpoint(.first, for: clip) || clip.attachments.contains(where: { $0.role == .first }) {
+            TimelineFrameSlot(clip: clip, role: .first, width: slotWidth)
+          }
+          Spacer(minLength: 0)
+          ForEach(clip.attachments.filter { $0.role == .keyframe }) { a in
             Image(systemName: "diamond.fill").font(.system(size: 6)).foregroundStyle(Theme.mint)
               .help(a.role.label)
           }
-        }.frame(height: 6)
+          Spacer(minLength: 0)
+          if store.supportsEndpoint(.last, for: clip) || clip.attachments.contains(where: { $0.role == .last }) {
+            TimelineFrameSlot(clip: clip, role: .last, width: slotWidth)
+          }
+        }.frame(height: 30)
       }.padding(9).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(
           store.clipState(clip).color.opacity(store.selectedClipID == clip.id ? 0.22 : 0.10),
@@ -370,7 +379,6 @@ struct TimelineClip: View {
               x: -4, y: -3)
           }
         }
-        .help(store.clipState(clip).label)
         .contentShape(Rectangle())
         .onTapGesture { location in
           store.select(clip.id)
@@ -388,9 +396,12 @@ struct TimelineClip: View {
               store.select(clip.id)
               if asset.kind == .image {
                 let ratio = location.x / max(1, geo.size.width)
-                store.useAsset(
-                  asset, role: ratio < 0.1 ? .first : ratio > 0.9 ? .last : .keyframe,
-                  time: max(0, min(clip.duration - 1 / 24, ratio * clip.duration)))
+                if clip.engine == .drawThings || clip.engine == .movie {
+                  store.notice = "Drop the image directly onto a supported FF or LF slot."
+                } else {
+                  store.useAsset(asset, role: .keyframe,
+                    time: max(0, min(clip.duration - 1 / 24, ratio * clip.duration)))
+                }
               } else {
                 store.useAsset(
                   asset,

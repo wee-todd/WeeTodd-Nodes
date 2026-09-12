@@ -15,7 +15,7 @@ import StudioCore
         imageProject.name = draft.name
         let body: [String: Any] = ["project": try imageProject.object(), "generateIDs": [],
           "globalAssets": [], "drawThingsImageJobs": [["id": UUID().uuidString, "kind": "image",
-          "request": draft.request(id: UUID().uuidString), "connection": try connection.object(),
+          "request": try draft.request(id: UUID().uuidString), "connection": try connection.object(),
           "dependsOn": []]]]
         _ = try await bridge.invoke("export-job", runtime: runtime, payload: body, output: url)
         notice = "Exported an image job for WeeToddCLI. You can close Studio before running it."

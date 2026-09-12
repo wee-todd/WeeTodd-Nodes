@@ -149,9 +149,9 @@ struct AssetBrowser: View {
   @ViewBuilder func roleButtons(_ asset: MediaAsset) -> some View {
     if asset.kind == .image {
       Button("First frame · Image to video") { store.useAsset(asset, role: .first) }
+        .disabled(store.selectedClip.map { !store.supportsEndpoint(.first, for: $0) } ?? true)
       Button("Last frame") { store.useAsset(asset, role: .last) }
-        .disabled(store.selectedClip?.engine == .drawThings
-                  && store.selectedClip?.drawThings?.modelFamily.lowercased() != "minimaxh3")
+        .disabled(store.selectedClip.map { !store.supportsEndpoint(.last, for: $0) } ?? true)
         .help("Draw Things last-frame conditioning requires an H3 FL2VA model.")
       Button("Keyframe at playhead") {
         store.useAsset(asset, role: .keyframe, time: store.playhead)
@@ -172,11 +172,15 @@ struct AssetBrowser: View {
     }
     if [.video, .sequence].contains(asset.kind) {
       Button("Video reference") { store.useAsset(asset, role: .reference) }
+        .disabled(store.selectedClip?.engine == .drawThings)
       Button("Preprocessed control guide") { store.useAsset(asset, role: .control) }
+        .disabled(store.selectedClip?.engine == .drawThings)
     }
     if asset.kind == .audio {
       Button("Audio driver") { store.useAsset(asset, role: .audioDriver) }
+        .disabled(store.selectedClip?.engine == .drawThings)
       Button("Audio reference · H3") { store.useAsset(asset, role: .reference) }
+        .disabled(store.selectedClip?.engine == .drawThings)
     }
     if asset.kind == .lora
       && asset.loraModel?.supports(store.selectedClip?.engine ?? .movie) == true

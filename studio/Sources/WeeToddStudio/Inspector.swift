@@ -268,6 +268,21 @@ struct ClipInspector: View {
 struct AttachmentRow: View {
   @EnvironmentObject var store: StudioStore
   var attachment: Attachment
+  private var isDrawThings: Bool { store.selectedClip?.engine == .drawThings }
+  private var supportedDrawThingsInput: Bool {
+    guard let clip = store.selectedClip,
+      let asset = store.allAssets.first(where: { $0.id == attachment.assetID }) else { return false }
+    return clip.canAssignDrawThingsInput(asset, role: attachment.role)
+  }
+  private var availableRoles: [MediaRole] {
+    MediaRole.allCases.filter { role in
+      guard role != .lora else { return false }
+      guard isDrawThings else { return true }
+      guard let clip = store.selectedClip,
+        let asset = store.allAssets.first(where: { $0.id == attachment.assetID }) else { return role == attachment.role }
+      return role == attachment.role || clip.canAssignDrawThingsInput(asset, role: role)
+    }
+  }
   var body: some View {
     VStack(alignment: .leading, spacing: 5) {
       HStack {
@@ -276,15 +291,23 @@ struct AttachmentRow: View {
           .lineLimit(1)
         Spacer()
         Button {
-          store.editClip { $0.attachments.removeAll { $0.id == attachment.id } }
+          if [.first, .last].contains(attachment.role), let id = store.selectedClipID {
+            store.removeEndpoint(from: id, role: attachment.role)
+          } else {
+            store.editClip { $0.attachments.removeAll { $0.id == attachment.id } }
+          }
         } label: {
           Image(systemName: "xmark")
         }
       }.font(.system(size: 10))
       Picker(
         "Role", selection: Binding(get: { attachment.role }, set: { v in edit { $0.role = v } })
-      ) { ForEach(MediaRole.allCases.filter { $0 != .lora }) { Text($0.label).tag($0) } }
+      ) { ForEach(availableRoles) { Text($0.label).tag($0) } }
       .labelsHidden()
+      if isDrawThings && !supportedDrawThingsInput {
+        Text("Unsupported Draw Things input. Remove this attachment with ×; its media stays in Clip Assets.")
+          .font(.caption2).foregroundStyle(.orange)
+      }
       if attachment.role == .keyframe {
         HStack {
           Text("Time (s)")
@@ -317,13 +340,22 @@ struct AttachmentRow: View {
             .font(.caption2).foregroundStyle(.secondary)
         }
       }
-      HStack {
-        Text("Strength")
-        Slider(
-          value: Binding(get: { attachment.strength }, set: { v in edit { $0.strength = v } }),
-          in: 0...(attachment.role == .lora ? 2 : 1))
-        Text("\(attachment.strength,specifier:"%.2f")").monospacedDigit()
-      }.font(.caption2)
+      if isDrawThings && supportedDrawThingsInput {
+        HStack {
+          Text("Endpoint strength · \(attachment.strength, specifier: "%.2f")")
+          if attachment.strength != 1 {
+            Button("Reset to 1") { edit { $0.strength = 1 } }
+          }
+        }.font(.caption2)
+      } else if !isDrawThings {
+        HStack {
+          Text("Strength")
+          Slider(
+            value: Binding(get: { attachment.strength }, set: { v in edit { $0.strength = v } }),
+            in: 0...(attachment.role == .lora ? 2 : 1))
+          Text("\(attachment.strength,specifier:"%.2f")").monospacedDigit()
+        }.font(.caption2)
+      }
       if attachment.role == .reference {
         TextField(
           "Describe this reference",

@@ -440,7 +440,8 @@ def preflight(job, output, *, prepare_remote=True):
     return {
         "status": "preflight_passed",
         "clips": len(job["project"]["clips"]),
-        "generations": len(job["recipes"]),
+        "generations": len(job["recipes"]) + len(remote_jobs),
+        "remoteGenerations": len(remote_jobs),
     }
 
 

@@ -2,6 +2,24 @@
 
 Reconciled 2026-09-09 against the local source and saved acceptance evidence.
 
+Follow-up 2026-09-12: Studio has explicit timeline First/Last Frame slots, task-before-model
+Draw Things selection, and an image workspace with one canvas and separate ordered mood-board
+thumbnails. Canvas generation strength, per-reference controls, sampling settings and compatible
+LoRAs/groups carry through shared remote requests and headless exports. Drafts persist by asset
+store without copying media. Draw Things config import previews supported fields and omissions,
+links to official presets, and allows an explicit installed-model replacement. Keychain reads now
+wait off the UI thread rather than freezing Studio during OS authorization.
+
+Local image acceptance covered Klein 9B KV canvas plus two references, reference-only input with
+two compatible LoRAs, and Krea 2 Turbo I2I at 35% and 75% strength. Studio and the exported CLI
+Klein canvas/reference job produced byte-identical PNGs. Cloud image qualification is still open:
+the current live refresh waited on a macOS Keychain permission dialog. Existing Cloud video
+acceptance is a separate result. Control images, masks and full advanced-config parity remain
+unimplemented; unsupported imported fields are never silently presented as applied.
+The live config-import, group-save and restart-recovery check also completed generation from
+the recovered draft. Validation passed 77 Studio tests, 31 transport-helper tests and 687
+selected Python tests, plus the release app build and portable workflow/catalog checks.
+
 Follow-up 2026-09-11: matched LTX 2.5 Q8-paged T2V at 768×448, 121 frames and the
 8+3 schedule measured 64.20 seconds on the repeated baseline versus 64.18 seconds with an
 experimental one-block GPU-weight lookahead. Both complete video/audio MP4s were byte-identical;

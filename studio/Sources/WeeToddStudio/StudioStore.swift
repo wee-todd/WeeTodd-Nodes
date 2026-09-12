@@ -57,7 +57,9 @@ struct ModelProfile: Identifiable, Codable {
   @Published var startedAt: Date?
   @Published var lastOutputAt: Date?
   private var process: Process?
+  private var cancellationRequested = false
   func cancel() {
+    cancellationRequested = true
     message = "Cancelling and releasing render resources…"
     process?.interrupt()
   }
@@ -73,15 +75,27 @@ struct ModelProfile: Identifiable, Codable {
       throw StudioError.invalid(
         "Select the WeeTodd repository and its Python environment in Runtime Settings.")
     }
+    busy = true
+    cancellationRequested = false
+    startedAt = Date()
+    lastOutputAt = startedAt
+    fraction = 0
+    log = ""
+    defer { busy = false; process = nil }
     var env = ProcessInfo.processInfo.environment
     if command == "setup-download" {
-      env = try ModelDownloadToken.environment(env, savedToken: ModelDownloadToken.read())
+      message = "Checking macOS Keychain — respond to its permission dialog if shown…"
+      let token = try await BackgroundCredential.read { try ModelDownloadToken.read() }
+      env = try ModelDownloadToken.environment(env, savedToken: token)
     }
     if command.hasPrefix("dt-"), let connection = payload["connection"] as? [String: Any],
-      let reference = connection["credentialRef"] as? String,
-      let secret = try DrawThingsCredential.read(reference) {
-      env["WEETODD_DT_CREDENTIAL"] = secret
+      let reference = connection["credentialRef"] as? String {
+      message = "Checking macOS Keychain — respond to its permission dialog if shown…"
+      if let secret = try await BackgroundCredential.read(using: { try DrawThingsCredential.read(reference) }) {
+        env["WEETODD_DT_CREDENTIAL"] = secret
+      }
     }
+    guard !cancellationRequested else { throw CancellationError() }
     env["PYTHONUNBUFFERED"] = "1"
     let input = StudioStore.supportDirectory.appendingPathComponent(
       "Requests/\(UUID().uuidString).json")
@@ -197,9 +211,13 @@ extension Encodable {
   @Published var drawThingsConnections: [DrawThingsConnection] = []
   @Published var drawThingsCatalogs: [String: [String: Any]] = [:]
   @Published var drawThingsLoRAGroups: [DrawThingsLoRAGroup] = []
-  @Published var imageDraft: DrawThingsImageDraft?
+  @Published var imageDraft: DrawThingsImageDraft? { didSet { persistImageWorkspace() } }
   @Published var imageEstimate: [String: Any]?
-  @Published var imagePreviewPath: String?
+  @Published var imagePreviewPath: String? { didSet { persistImageWorkspace() } }
+  var imageWorkspaceLibrary = ImageWorkspaceLibrary()
+  var restoringImageWorkspace = true
+  @Published var showDrawThingsConfigImport = false
+  var configImportClipID: UUID?
   @Published var drawThingsClipEstimates: [UUID: [String: Any]] = [:]
   var preparedDrawThingsClip: PreparedDrawThingsClip?
   @Published var showProjectSettings = false
@@ -267,6 +285,7 @@ extension Encodable {
       selectedClipID = p.clips.first?.id
       notice = "Recovered your autosaved project."
     }
+    restoreImageWorkspaces()
     observer = player.addPeriodicTimeObserver(
       forInterval: CMTime(seconds: 0.05, preferredTimescale: 600), queue: .main
     ) { [weak self] time in
@@ -462,6 +481,7 @@ extension Encodable {
     do {
       let p = try ProjectStorage.read(url)
       cancelMotionPromptEditor()
+      imageDraft = nil; imagePreviewPath = nil
       change { $0 = p }
       projectURL = url
       selectedClipID = p.clips.first?.id
@@ -471,6 +491,7 @@ extension Encodable {
   }
   func newProject() {
     cancelMotionPromptEditor()
+    imageDraft = nil; imagePreviewPath = nil
     change { $0 = StudioProject() }
     projectURL = nil
     selectedClipID = nil
@@ -548,6 +569,15 @@ extension Encodable {
     }
     if role == .lora {
       applyLoRAMembers([LoRAMember(asset: asset)])
+      return
+    }
+    if let clip = selectedClip, clip.engine == .drawThings,
+      !clip.canAssignDrawThingsInput(asset, role: role) {
+      error = "This Draw Things model accepts supported first/last image inputs only. Keep other media in Clip Assets, or add it to the movie timeline."
+      return
+    }
+    if role == .first || role == .last, let id = selectedClipID {
+      assignEndpoint(asset, to: id, role: role)
       return
     }
     editClip { c in

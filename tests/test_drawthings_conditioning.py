@@ -10,6 +10,26 @@ from wee_todd_remote.conditioning import (
 )
 
 
+def test_image_canvas_and_ordered_moodboard_validate_hashes_and_weights(tmp_path):
+    image = tmp_path / "image.png"
+    image.write_bytes(b"test image")
+    base = {"path": str(image), "sha256": hashlib.sha256(image.read_bytes()).hexdigest(),
+            "strength": 1, "fit": "fit"}
+    inputs = [{**base, "role": "canvas"}, {**base, "role": "moodboard", "strength": 0.3},
+              {**base, "role": "moodboard", "strength": 0.7}]
+    request = {"operation": "image", "inputs": inputs}
+    validate_canonical_inputs(request)
+    validate_canonical_inputs({**request, "inputs": inputs[1:]})
+    for invalid in ([inputs[0], inputs[0]], [inputs[1], inputs[0]],
+                    [{**inputs[1], "strength": -1}], [{**inputs[1], "strength": True}],
+                    [{**inputs[0], "fit": "stretch"}], inputs[1:] * 5):
+        with pytest.raises(ValueError):
+            validate_canonical_inputs({**request, "inputs": invalid})
+    image.write_bytes(b"changed")
+    with pytest.raises(ValueError, match="hash"):
+        validate_canonical_inputs(request)
+
+
 def test_first_frame_resolves_absolute_image_and_hashes_exact_bytes(tmp_path):
     image = tmp_path / "first.png"
     image.write_bytes(b"exact-image-bytes")

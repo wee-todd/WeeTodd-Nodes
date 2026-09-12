@@ -1,4 +1,5 @@
 import Foundation
+import ModelZoo
 import XCTest
 @testable import DrawThingsTransport
 
@@ -16,6 +17,21 @@ final class ConfigurationTests: XCTestCase {
     XCTAssertEqual(effective["width"] as? Int, 512)
     XCTAssertEqual(effective["steps"] as? Int, 4)
     XCTAssertEqual(effective["seed"] as? Int, 42)
+  }
+
+  func testKrea2CanvasStrengthAndReferenceCapabilities() throws {
+    let model = "krea_2_turbo_q8p.ckpt"
+    let old = ModelZoo.overrideMapping[model]
+    defer { ModelZoo.overrideMapping[model] = old }
+    ModelZoo.overrideMapping[model] = ModelZoo.Specification(name: "Krea 2 test", file: model, prefix: "", version: .krea2)
+    var value = request
+    value["modelID"] = "krea_2_turbo_q8p.ckpt"
+    value["configuration"] = ["width": 512, "height": 512, "steps": 8, "seed": 42, "strength": 0.35]
+    let result = try ComputeEstimate.evaluate(value)
+    XCTAssertEqual((result["configuration"] as? [String: Any])?["strength"] as? Double ?? 0, 0.35, accuracy: 0.001)
+    let rules = try XCTUnwrap(Capabilities.rules(for: "krea_2_turbo_q8p.ckpt"))
+    let image = ((rules["operations"] as? [String: Any])?["image"] as? [String: Any])
+    XCTAssertEqual(image?["inputRoleCombinations"] as? [[String]], [[], ["canvas"]])
   }
 
   func testRejectsUnrepresentableDimensionsAndBooleans() {

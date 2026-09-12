@@ -1,19 +1,31 @@
 import Foundation
 
 extension Clip {
+  public func canAssignDrawThingsInput(_ asset: MediaAsset, role: MediaRole) -> Bool {
+    engine == .drawThings && asset.kind == .image && supportsEndpoint(role)
+  }
+
   public func drawThingsConditioningIssues(assets: [MediaAsset],
     fileExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }) -> [String] {
     let isH3 = drawThings?.modelFamily.lowercased() == "minimaxh3"
+    let needsModel = drawThings?.modelID.isEmpty != false
     let first = attachments.filter { $0.role == .first }
     let last = attachments.filter { $0.role == .last }
     var issues: [String] = []
+    if needsModel {
+      issues.append("Choose a Draw Things video model to validate these inputs. First and last frames require H3 FL2VA.")
+    }
     if first.count > 1 { issues.append("Use only one Draw Things first-frame image") }
     if last.count > 1 { issues.append("Use only one Draw Things last-frame image") }
-    if !last.isEmpty && (!isH3 || first.count != 1) {
-      issues.append("Draw Things last frame requires H3 and one first-frame image")
+    if !last.isEmpty && first.count != 1 {
+      issues.append("Add one first-frame image to pair with the Draw Things last frame")
     }
-    if attachments.contains(where: { $0.role != .first && !(isH3 && $0.role == .last) }) {
-      issues.append("Remove unsupported Draw Things attachment roles")
+    if !needsModel && !isH3 && (inferredTask == "fflf" || !last.isEmpty) {
+      issues.append("Choose an H3 FL2VA model for First and last frames; the selected Draw Things model does not support this task. Your images are preserved.")
+    }
+    for attachment in attachments where attachment.role != .first && attachment.role != .last {
+      let name = assets.first { $0.id == attachment.assetID }?.name ?? "Missing asset"
+      issues.append("Remove \(attachment.role.label) input ‘\(name)’: this Draw Things task does not support it. Keep the media in Clip Assets.")
     }
     for attachment in first + last {
       let role = attachment.role == .first ? "first" : "last"

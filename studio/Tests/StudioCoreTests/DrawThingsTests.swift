@@ -4,6 +4,27 @@ import XCTest
 @testable import StudioCore
 
 final class DrawThingsTests: XCTestCase {
+  func testExtraMovieReferenceNamesTheOffendingAsset() {
+    var clip = Clip(engine: .drawThings)
+    clip.drawThings = DrawThingsSelection(profileID: "local", modelID: "h3", modelFamily: "minimaxH3")
+    let first = MediaAsset(name: "First", kind: .image, path: "/first.png", scope: .clip)
+    let last = MediaAsset(name: "Last", kind: .image, path: "/last.png", scope: .clip)
+    let movie = MediaAsset(name: "Previous render", kind: .video, path: "/movie.mp4", scope: .clip)
+    clip.attachments = [Attachment(assetID: first.id, role: .first),
+      Attachment(assetID: last.id, role: .last), Attachment(assetID: movie.id, role: .reference)]
+    let issues = clip.drawThingsConditioningIssues(assets: [first, last, movie], fileExists: { _ in true })
+    XCTAssertEqual(issues.count, 1)
+    XCTAssertTrue(issues[0].contains("Previous render"))
+    XCTAssertTrue(issues[0].contains("Reference"))
+    XCTAssertTrue(issues[0].contains("Clip Assets"))
+    XCTAssertTrue(clip.canAssignDrawThingsInput(first, role: .first))
+    XCTAssertTrue(clip.canAssignDrawThingsInput(last, role: .last))
+    XCTAssertFalse(clip.canAssignDrawThingsInput(movie, role: .reference))
+    XCTAssertFalse(clip.canAssignDrawThingsInput(movie, role: .first))
+    XCTAssertFalse(clip.canAssignDrawThingsInput(first, role: .control))
+    clip.drawThings?.modelFamily = "ltx2.3"
+    XCTAssertFalse(clip.canAssignDrawThingsInput(last, role: .last))
+  }
   func testDrawThingsStatusAcceptsH3EndpointsButChecksBothAssets() {
     var clip = Clip(engine: .drawThings)
     clip.drawThings = DrawThingsSelection(profileID: "local", modelID: "h3", modelFamily: "minimaxH3")
